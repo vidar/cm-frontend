@@ -34,5 +34,10 @@ Either run `npx wrangler login` once and then `npm run deploy`, or connect the r
 Cloudflare dashboard (Workers & Pages → Create → Import a repository) with build command
 `npm run build` and deploy command `npx wrangler deploy`.
 
+The build command is required: `wrangler deploy` uses the server entry point that
+`astro build` generates in `dist/`, and fails with "entry-point file ... was not found" without it.
+
+Pushes to `main` deploy to production at https://chessmoments.com.
+
 Bindings (KV, D1, R2, env vars, etc.) are configured in `wrangler.jsonc`. Local secrets go in
 `.dev.vars` (git-ignored).
