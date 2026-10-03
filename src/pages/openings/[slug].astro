@@ -1,0 +1,88 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import BoardDiagram from '../../components/BoardDiagram.astro';
+import '../../styles/board.css';
+import { getOpenings, formatMoves, parentLine, continuations, familySlug, type Opening } from '../../lib/openings';
+
+export function getStaticPaths() {
+  return getOpenings().map((opening) => ({ params: { slug: opening.slug }, props: { opening } }));
+}
+
+const { opening } = Astro.props as { opening: Opening };
+const moves = formatMoves(opening.moves);
+const parent = parentLine(opening);
+const next = continuations(opening);
+const siblings = getOpenings()
+  .filter((o) => o.family === opening.family && o !== opening && o !== parent && !next.includes(o))
+  .slice(0, 12);
+const sideToMove = opening.fen.split(' ')[1] === 'w' ? 'White' : 'Black';
+const imageUrl = `/board.svg?fen=${opening.fen.replace(/ /g, '_')}&lastmove=${opening.lastMove.join('')}`;
+const lichessUrl = `https://lichess.org/analysis/pgn/${encodeURIComponent(opening.moves.join(' '))}`;
+const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagram, FEN and related lines.`;
+---
+
+<Layout title={`${opening.name} – ${opening.eco}`} description={description}>
+  <nav class="crumbs"><a href="/openings/">Openings</a> › <a href={`/openings/family/${familySlug(opening.family)}/`}>{opening.family}</a></nav>
+  <h1>{opening.name}</h1>
+  <p class="moves"><strong>{moves}</strong></p>
+
+  <BoardDiagram fen={opening.fen} highlight={opening.lastMove} title={`${opening.name} after ${moves}`} />
+
+  <p>
+    The {opening.name} is a chess opening classified as <strong>ECO {opening.eco}</strong>, reached after {moves}.{' '}
+    {opening.variation && <>It is a line of the <a href={`/openings/family/${familySlug(opening.family)}/`}>{opening.family}</a>. </>}
+    {sideToMove} is to move.{' '}
+    {next.length ? `${next.length} named ${next.length === 1 ? 'line continues' : 'lines continue'} from this position.` : ''}
+  </p>
+
+  <dl class="facts">
+    <dt>ECO</dt><dd>{opening.eco}</dd>
+    <dt>Moves</dt><dd>{opening.moves.length} plies</dd>
+    <dt>FEN</dt><dd><code>{opening.fen}</code></dd>
+    <dt>PGN</dt><dd><code>{opening.pgn}</code></dd>
+  </dl>
+
+  <p class="actions">
+    <a href={imageUrl}>Board image (SVG)</a>{' · '}<a href={lichessUrl} rel="nofollow">Analyse on Lichess</a>
+  </p>
+
+  {parent && (
+    <section>
+      <h2>Comes from</h2>
+      <p><a href={`/openings/${parent.slug}/`}>{parent.name}</a> <span class="muted">{formatMoves(parent.moves)}</span></p>
+    </section>
+  )}
+
+  {next.length > 0 && (
+    <section>
+      <h2>Continuations</h2>
+      <ul>
+        {next.map((o) => (
+          <li><a href={`/openings/${o.slug}/`}>{o.name}</a> <span class="muted">{o.eco} · {formatMoves(o.moves)}</span></li>
+        ))}
+      </ul>
+    </section>
+  )}
+
+  {siblings.length > 0 && (
+    <section>
+      <h2>More {opening.family} lines <a class="small" href={`/openings/family/${familySlug(opening.family)}/`}>(all)</a></h2>
+      <ul>
+        {siblings.map((o) => <li><a href={`/openings/${o.slug}/`}>{o.name}</a> <span class="muted">{o.eco}</span></li>)}
+      </ul>
+    </section>
+  )}
+
+  <p class="muted small">Opening names and moves from the <a href="https://github.com/lichess-org/chess-openings">Lichess openings dataset</a> (CC0).</p>
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .moves { font-size: 1.1rem; }
+  .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
+  .facts dt { font-weight: 600; }
+  .facts dd { margin: 0; }
+  .facts code { word-break: break-all; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
+</style>

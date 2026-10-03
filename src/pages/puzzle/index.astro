@@ -1,0 +1,26 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import PuzzleView from '../../components/PuzzleView.astro';
+import { getPuzzle, todayUtc, secondsUntilNextPuzzle } from '../../lib/puzzles';
+
+// Rendered per request so the puzzle changes at 00:00 UTC without a rebuild.
+export const prerender = false;
+
+const puzzle = getPuzzle(todayUtc());
+if (!puzzle) return new Response('No puzzle today', { status: 404 });
+Astro.response.headers.set('Cache-Control', `public, max-age=60, s-maxage=${Math.min(3600, secondsUntilNextPuzzle())}`);
+const side = puzzle.solverColor === 'w' ? 'White' : 'Black';
+---
+
+<Layout
+  title={`Daily chess puzzle #${puzzle.number}`}
+  description={`Today's free daily chess puzzle (#${puzzle.number}, rated ${puzzle.rating}). ${side} to move. Solve it, keep your streak and share your result.`}
+>
+  <h1>Daily chess puzzle</h1>
+  <PuzzleView puzzle={puzzle} />
+  <p class="note">A new puzzle every day at 00:00 UTC, easiest on Monday and hardest on Sunday. Puzzles come from real games via the Lichess puzzle database.</p>
+</Layout>
+
+<style>
+  .note { color: var(--muted); font-size: 0.9rem; margin-top: 2rem; }
+</style>

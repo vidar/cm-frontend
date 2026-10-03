@@ -1,0 +1,40 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import BoardDiagram from '../../../components/BoardDiagram.astro';
+import '../../../styles/board.css';
+import { getFamilies, formatMoves } from '../../../lib/openings';
+
+export function getStaticPaths() {
+  return getFamilies().map((family) => ({ params: { family: family.slug }, props: { family } }));
+}
+
+const { family } = Astro.props as { family: ReturnType<typeof getFamilies>[number] };
+const base = family.lines[0];
+const ecos = [...new Set(family.lines.map((o) => o.eco))].sort();
+const ecoRange = ecos.length > 1 ? `${ecos[0]}–${ecos[ecos.length - 1]}` : ecos[0];
+---
+
+<Layout
+  title={`${family.name}: all ${family.lines.length} variations`}
+  description={`All ${family.lines.length} named lines of the ${family.name} (ECO ${ecoRange}) with moves and board diagrams.`}
+>
+  <nav class="crumbs"><a href="/openings/">Openings</a> › {family.name}</nav>
+  <h1>{family.name}</h1>
+  <p>
+    {family.lines.length === 1 ? 'One named line' : `${family.lines.length} named lines`}, ECO {ecoRange}. The main position arises after
+    <a href={`/openings/${base.slug}/`}>{formatMoves(base.moves)}</a>.
+  </p>
+  <BoardDiagram fen={base.fen} highlight={base.lastMove} title={`${base.name} after ${formatMoves(base.moves)}`} />
+  <ul class="lines">
+    {family.lines.map((o) => (
+      <li><a href={`/openings/${o.slug}/`}>{o.variation || o.name}</a> <span class="muted">{o.eco} · {formatMoves(o.moves)}</span></li>
+    ))}
+  </ul>
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .lines { margin-top: 1.5rem; }
+  .lines li { margin: 0.2rem 0; }
+  .muted { color: var(--muted); font-size: 0.9em; }
+</style>

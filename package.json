@@ -18,6 +18,7 @@
     "@astrojs/cloudflare": "^14.3.3",
     "@astrojs/sitemap": "^3.7.4",
     "astro": "^7.3.5",
+    "chess.js": "^1.4.0",
     "wrangler": "^4.147.0"
   },
   "allowScripts": {

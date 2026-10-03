@@ -1,0 +1,77 @@
+---
+import BoardDiagram from './BoardDiagram.astro';
+import { formatMoves } from '../lib/openings';
+import { themeLabel, todayUtc, firstDate, type DailyPuzzle } from '../lib/puzzles';
+import '../styles/board.css';
+
+interface Props {
+  puzzle: DailyPuzzle;
+}
+
+const { puzzle } = Astro.props;
+const side = puzzle.solverColor === 'w' ? 'White' : 'Black';
+const shift = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+const prev = puzzle.date > firstDate ? shift(puzzle.date, -1) : undefined;
+const next = puzzle.date < todayUtc() ? shift(puzzle.date, 1) : undefined;
+// Solution in SAN with move numbers relative to the puzzle start.
+const solution = puzzle.solverColor === 'w' ? formatMoves(puzzle.solutionSan) : `1… ${formatMoves(['', ...puzzle.solutionSan]).replace(/^1\.\s+/, '')}`;
+const playerMoves = Math.ceil(puzzle.solutionSan.length / 2);
+---
+
+<section
+  class="puzzle"
+  data-number={puzzle.number}
+  data-date={puzzle.date}
+  data-rating={puzzle.rating}
+  data-raw-fen={puzzle.fen}
+  data-moves={puzzle.moves.join(' ')}
+  data-orientation={puzzle.solverColor}
+>
+  <p class="meta">
+    Puzzle #{puzzle.number} · {puzzle.date} · rated {puzzle.rating} · {playerMoves} {playerMoves === 1 ? 'move' : 'moves'}
+  </p>
+  <p class="prompt" id="puzzle-status" aria-live="polite"><strong>{side} to move.</strong> Find the best move.</p>
+
+  <div class="board-wrap" id="puzzle-board">
+    <BoardDiagram fen={puzzle.startFen} flip={puzzle.solverColor === 'b'} highlight={puzzle.setupMove} title={`${side} to move`} />
+  </div>
+
+  <div class="controls" id="puzzle-controls" hidden>
+    <button type="button" id="hint">Hint</button>
+    <button type="button" id="reveal">Show solution</button>
+    <button type="button" id="share" hidden>Share result</button>
+  </div>
+  <p class="streak" id="puzzle-streak"></p>
+
+  <details>
+    <summary>Solution and details</summary>
+    <p><strong>Solution:</strong> {solution}</p>
+    <p><strong>Themes:</strong> {puzzle.themes.map(themeLabel).join(', ')}</p>
+    {puzzle.opening && <p><strong>Opening:</strong> {puzzle.opening}</p>}
+    <p><strong>FEN:</strong> <code>{puzzle.startFen}</code></p>
+    <p>From a real game: <a href={puzzle.gameUrl} rel="nofollow">view on Lichess</a> (puzzle <code>{puzzle.id}</code>, Lichess puzzle database, CC0).</p>
+  </details>
+
+  <nav class="pager">
+    {prev ? <a href={`/puzzle/${prev}/`}>← Previous</a> : <span></span>}
+    <a href="/puzzle/archive/">Archive</a>
+    {next ? <a href={next === todayUtc() ? '/puzzle/' : `/puzzle/${next}/`}>Next →</a> : <span></span>}
+  </nav>
+</section>
+
+<style>
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 0.25rem; }
+  .prompt { margin-top: 0; }
+  .board-wrap { width: min(100%, 32rem); }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
+  .controls button { font: inherit; padding: 0.4rem 0.9rem; cursor: pointer; }
+  .streak { color: var(--muted); min-height: 1.5em; }
+  .pager { display: flex; justify-content: space-between; margin-top: 1.5rem; }
+  code { word-break: break-all; }
+</style>
+
+<script>
+  import { mountPuzzle } from '../scripts/puzzle';
+  const root = document.querySelector<HTMLElement>('section.puzzle');
+  if (root) mountPuzzle(root);
+</script>

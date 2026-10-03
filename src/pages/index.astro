@@ -1,6 +1,7 @@
 ---
 import { getEntry, render } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
+import { TOOLS } from '../lib/tools';
 
 const home = await getEntry('home', 'home');
 if (!home) throw new Error('Missing homepage content: src/content/home.md');
@@ -10,4 +11,20 @@ const { Content } = await render(home);
 <Layout title={home.data.title} description={home.data.description}>
   <h1>{home.data.heading}</h1>
   <Content />
+
+  <ul class="tools">
+    {TOOLS.map((t) => (
+      <li>
+        <a href={t.href}><strong>{t.name}</strong></a>
+        <p>{t.blurb}</p>
+      </li>
+    ))}
+  </ul>
 </Layout>
+
+<style>
+  .tools { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 1rem; margin-top: 2rem; }
+  .tools li { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 8px; padding: 0.9rem 1rem; }
+  .tools a { color: var(--accent); text-decoration: none; }
+  .tools p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.95rem; }
+</style>

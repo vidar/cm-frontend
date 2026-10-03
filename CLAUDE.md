@@ -17,6 +17,15 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   - exclude private/utility routes (account pages, API endpoints, admin-like UIs) with the
     sitemap `filter` option and a `Disallow` line in `src/pages/robots.txt.ts`;
   - after `npm run build`, check `dist/client/sitemap-0.xml` and `dist/client/robots.txt`.
+- **llms.txt must stay current too.** `src/pages/llms.txt.ts` lists the tools (from `src/lib/tools.ts`),
+  machine-readable endpoints and CMS pages. When adding a tool, add it to `TOOLS`; when adding an
+  endpoint or data route, add it to llms.txt.
+- **Chess features:** shared code in `src/lib/` (`chess/board-svg.ts` static SVG boards, `openings.ts`,
+  `puzzles.ts`, `tools.ts`) and `src/scripts/board.ts` (interactive board). Data in `src/data/` (see
+  its README; Lichess, CC0). Pieces are cburnett (BSD-3) — keep the credit on `/credits/`.
+  Daily puzzles are on-demand routes (`prerender = false`) that switch at 00:00 UTC; the puzzle set
+  runs out on 2028-10-01, regenerate before then. New top-level routes must be added to the
+  reserved-names hint in `public/admin/config.yml`.
 - **Wrangler config:** keep `previews: {}` and `preview_urls: true` in `wrangler.jsonc`, and
   keep `session: false` in `astro.config.mjs` unless a KV namespace ID is configured for both
   production and `previews` (`wrangler preview` can't auto-provision bindings).

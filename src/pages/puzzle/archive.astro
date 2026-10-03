@@ -1,0 +1,40 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { getPuzzle, publishedDates, themeLabel, todayUtc } from '../../lib/puzzles';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'public, max-age=300');
+
+const today = todayUtc();
+const puzzles = publishedDates().map((d) => getPuzzle(d)!);
+---
+
+<Layout title="Daily chess puzzle archive" description="Every past chess moments daily puzzle, with ratings and themes.">
+  <h1>Puzzle archive</h1>
+  <p>All daily puzzles so far. Today's puzzle is at <a href="/puzzle/">/puzzle/</a>. Also available as JSON: <a href="/puzzle/today.json">/puzzle/today.json</a>, <code>/puzzle/YYYY-MM-DD.json</code>.</p>
+  <ul class="archive" id="archive">
+    {puzzles.map((p) => (
+      <li data-date={p.date}>
+        <a href={p.date === today ? '/puzzle/' : `/puzzle/${p.date}/`}>#{p.number} · {p.date}</a>
+        <span class="muted">rated {p.rating} · {p.themes.slice(0, 3).map(themeLabel).join(', ')}</span>
+      </li>
+    ))}
+  </ul>
+</Layout>
+
+<style>
+  .archive { list-style: none; padding: 0; }
+  .archive li { padding: 0.3rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  .archive li.solved a::after { content: ' ✅'; }
+  .muted { color: var(--muted); font-size: 0.9em; margin-left: 0.5rem; }
+</style>
+
+<script>
+  // Mark puzzles this visitor has solved (stored in their browser by the puzzle page).
+  try {
+    const results = JSON.parse(localStorage.getItem('cm-puzzle-results') ?? '{}');
+    document.querySelectorAll<HTMLLIElement>('#archive li').forEach((li) => {
+      if (results[li.dataset.date!]?.solved) li.classList.add('solved');
+    });
+  } catch {}
+</script>

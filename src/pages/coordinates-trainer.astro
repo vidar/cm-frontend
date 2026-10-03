@@ -1,0 +1,151 @@
+---
+import Layout from '../layouts/Layout.astro';
+import '../styles/board.css';
+---
+
+<Layout
+  title="Chess coordinates trainer: learn the board in 30 seconds a day"
+  description="Free chess coordinates trainer. A square name appears, you click it: how many can you find in 30 seconds? Train as White or Black and beat your best score."
+>
+  <h1>Coordinates trainer</h1>
+  <p>A square like <strong>e4</strong> appears: click it on the board. How many can you find in 30 seconds?</p>
+
+  <div class="hud">
+    <span class="target" id="target" aria-live="polite">Ready?</span>
+    <span class="stats"><span id="score">0</span> found · <span id="time">30.0</span>s</span>
+  </div>
+
+  <div id="board" class="board-wrap"></div>
+
+  <div class="controls">
+    <button type="button" id="start">Start</button>
+    <label>Play as
+      <select id="color">
+        <option value="w">White</option>
+        <option value="b">Black</option>
+        <option value="r">Random</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="pieces" /> Show pieces</label>
+    <button type="button" id="share" hidden>Share score</button>
+  </div>
+  <p id="result" class="result" aria-live="polite"></p>
+  <p class="best">Best: <span id="best-w">–</span> as White · <span id="best-b">–</span> as Black</p>
+
+  <h2>Why train coordinates?</h2>
+  <p>
+    Knowing every square by name lets you read chess books and notation, follow commentary and calculate faster. Strong players see
+    "f7" instantly from either side of the board. Five rounds a day for a week makes a visible difference, especially when playing
+    as Black, where the board is upside down.
+  </p>
+</Layout>
+
+<style>
+  .hud { display: flex; justify-content: space-between; align-items: baseline; width: min(100%, 32rem); margin-bottom: 0.5rem; }
+  .target { font-size: 2.5rem; font-weight: 700; min-width: 4ch; }
+  .stats { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .board-wrap { width: min(100%, 32rem); }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin: 0.75rem 0; }
+  .controls button { font: inherit; padding: 0.4rem 0.9rem; cursor: pointer; }
+  .result { font-weight: 600; min-height: 1.5em; }
+  .best { color: var(--muted); }
+</style>
+
+<script>
+  import { Board } from '../scripts/board';
+
+  const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  const EMPTY = '8/8/8/8/8/8/8/8';
+  const ROUND_MS = 30_000;
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const targetEl = $('target'), scoreEl = $('score'), timeEl = $('time'), resultEl = $('result');
+  const colorEl = $<HTMLSelectElement>('color'), piecesEl = $<HTMLInputElement>('pieces');
+  const startBtn = $<HTMLButtonElement>('start'), shareBtn = $<HTMLButtonElement>('share');
+
+  let target = '', score = 0, misses = 0, running = false, endAt = 0, raf = 0, color: 'w' | 'b' = 'w';
+
+  const board = new Board($('board'), { coords: false, onSquareClick: (sq) => onClick(sq) });
+
+  const bestKey = (c: string) => `cm-coords-best-${c}`;
+  const getBest = (c: string) => { try { return Number(localStorage.getItem(bestKey(c)) ?? 0); } catch { return 0; } };
+  const showBest = () => { for (const c of ['w', 'b']) $(`best-${c}`).textContent = getBest(c) ? String(getBest(c)) : '–'; };
+
+  function randomSquare(not?: string) {
+    let sq: string;
+    do sq = 'abcdefgh'[Math.floor(Math.random() * 8)] + (1 + Math.floor(Math.random() * 8));
+    while (sq === not);
+    return sq;
+  }
+
+  function setup() {
+    color = colorEl.value === 'r' ? (Math.random() < 0.5 ? 'w' : 'b') : (colorEl.value as 'w' | 'b');
+    board.setOrientation(color);
+    board.setPosition(piecesEl.checked ? START : EMPTY);
+  }
+
+  function flash(sq: string, cls: 'right' | 'wrong') {
+    board.square(sq)?.classList.add(cls);
+    setTimeout(() => board.square(sq)?.classList.remove(cls), 250);
+  }
+
+  function onClick(sq: string) {
+    if (!running) return;
+    if (sq === target) {
+      score++;
+      scoreEl.textContent = String(score);
+      flash(sq, 'right');
+      target = randomSquare(target);
+      targetEl.textContent = target;
+    } else {
+      misses++;
+      flash(sq, 'wrong');
+    }
+  }
+
+  function tick() {
+    const left = endAt - performance.now();
+    timeEl.textContent = (Math.max(0, left) / 1000).toFixed(1);
+    if (left <= 0) return finish();
+    raf = requestAnimationFrame(tick);
+  }
+
+  function start() {
+    setup();
+    score = 0; misses = 0; running = true;
+    scoreEl.textContent = '0';
+    resultEl.textContent = '';
+    shareBtn.hidden = true;
+    startBtn.textContent = 'Restart';
+    target = randomSquare();
+    targetEl.textContent = target;
+    endAt = performance.now() + ROUND_MS;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(tick);
+  }
+
+  function finish() {
+    running = false;
+    targetEl.textContent = '✓';
+    const prev = getBest(color);
+    const isBest = score > prev;
+    if (isBest) try { localStorage.setItem(bestKey(color), String(score)); } catch {}
+    const accuracy = score + misses ? Math.round((score / (score + misses)) * 100) : 0;
+    resultEl.textContent = `${score} squares as ${color === 'w' ? 'White' : 'Black'}, ${accuracy}% accuracy${isBest ? ' — new best!' : ''}`;
+    shareBtn.hidden = false;
+    showBest();
+  }
+
+  startBtn.addEventListener('click', start);
+  colorEl.addEventListener('change', () => !running && setup());
+  piecesEl.addEventListener('change', () => board.setPosition(piecesEl.checked ? START : EMPTY));
+  shareBtn.addEventListener('click', async () => {
+    const text = `I found ${score} squares in 30s as ${color === 'w' ? 'White' : 'Black'} on the chessmoments coordinates trainer ♟️\n${location.origin}/coordinates-trainer/`;
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else { await navigator.clipboard.writeText(text); shareBtn.textContent = 'Copied!'; setTimeout(() => (shareBtn.textContent = 'Share score'), 1500); }
+    } catch {}
+  });
+
+  setup();
+  showBest();
+</script>

@@ -1,0 +1,124 @@
+---
+import Layout from '../layouts/Layout.astro';
+import '../styles/board.css';
+
+const start = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const origin = Astro.site!.origin;
+---
+
+<Layout
+  title="Chess board image generator (FEN & PGN to SVG)"
+  description="Turn any FEN or PGN into a clean chess diagram. Copy an image link, Markdown or HTML, or call the free URL API: /board.svg?fen=…"
+>
+  <h1>Chess board image generator</h1>
+  <p>Paste a FEN or a PGN and get a chess diagram you can embed anywhere. Every image has a permanent URL.</p>
+
+  <form id="board-form" class="tool-form">
+    <label for="input">FEN or PGN</label>
+    <textarea id="input" rows="4" spellcheck="false">{start}</textarea>
+    <div class="row">
+      <label><input type="checkbox" id="flip" /> Black at the bottom</label>
+      <label><input type="checkbox" id="coords" checked /> Coordinates</label>
+      <label><input type="checkbox" id="lastmove" checked /> Highlight last move (PGN)</label>
+    </div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </form>
+
+  <img id="preview" src={`/board.svg?fen=${encodeURIComponent(start)}`} alt="Chess board preview" width="360" height="360" />
+
+  <div class="outputs">
+    <label for="out-url">Image URL</label>
+    <div class="copy"><input id="out-url" readonly /><button type="button" data-copy="out-url">Copy</button></div>
+    <label for="out-md">Markdown</label>
+    <div class="copy"><input id="out-md" readonly /><button type="button" data-copy="out-md">Copy</button></div>
+    <label for="out-html">HTML</label>
+    <div class="copy"><input id="out-html" readonly /><button type="button" data-copy="out-html">Copy</button></div>
+  </div>
+
+  <h2>URL API</h2>
+  <p>Images are generated from the URL, so you can build links yourself, from code or from an AI agent:</p>
+  <pre><code>{`${origin}/board.svg?fen=<FEN>`}</code></pre>
+  <table>
+    <thead><tr><th>Parameter</th><th>Meaning</th><th>Default</th></tr></thead>
+    <tbody>
+      <tr><td><code>fen</code></td><td>Position in FEN (URL-encoded; <code>_</code> may replace spaces). Piece placement alone is enough.</td><td>start position</td></tr>
+      <tr><td><code>flip</code></td><td><code>1</code> to show the board from Black's side</td><td><code>0</code></td></tr>
+      <tr><td><code>lastmove</code></td><td>Highlight a move, e.g. <code>e2e4</code></td><td>none</td></tr>
+      <tr><td><code>highlight</code></td><td>Comma-separated squares to highlight, e.g. <code>d5,f7</code></td><td>none</td></tr>
+      <tr><td><code>coords</code></td><td><code>0</code> to hide coordinates</td><td><code>1</code></td></tr>
+      <tr><td><code>size</code></td><td>Width/height in pixels (64–2048)</td><td><code>400</code></td></tr>
+    </tbody>
+  </table>
+  <p>Example: <a href={`/board.svg?fen=r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R_w_KQkq_-_2_3&lastmove=b8c6`}><code>/board.svg?fen=r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R_w_KQkq_-_2_3&amp;lastmove=b8c6</code></a></p>
+  <p>Responses are SVG, cached for a year, and allow cross-origin use. Free to use; a link back is appreciated.</p>
+</Layout>
+
+<style>
+  .tool-form textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 0.9rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; margin: 0.5rem 0; }
+  .error { color: #dc2626; }
+  #preview { display: block; width: min(100%, 24rem); height: auto; margin: 1rem 0; }
+  .outputs { display: grid; gap: 0.25rem; margin-bottom: 2rem; }
+  .copy { display: flex; gap: 0.5rem; }
+  .copy input { flex: 1; min-width: 0; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  pre { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); vertical-align: top; }
+  code { word-break: break-all; }
+</style>
+
+<script>
+  import { Chess } from 'chess.js';
+  import { parsePlacement } from '../lib/chess/board-svg';
+
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const input = $<HTMLTextAreaElement>('input');
+  const flip = $<HTMLInputElement>('flip');
+  const coords = $<HTMLInputElement>('coords');
+  const lastmove = $<HTMLInputElement>('lastmove');
+  const error = $<HTMLParagraphElement>('error');
+  const preview = $<HTMLImageElement>('preview');
+
+  function toPosition(text: string): { fen: string; last?: string } {
+    const t = text.trim();
+    // A FEN has a piece-placement field with 7 slashes; anything else is treated as PGN.
+    if (/^[prnbqkPRNBQK1-8]+(\/[prnbqkPRNBQK1-8]+){7}(\s|$)/.test(t)) {
+      parsePlacement(t);
+      return { fen: t };
+    }
+    const chess = new Chess();
+    chess.loadPgn(t);
+    const h = chess.history({ verbose: true });
+    const m = h[h.length - 1];
+    return { fen: chess.fen(), last: m ? m.from + m.to : undefined };
+  }
+
+  function update() {
+    try {
+      const { fen, last } = toPosition(input.value);
+      const params = new URLSearchParams({ fen: fen.replace(/ /g, '_') });
+      if (flip.checked) params.set('flip', '1');
+      if (!coords.checked) params.set('coords', '0');
+      if (last && lastmove.checked) params.set('lastmove', last);
+      const url = `${location.origin}/board.svg?${params.toString().replace(/%2F/g, '/')}`;
+      preview.src = url;
+      $<HTMLInputElement>('out-url').value = url;
+      $<HTMLInputElement>('out-md').value = `![Chess position](${url})`;
+      $<HTMLInputElement>('out-html').value = `<img src="${url}" alt="Chess position" width="400" height="400">`;
+      error.hidden = true;
+    } catch (e) {
+      error.textContent = `Couldn't read that as FEN or PGN: ${(e as Error).message}`;
+      error.hidden = false;
+    }
+  }
+
+  for (const el of [input, flip, coords, lastmove]) el.addEventListener('input', update);
+  document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText($<HTMLInputElement>(btn.dataset.copy!).value);
+      btn.textContent = 'Copied';
+      setTimeout(() => (btn.textContent = 'Copy'), 1200);
+    }),
+  );
+  update();
+</script>

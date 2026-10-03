@@ -1,9 +1,7 @@
 ---
-title: Home
-description: Welcome to chessmoments.
-heading: Welcome
+title: Daily chess puzzles, openings and free chess tools
+description: A free daily chess puzzle, an explorer for every named chess opening, a board image generator, an online chess clock and a coordinates trainer.
+heading: chessmoments
 ---
 
-This site is built with [Astro](https://astro.build) and deployed on [Cloudflare Workers](https://workers.cloudflare.com).
-
-[Learn more about us →](/about/)
+Free chess tools that load fast and need no account. Start with [today's puzzle](/puzzle/), look up an [opening](/openings/), or put the [chess clock](/chess-clock/) on the table for your next game.

@@ -1,0 +1,22 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import PuzzleView from '../../components/PuzzleView.astro';
+import { getPuzzle, todayUtc } from '../../lib/puzzles';
+
+export const prerender = false;
+
+const { date = '' } = Astro.params;
+const puzzle = getPuzzle(date);
+if (!puzzle) return new Response('Puzzle not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+// Past puzzles never change; today's page is also served at /puzzle/.
+Astro.response.headers.set('Cache-Control', date < todayUtc() ? 'public, max-age=86400' : 'public, max-age=60');
+const side = puzzle.solverColor === 'w' ? 'White' : 'Black';
+---
+
+<Layout
+  title={`Chess puzzle #${puzzle.number} (${puzzle.date})`}
+  description={`Daily chess puzzle #${puzzle.number} from ${puzzle.date}, rated ${puzzle.rating}. ${side} to move.`}
+>
+  <h1>Chess puzzle #{puzzle.number}</h1>
+  <PuzzleView puzzle={puzzle} />
+</Layout>

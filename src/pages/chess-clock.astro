@@ -1,0 +1,267 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const presets = [
+  ['1+0', 'Bullet'],
+  ['3+0', 'Blitz'],
+  ['3+2', 'Blitz'],
+  ['5+0', 'Blitz'],
+  ['5+3', 'Blitz'],
+  ['10+0', 'Rapid'],
+  ['10+5', 'Rapid'],
+  ['15+10', 'Rapid'],
+  ['30+0', 'Classical'],
+];
+---
+
+<Layout
+  title="Online chess clock with increment and delay"
+  description="Free online chess clock for phone, tablet or laptop. Blitz, rapid and classical presets, Fischer increment, delay, fullscreen and keeps the screen awake."
+>
+  <h1>Chess clock</h1>
+
+  <div class="clock" id="clock" data-state="ready">
+    <button type="button" class="side top" id="side-b" aria-label="Black's clock (tap to end your turn)">
+      <span class="time" id="time-b">5:00</span>
+      <span class="moves" id="moves-b"></span>
+    </button>
+    <div class="bar">
+      <button type="button" id="pause" disabled>Pause</button>
+      <button type="button" id="reset">Reset</button>
+      <button type="button" id="fullscreen">Fullscreen</button>
+    </div>
+    <button type="button" class="side" id="side-w" aria-label="White's clock (tap to end your turn)">
+      <span class="time" id="time-w">5:00</span>
+      <span class="moves" id="moves-w"></span>
+    </button>
+  </div>
+
+  <form id="settings" class="settings">
+    <fieldset>
+      <legend>Time control</legend>
+      <div class="presets">
+        {presets.map(([tc, kind]) => <button type="button" data-preset={tc} title={kind}>{tc}</button>)}
+      </div>
+      <div class="custom">
+        <label>Minutes <input type="number" id="minutes" min="0.25" max="180" step="0.25" value="5" /></label>
+        <label>Increment / delay (s) <input type="number" id="bonus" min="0" max="60" value="0" /></label>
+        <label>Mode
+          <select id="mode">
+            <option value="fischer">Increment (Fischer)</option>
+            <option value="delay">Delay (simple)</option>
+          </select>
+        </label>
+      </div>
+    </fieldset>
+  </form>
+
+  <h2>How to use it</h2>
+  <ol>
+    <li>Pick a time control, e.g. <strong>5+3</strong> (5 minutes each, 3 seconds added per move).</li>
+    <li>Put the device between the players. Black taps their side to start White's clock.</li>
+    <li>After each move, tap your own side (or press <kbd>Space</kbd>) to start your opponent's clock.</li>
+    <li>A clock that reaches zero turns red: that player has lost on time.</li>
+  </ol>
+  <h2>Time controls explained</h2>
+  <ul>
+    <li><strong>Increment (Fischer):</strong> after each move, the bonus seconds are added to your clock.</li>
+    <li><strong>Delay:</strong> your clock waits the delay seconds before counting down each turn; unused delay isn't kept.</li>
+    <li><strong>Bullet</strong> is under 3 minutes, <strong>blitz</strong> 3–9, <strong>rapid</strong> 10–59, <strong>classical</strong> 60+ (per player).</li>
+  </ul>
+</Layout>
+
+<style>
+  .clock {
+    display: grid;
+    grid-template-rows: 1fr auto 1fr;
+    gap: 0.5rem;
+    height: min(75vh, 40rem);
+    background: var(--bg);
+  }
+  .clock:fullscreen { height: 100vh; padding: 0.5rem; }
+  .side {
+    border: 0;
+    border-radius: 12px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    display: grid;
+    place-content: center;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .side.top { transform: rotate(180deg); }
+  .side.active { background: #16a34a; color: #fff; }
+  .side.low.active { background: #ea580c; }
+  .side.flagged { background: #dc2626; color: #fff; }
+  .time { font-size: clamp(3rem, 16vw, 7rem); font-variant-numeric: tabular-nums; font-weight: 700; line-height: 1; }
+  .moves { font-size: 0.9rem; opacity: 0.8; min-height: 1.2em; }
+  .bar { display: flex; gap: 0.5rem; justify-content: center; }
+  .bar button, .presets button { font: inherit; padding: 0.35rem 0.8rem; cursor: pointer; }
+  .settings fieldset { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; margin-top: 1rem; }
+  .presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+  .presets button.selected { outline: 2px solid var(--accent); }
+  .custom { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .custom input { width: 5rem; }
+</style>
+
+<script>
+  type Side = 'w' | 'b';
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const clock = $('clock');
+  const minutesEl = $<HTMLInputElement>('minutes');
+  const bonusEl = $<HTMLInputElement>('bonus');
+  const modeEl = $<HTMLSelectElement>('mode');
+  const pauseBtn = $<HTMLButtonElement>('pause');
+
+  let base = 300_000, bonus = 0, mode: 'fischer' | 'delay' = 'fischer';
+  let remaining: Record<Side, number> = { w: base, b: base };
+  let moves: Record<Side, number> = { w: 0, b: 0 };
+  let active: Side | null = null;
+  let turnStart = 0; // performance.now() when the active turn (re)started
+  let spentBefore = 0; // remaining ms of the active side at turnStart
+  let paused = false;
+  let flagged: Side | null = null;
+  let raf = 0;
+  let wakeLock: { release(): Promise<void> } | null = null;
+
+  const fmt = (ms: number) => {
+    const t = Math.max(0, ms);
+    if (t < 10_000) return (t / 1000).toFixed(1);
+    const s = Math.ceil(t / 1000);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
+  function current(side: Side) {
+    if (side !== active || paused) return remaining[side];
+    const elapsed = performance.now() - turnStart;
+    const counted = mode === 'delay' ? Math.max(0, elapsed - bonus * 1000) : elapsed;
+    return spentBefore - counted;
+  }
+
+  function render() {
+    for (const side of ['w', 'b'] as Side[]) {
+      const t = current(side);
+      $(`time-${side}`).textContent = fmt(t);
+      $(`moves-${side}`).textContent = moves[side] ? `${moves[side]} ${moves[side] === 1 ? 'move' : 'moves'}` : '';
+      const el = $(`side-${side}`);
+      el.classList.toggle('active', side === active && !flagged);
+      el.classList.toggle('low', t < 10_000);
+      el.classList.toggle('flagged', side === flagged);
+    }
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+    pauseBtn.disabled = !active || !!flagged;
+    clock.dataset.state = flagged ? 'flagged' : !active ? 'ready' : paused ? 'paused' : 'running';
+  }
+
+  function tick() {
+    if (active && !paused && !flagged && current(active) <= 0) {
+      remaining[active] = 0;
+      flagged = active;
+      releaseWakeLock();
+      navigator.vibrate?.([200, 100, 200]);
+    }
+    render();
+    if (active && !paused && !flagged) raf = requestAnimationFrame(tick);
+  }
+
+  function startTurn(side: Side) {
+    active = side;
+    spentBefore = remaining[side];
+    turnStart = performance.now();
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(tick);
+    void requestWakeLock();
+  }
+
+  /** The player on `side` pressed their clock: their turn ends, the opponent's starts. */
+  function press(side: Side) {
+    if (flagged || paused) return;
+    const other: Side = side === 'w' ? 'b' : 'w';
+    if (active === null) return startTurn(other); // first press starts the opponent's clock
+    if (active !== side) return; // only the player to move can press
+    remaining[side] = current(side) + (mode === 'fischer' ? bonus * 1000 : 0);
+    moves[side]++;
+    navigator.vibrate?.(20);
+    startTurn(other);
+  }
+
+  function reset() {
+    cancelAnimationFrame(raf);
+    base = Math.round(Math.max(0.25, Number(minutesEl.value) || 5) * 60_000);
+    bonus = Math.max(0, Number(bonusEl.value) || 0);
+    mode = modeEl.value as typeof mode;
+    remaining = { w: base, b: base };
+    moves = { w: 0, b: 0 };
+    active = null;
+    paused = false;
+    flagged = null;
+    releaseWakeLock();
+    document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) =>
+      b.classList.toggle('selected', b.dataset.preset === `${base / 60_000}+${bonus}` && mode === 'fischer'),
+    );
+    try { localStorage.setItem('cm-clock', JSON.stringify({ m: minutesEl.value, b: bonusEl.value, mode })); } catch {}
+    render();
+  }
+
+  async function requestWakeLock() {
+    try {
+      if (!wakeLock && 'wakeLock' in navigator) wakeLock = await (navigator as any).wakeLock.request('screen');
+    } catch {}
+  }
+  function releaseWakeLock() {
+    void wakeLock?.release().catch(() => {});
+    wakeLock = null;
+  }
+
+  $('side-w').addEventListener('click', () => press('w'));
+  $('side-b').addEventListener('click', () => press('b'));
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || (e.target as HTMLElement).closest('input, select, textarea')) return;
+    e.preventDefault();
+    press(active ?? 'b');
+  });
+  pauseBtn.addEventListener('click', () => {
+    if (!active || flagged) return;
+    if (paused) {
+      paused = false;
+      startTurn(active);
+    } else {
+      remaining[active] = current(active);
+      paused = true;
+      cancelAnimationFrame(raf);
+      releaseWakeLock();
+      render();
+    }
+  });
+  $('reset').addEventListener('click', reset);
+  $('fullscreen').addEventListener('click', () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void clock.requestFullscreen?.();
+  });
+  document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const [m, inc] = b.dataset.preset!.split('+');
+      minutesEl.value = m;
+      bonusEl.value = inc;
+      modeEl.value = 'fischer';
+      reset();
+    }),
+  );
+  for (const el of [minutesEl, bonusEl, modeEl]) el.addEventListener('change', reset);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && active && !paused && !flagged) void requestWakeLock();
+  });
+
+  try {
+    const saved = JSON.parse(localStorage.getItem('cm-clock') ?? 'null');
+    if (saved) {
+      minutesEl.value = saved.m;
+      bonusEl.value = saved.b;
+      modeEl.value = saved.mode;
+    }
+  } catch {}
+  reset();
+</script>

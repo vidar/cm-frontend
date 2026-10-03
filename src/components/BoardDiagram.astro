@@ -1,0 +1,15 @@
+---
+import { renderBoardSvg } from '../lib/chess/board-svg';
+
+interface Props {
+  fen: string;
+  flip?: boolean;
+  highlight?: string[];
+  title?: string;
+}
+
+const { fen, flip, highlight, title } = Astro.props;
+const svg = renderBoardSvg({ fen, flip, highlight, title }).replace('<svg ', '<svg class="board-diagram" ');
+---
+
+<Fragment set:html={svg} />

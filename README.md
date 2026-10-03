@@ -24,6 +24,19 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 └── wrangler.jsonc       # Cloudflare Workers config
 ```
 
+## Features
+
+| Route | What it is |
+| :-- | :-- |
+| `/puzzle/` | Daily puzzle (on-demand; changes 00:00 UTC), archive at `/puzzle/archive/`, JSON at `/puzzle/today.json` and `/puzzle/YYYY-MM-DD.json` |
+| `/openings/` | 149 opening families → `/openings/family/<slug>/` → 3,800+ lines at `/openings/<slug>/`; JSON at `/openings.json` |
+| `/board-image/` | FEN/PGN → diagram tool; image API at `/board.svg?fen=…` (on-demand) |
+| `/chess-clock/` | Client-side chess clock |
+| `/coordinates-trainer/` | Client-side coordinates game |
+| `/llms.txt` | Summary of tools and endpoints for AI agents |
+
+Data sources and licences: `src/data/README.md` and `/credits/`.
+
 ## Editing content
 
 Content is edited with [Sveltia CMS](https://sveltiacms.app) at https://chessmoments.com/admin/.

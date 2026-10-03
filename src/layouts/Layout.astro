@@ -6,7 +6,9 @@ interface Props {
   description?: string;
 }
 
-const { title, description = 'cm-frontend' } = Astro.props;
+const SITE_NAME = 'chessmoments';
+const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.' } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
 const path = Astro.url.pathname.replace(/\/?$/, '/');
 
 // Menu is driven by the "Show in menu" and "Menu order" fields in the CMS.
@@ -15,6 +17,11 @@ const menuPages = (await getCollection('pages', ({ data }) => data.showInMenu)).
 );
 const links = [
   { href: '/', label: 'Home' },
+  { href: '/puzzle/', label: 'Daily puzzle' },
+  { href: '/openings/', label: 'Openings' },
+  { href: '/chess-clock/', label: 'Clock' },
+  { href: '/coordinates-trainer/', label: 'Coordinates' },
+  { href: '/board-image/', label: 'Board image' },
   ...menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.title })),
 ];
 ---
@@ -28,16 +35,22 @@ const links = [
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" />
     <link rel="sitemap" href="/sitemap-index.xml" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary" />
     <meta name="generator" content={Astro.generator} />
-    <title>{title} | cm-frontend</title>
+    <title>{`${title} | ${SITE_NAME}`}</title>
   </head>
   <body>
     <header>
       <nav>
         {
           links.map(({ href, label }) => (
-            <a href={href} aria-current={path === href ? 'page' : undefined}>
+            <a href={href} aria-current={path === href || (href !== '/' && path.startsWith(href)) ? 'page' : undefined}>
               {label}
             </a>
           ))
@@ -48,7 +61,9 @@ const links = [
       <slot />
     </main>
     <footer>
-      <p>&copy; {new Date().getFullYear()} cm-frontend</p>
+      <p>
+        &copy; {new Date().getFullYear()} {SITE_NAME} · <a href="/credits/">Credits</a> · <a href="/llms.txt">llms.txt</a>
+      </p>
     </footer>
     <!-- Cloudflare Web Analytics. Automatic injection doesn't reach Worker-served assets, so it's
     added manually; beacons from other hostnames (previews, dev) are rejected by Cloudflare. -->
@@ -94,7 +109,11 @@ const links = [
   }
   nav {
     display: flex;
-    gap: 1.25rem;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+  }
+  footer a {
+    color: inherit;
   }
   nav a {
     color: var(--muted);
