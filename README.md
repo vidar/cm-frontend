@@ -17,6 +17,7 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 │   ├── layouts/
 │   │   └── Layout.astro # shared page shell (menu built from pages, footer, styles)
 │   └── pages/
+│       ├── robots.txt.ts # /robots.txt (points crawlers at the sitemap)
 │       ├── index.astro  # / (renders src/content/home.md)
 │       └── [slug].astro # /<slug>/ for each file in src/content/pages
 ├── astro.config.mjs     # Astro config (Cloudflare adapter)
@@ -35,6 +36,13 @@ Saving in the CMS commits to `main`, which triggers a production deploy (about a
 Sign-in options: *Sign In with GitHub* (needs the `sveltia-cms-auth` Worker set in
 `backend.base_url`), or *Sign In Using Access Token* with a GitHub fine-grained token that has
 Contents read/write on this repo. You can also edit the Markdown files directly.
+
+## SEO
+
+`/sitemap-index.xml` is generated at build time by `@astrojs/sitemap` from every page, so
+new CMS pages are included automatically. `/robots.txt` allows everything except `/admin/`.
+Each page has a canonical link to its chessmoments.com URL, so preview copies aren't indexed
+as duplicates.
 
 ## Commands
 
