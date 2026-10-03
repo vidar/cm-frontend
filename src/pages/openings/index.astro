@@ -1,9 +1,17 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import { getOpenings, getFamilies, formatMoves } from '../../lib/openings';
+import { getStats, sample } from '../../lib/opening-stats';
 
 const total = getOpenings().length;
-const families = getFamilies();
+// Most played first: games reaching the family's main (shortest) line.
+const families = getFamilies()
+  .map((f) => ({ ...f, games: getStats(f.lines[0])?.n ?? 0 }))
+  .sort((a, b) => b.games - a.games || a.name.localeCompare(b.name));
+const share = (n: number) => {
+  const p = (n / sample.gamesCounted) * 100;
+  return p >= 1 ? `${Math.round(p)}%` : p >= 0.1 ? `${p.toFixed(1)}%` : '<0.1%';
+};
 ---
 
 <Layout
@@ -13,7 +21,7 @@ const families = getFamilies();
   <h1>Chess openings</h1>
   <p>
     {total.toLocaleString('en')} named opening lines in {families.length} families, each with its moves, ECO code, FEN and a board diagram.
-    All data is also available as <a href="/openings.json">JSON</a>.
+    Sorted by how often they're played on Lichess. All data is also available as <a href="/openings.json">JSON</a>.
   </p>
   <label for="filter">Filter families</label>
   <input id="filter" type="search" placeholder="e.g. Sicilian, Gambit, Indian" autocomplete="off" />
@@ -21,7 +29,7 @@ const families = getFamilies();
     {families.map((f) => (
       <li data-search={f.name.toLowerCase()}>
         <a href={`/openings/family/${f.slug}/`}>{f.name}</a>
-        <span class="muted">{f.lines.length} {f.lines.length === 1 ? 'line' : 'lines'} · {formatMoves(f.lines[0].moves)}</span>
+        <span class="muted">{f.lines.length} {f.lines.length === 1 ? 'line' : 'lines'} · {formatMoves(f.lines[0].moves)}{f.games > 0 && ` · ${share(f.games)} of games`}</span>
       </li>
     ))}
   </ul>

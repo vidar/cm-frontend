@@ -1,0 +1,30 @@
+---
+import { percents, type Wdb } from '../lib/opening-stats';
+
+interface Props {
+  wdb: Wdb;
+}
+const [w, d, b] = percents(Astro.props.wdb);
+---
+
+<span class="result-bar" role="img" aria-label={`White wins ${w}%, draws ${d}%, Black wins ${b}%`}>
+  <span class="w" style={`width:${w}%`}>{w >= 12 ? `${w}%` : ''}</span><span class="d" style={`width:${d}%`}>{d >= 12 ? `${d}%` : ''}</span><span class="b" style={`width:${b}%`}>{b >= 12 ? `${b}%` : ''}</span>
+</span>
+
+<style>
+  .result-bar {
+    display: flex;
+    width: 100%;
+    min-width: 4.5rem;
+    height: 1.35rem;
+    border-radius: 4px;
+    overflow: hidden;
+    font-size: 0.75rem;
+    line-height: 1.35rem;
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  }
+  .result-bar span { text-align: center; white-space: nowrap; overflow: hidden; }
+  .w { background: #f5f5f4; color: #111827; }
+  .d { background: #9ca3af; color: #111827; }
+  .b { background: #1f2937; color: #f9fafb; }
+</style>

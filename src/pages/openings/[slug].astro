@@ -1,8 +1,11 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import BoardDiagram from '../../components/BoardDiagram.astro';
+import ResultBar from '../../components/ResultBar.astro';
 import '../../styles/board.css';
-import { getOpenings, formatMoves, parentLine, continuations, familySlug, type Opening } from '../../lib/openings';
+import { getOpenings, getByMoves, formatMoves, parentLine, continuations, familySlug, type Opening } from '../../lib/openings';
+import { formatMovesFrom, formatEval } from '../../lib/chess/notation';
+import { getStats, getEval, pvToSan, sumWdb, percents, bands, sample, statsSource } from '../../lib/opening-stats';
 
 export function getStaticPaths() {
   return getOpenings().map((opening) => ({ params: { slug: opening.slug }, props: { opening } }));
@@ -18,7 +21,25 @@ const siblings = getOpenings()
 const sideToMove = opening.fen.split(' ')[1] === 'w' ? 'White' : 'Black';
 const imageUrl = `/board.svg?fen=${opening.fen.replace(/ /g, '_')}&lastmove=${opening.lastMove.join('')}`;
 const lichessUrl = `https://lichess.org/analysis/pgn/${encodeURIComponent(opening.moves.join(' '))}`;
-const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagram, FEN and related lines.`;
+const stats = getStats(opening);
+const engine = getEval(opening);
+const bestLine = engine ? pvToSan(opening, engine.pv) : [];
+const total = stats ? sumWdb(stats.r) : undefined;
+const [pw, pd, pb] = total ? percents(total) : [0, 0, 0];
+const ply = opening.moves.length; // index of the next move
+const nextMoves = (stats?.next ?? []).map(([san, n, w, d, b]) => ({
+  san,
+  n,
+  wdb: [w, d, b] as [number, number, number],
+  share: Math.round((n / stats!.n) * 100),
+  line: getByMoves([...opening.moves, san].join(' ')),
+}));
+const fmtN = (n: number) => n.toLocaleString('en');
+const sampleSize = `${(sample.gamesCounted / 1e6).toFixed(1)} million`;
+const titled = (name: string, title: string | null) => (title ? `${title} ${name}` : name);
+const description = stats
+  ? `${opening.name} (ECO ${opening.eco}): ${moves}. ${fmtN(stats.n)} Lichess games: White ${pw}%, draw ${pd}%, Black ${pb}%.${engine ? ` Engine: ${formatEval(engine)}.` : ''} Best replies, example games and board diagram.`
+  : `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagram, FEN and related lines.`;
 ---
 
 <Layout title={`${opening.name} – ${opening.eco}`} description={description}>
@@ -35,6 +56,23 @@ const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagr
     {next.length ? `${next.length} named ${next.length === 1 ? 'line continues' : 'lines continue'} from this position.` : ''}
   </p>
 
+  {stats && total ? (
+    <p>
+      In {sampleSize} rated Lichess games (blitz and slower), this position was reached <strong>{fmtN(stats.n)} times</strong> by
+      this move order. White won {pw}%, {pd}% were drawn and Black won {pb}%.
+      {nextMoves[0] && <> The most popular continuation is <strong>{formatMovesFrom([nextMoves[0].san], ply)}</strong> ({nextMoves[0].share}% of games).</>}
+    </p>
+  ) : (
+    <p class="muted">This exact move order didn't appear in our sample of {sampleSize} Lichess games: it's a rare line.</p>
+  )}
+
+  {engine && (
+    <p class="engine">
+      <strong>Engine evaluation:</strong> <span class="score">{formatEval(engine)}</span>
+      <span class="muted"> (Stockfish, depth {engine.depth}{bestLine.length ? <>; best line {formatMovesFrom(bestLine, ply)}</> : null})</span>
+    </p>
+  )}
+
   <dl class="facts">
     <dt>ECO</dt><dd>{opening.eco}</dd>
     <dt>Moves</dt><dd>{opening.moves.length} plies</dd>
@@ -45,6 +83,57 @@ const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagr
   <p class="actions">
     <a href={imageUrl}>Board image (SVG)</a>{' · '}<a href={lichessUrl} rel="nofollow">Analyse on Lichess</a>
   </p>
+
+  {stats && total && (
+    <section>
+      <h2>Results by rating</h2>
+      <table class="stats">
+        <thead><tr><th>Average rating</th><th>Games</th><th>White / draw / Black</th></tr></thead>
+        <tbody>
+          {stats.r.map((wdb, i) => {
+            const n = wdb[0] + wdb[1] + wdb[2];
+            return n > 0 && <tr><td>{bands[i]}</td><td>{fmtN(n)}</td><td><ResultBar wdb={wdb} /></td></tr>;
+          })}
+          <tr class="total"><td>All</td><td>{fmtN(stats.n)}</td><td><ResultBar wdb={total} /></td></tr>
+        </tbody>
+      </table>
+    </section>
+  )}
+
+  {nextMoves.length > 0 && (
+    <section>
+      <h2>Most played moves</h2>
+      <table class="stats">
+        <thead><tr><th>Move</th><th>Games</th><th>White / draw / Black</th></tr></thead>
+        <tbody>
+          {nextMoves.map((m) => (
+            <tr>
+              <td>
+                <strong>{formatMovesFrom([m.san], ply)}</strong>
+                {m.line && <><br /><a class="small" href={`/openings/${m.line.slug}/`}>{m.line.variation || m.line.name}</a></>}
+              </td>
+              <td>{fmtN(m.n)} <span class="muted small">({m.share}%)</span></td>
+              <td><ResultBar wdb={m.wdb} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )}
+
+  {stats && stats.top.length > 0 && (
+    <section>
+      <h2>Highest-rated games</h2>
+      <ul class="games">
+        {stats.top.map((g) => (
+          <li>
+            <a href={g.url} rel="nofollow">{titled(g.white, g.whiteTitle)} ({g.whiteElo}) – {titled(g.black, g.blackTitle)} ({g.blackElo})</a>
+            <span class="muted small"> {g.result} · {g.date} · {g.tc.replace('+', ' + ')}s</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )}
 
   {parent && (
     <section>
@@ -73,7 +162,10 @@ const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagr
     </section>
   )}
 
-  <p class="muted small">Opening names and moves from the <a href="https://github.com/lichess-org/chess-openings">Lichess openings dataset</a> (CC0).</p>
+  <p class="muted small">
+    Opening names and moves from the <a href="https://github.com/lichess-org/chess-openings">Lichess openings dataset</a>; statistics
+    from the {statsSource}, sample of {sampleSize} games, bots excluded; evaluations from Lichess cloud analysis. All CC0.
+  </p>
 </Layout>
 
 <style>
@@ -85,4 +177,11 @@ const description = `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagr
   .facts code { word-break: break-all; }
   .muted { color: var(--muted); }
   .small { font-size: 0.85rem; }
+  .engine .score { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .stats { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+  .stats th, .stats td { text-align: left; padding: 0.35rem 0.5rem 0.35rem 0; vertical-align: middle; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  .stats th:last-child, .stats td:last-child { width: 50%; }
+  .stats .total td { font-weight: 600; }
+  .games { padding-left: 1.1rem; }
+  .games li { margin: 0.3rem 0; }
 </style>

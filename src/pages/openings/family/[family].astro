@@ -2,7 +2,9 @@
 import Layout from '../../../layouts/Layout.astro';
 import BoardDiagram from '../../../components/BoardDiagram.astro';
 import '../../../styles/board.css';
+import ResultBar from '../../../components/ResultBar.astro';
 import { getFamilies, formatMoves } from '../../../lib/openings';
+import { getStats, sumWdb } from '../../../lib/opening-stats';
 
 export function getStaticPaths() {
   return getFamilies().map((family) => ({ params: { family: family.slug }, props: { family } }));
@@ -25,16 +27,27 @@ const ecoRange = ecos.length > 1 ? `${ecos[0]}–${ecos[ecos.length - 1]}` : eco
     <a href={`/openings/${base.slug}/`}>{formatMoves(base.moves)}</a>.
   </p>
   <BoardDiagram fen={base.fen} highlight={base.lastMove} title={`${base.name} after ${formatMoves(base.moves)}`} />
-  <ul class="lines">
-    {family.lines.map((o) => (
-      <li><a href={`/openings/${o.slug}/`}>{o.variation || o.name}</a> <span class="muted">{o.eco} · {formatMoves(o.moves)}</span></li>
-    ))}
-  </ul>
+  <table class="lines">
+    <thead><tr><th>Line</th><th>Games</th><th>White / draw / Black</th></tr></thead>
+    <tbody>
+      {family.lines.map((o) => {
+        const st = getStats(o);
+        return (
+          <tr>
+            <td><a href={`/openings/${o.slug}/`}>{o.variation || o.name}</a><br /><span class="muted">{o.eco} · {formatMoves(o.moves)}</span></td>
+            <td>{st ? st.n.toLocaleString('en') : '–'}</td>
+            <td>{st && <ResultBar wdb={sumWdb(st.r)} />}</td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
 </Layout>
 
 <style>
   .crumbs { font-size: 0.9rem; color: var(--muted); }
-  .lines { margin-top: 1.5rem; }
-  .lines li { margin: 0.2rem 0; }
+  .lines { width: 100%; margin-top: 1.5rem; border-collapse: collapse; }
+  .lines th, .lines td { text-align: left; padding: 0.4rem 0.5rem 0.4rem 0; vertical-align: middle; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  .lines th:last-child, .lines td:last-child { width: 35%; }
   .muted { color: var(--muted); font-size: 0.9em; }
 </style>

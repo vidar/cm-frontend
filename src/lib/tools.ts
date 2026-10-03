@@ -9,8 +9,8 @@ export const TOOLS = [
   {
     href: '/openings/',
     name: 'Chess openings',
-    blurb: 'Every named opening line with moves, ECO code, FEN and a board diagram.',
-    agent: 'One page per line at /openings/<slug>/; full index as JSON at /openings.json',
+    blurb: 'Every named opening line with Lichess statistics, engine evaluation, best replies and a board diagram.',
+    agent: 'One page per line at /openings/<slug>/ (games, win/draw/loss by rating, most played replies, Stockfish eval, example games); index with stats as JSON at /openings.json',
   },
   {
     href: '/board-image/',

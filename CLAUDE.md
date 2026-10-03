@@ -23,6 +23,8 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
 - **Chess features:** shared code in `src/lib/` (`chess/board-svg.ts` static SVG boards, `openings.ts`,
   `puzzles.ts`, `tools.ts`) and `src/scripts/board.ts` (interactive board). Data in `src/data/` (see
   its README; Lichess, CC0). Pieces are cburnett (BSD-3) — keep the credit on `/credits/`.
+  Opening stats/evals are generated offline (`scripts/`, see `src/data/README.md`) and must only be
+  imported by prerendered pages so they stay out of the Worker bundle.
   Daily puzzles are on-demand routes (`prerender = false`) that switch at 00:00 UTC; the puzzle set
   runs out on 2028-10-01, regenerate before then. New top-level routes must be added to the
   reserved-names hint in `public/admin/config.yml`.

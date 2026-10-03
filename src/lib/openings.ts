@@ -76,9 +76,13 @@ export function getOpenings(): Opening[] {
   return cache;
 }
 
-/** Formats SAN moves as "1. e4 c5 2. Nf3". */
-export function formatMoves(moves: string[]): string {
-  return moves.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ${m}` : m)).join(' ');
+export { formatMoves } from './chess/notation';
+
+let byMoves: Map<string, Opening> | undefined;
+/** First named line with exactly these SAN moves (joined with spaces). */
+export function getByMoves(key: string): Opening | undefined {
+  byMoves ??= new Map(getOpenings().map((o) => [o.moves.join(' '), o]).reverse() as [string, Opening][]);
+  return byMoves.get(key);
 }
 
 let links: { parent: Map<Opening, Opening>; children: Map<Opening, Opening[]> } | undefined;
