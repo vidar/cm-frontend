@@ -50,6 +50,13 @@ const links = [
     <footer>
       <p>&copy; {new Date().getFullYear()} cm-frontend</p>
     </footer>
+    <!-- Cloudflare Web Analytics. Automatic injection doesn't reach Worker-served assets, so it's
+    added manually; beacons from other hostnames (previews, dev) are rejected by Cloudflare. -->
+    <script
+      is:inline
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js"
+      data-cf-beacon='{"token": "ee0b49e2b84b4e4b95f420090a14dd33"}'></script>
   </body>
 </html>
 
