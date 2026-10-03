@@ -6,16 +6,35 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 
 ```
 ├── .vscode/             # recommended editor extensions/launch config
-├── public/              # static assets (served as-is)
+├── public/
+│   ├── admin/           # Sveltia CMS (index.html + config.yml), served at /admin/
+│   └── images/uploads/  # images uploaded through the CMS
 ├── src/
+│   ├── content/
+│   │   ├── home.md      # homepage content
+│   │   └── pages/       # one Markdown file per page; filename = URL slug
+│   ├── content.config.ts # content schemas (must match public/admin/config.yml)
 │   ├── layouts/
-│   │   └── Layout.astro # shared page shell (nav, footer, styles)
+│   │   └── Layout.astro # shared page shell (menu built from pages, footer, styles)
 │   └── pages/
-│       ├── index.astro  # /
-│       └── about.astro  # /about
+│       ├── index.astro  # / (renders src/content/home.md)
+│       └── [slug].astro # /<slug>/ for each file in src/content/pages
 ├── astro.config.mjs     # Astro config (Cloudflare adapter)
 └── wrangler.jsonc       # Cloudflare Workers config
 ```
+
+## Editing content
+
+Content is edited with [Sveltia CMS](https://sveltiacms.app) at https://chessmoments.com/admin/.
+Saving in the CMS commits to `main`, which triggers a production deploy (about a minute).
+
+- **Homepage**: fixed entry (`src/content/home.md`).
+- **Pages**: add or delete pages under *Pages*. Each becomes `/<slug>/`; "Show in menu" and
+  "Menu order" control the header menu.
+
+Sign-in options: *Sign In with GitHub* (needs the `sveltia-cms-auth` Worker set in
+`backend.base_url`), or *Sign In Using Access Token* with a GitHub fine-grained token that has
+Contents read/write on this repo. You can also edit the Markdown files directly.
 
 ## Commands
 

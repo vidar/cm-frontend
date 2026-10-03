@@ -1,12 +1,13 @@
 ---
+import { getEntry, render } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
+
+const home = await getEntry('home', 'home');
+if (!home) throw new Error('Missing homepage content: src/content/home.md');
+const { Content } = await render(home);
 ---
 
-<Layout title="Home | cm-frontend" description="Welcome to cm-frontend.">
-  <h1>Welcome</h1>
-  <p>
-    This site is built with <a href="https://astro.build">Astro</a> and deployed on
-    <a href="https://workers.cloudflare.com">Cloudflare Workers</a>.
-  </p>
-  <p><a href="/about">Learn more about us &rarr;</a></p>
+<Layout title={home.data.title} description={home.data.description}>
+  <h1>{home.data.heading}</h1>
+  <Content />
 </Layout>

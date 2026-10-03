@@ -1,0 +1,48 @@
+# Sveltia CMS configuration: https://sveltiacms.app/en/docs
+# Field names must match the schemas in src/content.config.ts.
+
+backend:
+  name: github
+  repo: vidar/cm-frontend
+  branch: main
+  # GitHub sign-in goes through the sveltia-cms-auth Worker.
+  base_url: https://sveltia-cms-auth.vidar-masson.workers.dev
+
+site_url: https://chessmoments.com
+media_folder: public/images/uploads
+public_folder: /images/uploads
+
+collections:
+  - name: home
+    label: Homepage
+    files:
+      - name: home
+        label: Homepage
+        file: src/content/home.md
+        fields:
+          - { label: Page title (browser tab), name: title, widget: string }
+          - { label: Description (search engines), name: description, widget: text, required: false }
+          - { label: Heading, name: heading, widget: string }
+          - { label: Content, name: body, widget: richtext }
+
+  - name: pages
+    label: Pages
+    label_singular: Page
+    folder: src/content/pages
+    extension: md
+    format: frontmatter
+    create: true
+    delete: true
+    identifier_field: title
+    slug: '{{slug}}'
+    preview_path: '{{slug}}/'
+    sortable_fields: [title, menuOrder]
+    fields:
+      - label: Title
+        name: title
+        widget: string
+        hint: The URL is made from the title when the page is created (e.g. "Contact Us" → /contact-us/). Avoid "admin" and "images".
+      - { label: Description (search engines), name: description, widget: text, required: false }
+      - { label: Show in menu, name: showInMenu, widget: boolean, default: true }
+      - { label: Menu order, name: menuOrder, widget: number, value_type: int, default: 10, hint: Lower numbers appear first. }
+      - { label: Content, name: body, widget: richtext }

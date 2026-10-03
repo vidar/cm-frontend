@@ -1,14 +1,21 @@
 ---
+import { getCollection } from 'astro:content';
+
 interface Props {
   title: string;
   description?: string;
 }
 
 const { title, description = 'cm-frontend' } = Astro.props;
-const path = Astro.url.pathname;
+const path = Astro.url.pathname.replace(/\/?$/, '/');
+
+// Menu is driven by the "Show in menu" and "Menu order" fields in the CMS.
+const menuPages = (await getCollection('pages', ({ data }) => data.showInMenu)).sort(
+  (a, b) => a.data.menuOrder - b.data.menuOrder || a.data.title.localeCompare(b.data.title),
+);
 const links = [
   { href: '/', label: 'Home' },
-  { href: '/about', label: 'About' },
+  ...menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.title })),
 ];
 ---
 
@@ -21,14 +28,14 @@ const links = [
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" />
     <meta name="generator" content={Astro.generator} />
-    <title>{title}</title>
+    <title>{title} | cm-frontend</title>
   </head>
   <body>
     <header>
       <nav>
         {
           links.map(({ href, label }) => (
-            <a href={href} aria-current={path === href || path === `${href}/` ? 'page' : undefined}>
+            <a href={href} aria-current={path === href ? 'page' : undefined}>
               {label}
             </a>
           ))
@@ -88,6 +95,10 @@ const links = [
   nav a:hover,
   nav a[aria-current='page'] {
     color: var(--accent);
+  }
+  main img {
+    max-width: 100%;
+    height: auto;
   }
   footer {
     color: var(--muted);
