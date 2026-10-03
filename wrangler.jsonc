@@ -5,6 +5,7 @@
 	"name": "cm-frontend",
 	"main": "@astrojs/cloudflare/entrypoints/server",
 	"workers_dev": false,
+	"preview_urls": true,
 	"routes": [{ "pattern": "chessmoments.com", "custom_domain": true }],
 	"assets": {
 		"directory": "./dist",
