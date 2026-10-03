@@ -4,6 +4,8 @@
 	"compatibility_flags": ["global_fetch_strictly_public"],
 	"name": "cm-frontend",
 	"main": "@astrojs/cloudflare/entrypoints/server",
+	"workers_dev": false,
+	"routes": [{ "pattern": "chessmoments.com", "custom_domain": true }],
 	"assets": {
 		"directory": "./dist",
 		"binding": "ASSETS"
