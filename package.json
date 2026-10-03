@@ -20,6 +20,7 @@
     "wrangler": "^4.147.0"
   },
   "allowScripts": {
-    "esbuild": true
+    "esbuild": true,
+    "workerd": true
   }
 }
