@@ -5,6 +5,7 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 ## Project structure
 
 ```
+├── .vscode/             # recommended editor extensions/launch config
 ├── public/              # static assets (served as-is)
 ├── src/
 │   ├── layouts/
