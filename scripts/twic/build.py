@@ -2,7 +2,8 @@
 """Build the TWIC games database (SQLite, same schema as the D1 database) from downloaded issues.
 
 - Parses every twic<N>g.zip in the cache directory (see download.py).
-- Validates each game's moves with python-chess and re-emits normalized SAN; invalid games are skipped.
+- Validates each game's moves with python-chess and re-emits normalized SAN; invalid games and
+  forfeits (no moves) are skipped.
 - Removes duplicates (same players, date and moves), keeping the earliest issue.
 - Merges players by FIDE ID (falling back to the name), choosing the fullest spelling for display.
 - Tags each game with the longest matching named opening line (src/data/openings/*.tsv).
@@ -32,6 +33,9 @@ SCHEMA = (Path(__file__).parent / 'schema.sql').read_text()
 MOVE_NUM = re.compile(r'^\d+\.+$')
 TAG = re.compile(r'^\[(\w+)\s+"(.*)"\]\s*$')
 RESULTS = {'1-0', '0-1', '1/2-1/2'}
+# Headers kept per game (everything else is dropped early to bound memory on ~3M games).
+KEEP = ('Event', 'Site', 'Date', 'Round', 'White', 'Black', 'Result', 'WhiteTitle', 'BlackTitle', 'WhiteElo', 'BlackElo',
+        'ECO', 'WhiteFideId', 'BlackFideId', 'EventDate')
 
 
 def slugify(s: str) -> str:
@@ -125,7 +129,9 @@ def parse_issue(path: str):
                 except ValueError:
                     bad += 1
                     continue
-                out.append((n, headers, sans))
+                if not sans:  # forfeits: a result without moves
+                    continue
+                out.append((n, {k: headers[k] for k in KEEP if k in headers}, ' '.join(sans)))
     return n, out, bad
 
 
@@ -190,7 +196,7 @@ def main():
         for i, (n, parsed, nbad) in enumerate(pool.imap(parse_issue, map(str, files), chunksize=2)):
             bad += nbad
             for issue, h, sans in parsed:
-                key = hashlib.sha1('|'.join([h.get('White', '').lower(), h.get('Black', '').lower(), h.get('Date', ''), ' '.join(sans)]).encode()).digest()[:12]
+                key = hashlib.sha1('|'.join([h.get('White', '').lower(), h.get('Black', '').lower(), h.get('Date', ''), sans]).encode()).digest()[:12]
                 if key in seen:
                     dupes += 1
                     continue
@@ -265,7 +271,7 @@ def main():
             gid, event_id[ekey(h)], player_id[pkey(h, 'White')], player_id[pkey(h, 'Black')], we, be,
             h.get('WhiteTitle') or None, h.get('BlackTitle') or None, (we + be) // 2 if we and be else None,
             h['Result'], norm_date(h.get('Date')), h.get('Round') if h.get('Round') not in (None, '?', '-') else None,
-            h.get('ECO') or None, opening_for(sans), len(sans), issue, ' '.join(sans),
+            h.get('ECO') or None, opening_for(sans.split(' ')), sans.count(' ') + 1, issue, sans,
         ))
     used_openings = {r[13] for r in rows if r[13]}
     db.executemany('INSERT INTO openings (slug, name, eco) VALUES (?,?,?)', [(s, *NAMES[s]) for s in sorted(used_openings)])
