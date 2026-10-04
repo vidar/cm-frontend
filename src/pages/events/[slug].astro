@@ -1,0 +1,43 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import GameTable from '../../components/GameTable.astro';
+import { getEvent, eventGames, twicIssueUrl, EVENT_PAGE_SIZE } from '../../lib/games';
+
+export const prerender = false;
+
+const event = await getEvent(Astro.params.slug ?? '');
+if (!event) return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+const page = Math.max(1, Number.parseInt(Astro.url.searchParams.get('page') ?? '1', 10) || 1);
+const pages = Math.max(1, Math.ceil(event.games / EVENT_PAGE_SIZE));
+const games = await eventGames(event.id, Math.min(page, pages));
+const dates = event.start_date === event.end_date ? event.start_date : `${event.start_date} – ${event.end_date}`;
+---
+
+<Layout
+  title={`${event.name}${event.site ? `, ${event.site}` : ''}: all games`}
+  description={`All ${event.games.toLocaleString('en')} games from ${event.name}${event.site ? ` (${event.site})` : ''}, ${dates}. Replay every game move by move.`}
+>
+  <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a></nav>
+  <h1>{event.name}</h1>
+  <p class="facts">{event.site && <>{event.site} · </>}{dates} · {event.games.toLocaleString('en')} games</p>
+  <GameTable games={games} showEvent={false} />
+  {pages > 1 && (
+    <nav class="pager">
+      {page > 1 ? <a href={page === 2 ? './' : `?page=${page - 1}`}>← Previous</a> : <span></span>}
+      <span class="muted">Page {page} of {pages}</span>
+      {page < pages ? <a href={`?page=${page + 1}`}>Next →</a> : <span></span>}
+    </nav>
+  )}
+  {event.twic && (
+    <p class="credit">Games from <a href={twicIssueUrl(event.twic)} rel="nofollow">The Week in Chess #{event.twic}</a> and later issues, used with permission.</p>
+  )}
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .facts { color: var(--muted); }
+  .muted { color: var(--muted); }
+  .pager { display: flex; justify-content: space-between; margin-top: 1rem; }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>

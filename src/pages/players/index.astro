@@ -1,0 +1,34 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { topPlayers, searchPlayers } from '../../lib/games';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+const q = Astro.url.searchParams.get('q')?.trim() ?? '';
+const players = q ? await searchPlayers(q, 100) : await topPlayers(200);
+---
+
+<Layout title={q ? `Chess players matching "${q}"` : 'Chess players'} description="Find over-the-board games of any chess player, from world champions to club players.">
+  <nav class="crumbs"><a href="/games/">Games</a></nav>
+  <h1>Players</h1>
+  <form method="get" class="search" role="search">
+    <input type="search" name="q" value={q} placeholder="Player name, e.g. Carlsen" aria-label="Player name" />
+    <button type="submit">Search</button>
+  </form>
+  {q && players.length === 0 && <p>No players found for “{q}”.</p>}
+  <ul class="list">
+    {players.map((p) => (
+      <li><a href={`/players/${p.slug}/`}>{p.title && `${p.title} `}{p.name}</a> <span class="muted">{p.games.toLocaleString('en')} games{p.max_elo && ` · peak ${p.max_elo}`}</span></li>
+    ))}
+  </ul>
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .search { display: flex; gap: 0.5rem; margin: 1rem 0; }
+  .search input { flex: 1; font: inherit; padding: 0.4rem; }
+  .search button { font: inherit; padding: 0.4rem 0.9rem; }
+  .list { list-style: none; padding: 0; }
+  .list li { padding: 0.3rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  .muted { color: var(--muted); font-size: 0.9em; }
+</style>

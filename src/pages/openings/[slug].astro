@@ -5,7 +5,7 @@ import ResultBar from '../../components/ResultBar.astro';
 import '../../styles/board.css';
 import { getOpenings, getByMoves, formatMoves, parentLine, continuations, familySlug, type Opening } from '../../lib/openings';
 import { formatMovesFrom, formatEval } from '../../lib/chess/notation';
-import { getStats, getEval, pvToSan, sumWdb, percents, bands, sample, statsSource } from '../../lib/opening-stats';
+import { getStats, getEval, getMasterGames, pvToSan, sumWdb, percents, bands, sample, statsSource, masterSource } from '../../lib/opening-stats';
 
 export function getStaticPaths() {
   return getOpenings().map((opening) => ({ params: { slug: opening.slug }, props: { opening } }));
@@ -23,6 +23,7 @@ const imageUrl = `/board.svg?fen=${opening.fen.replace(/ /g, '_')}&lastmove=${op
 const lichessUrl = `https://lichess.org/analysis/pgn/${encodeURIComponent(opening.moves.join(' '))}`;
 const analysisUrl = `/analysis/?pgn=${encodeURIComponent(opening.moves.join(' '))}`;
 const stats = getStats(opening);
+const masters = getMasterGames(opening);
 const engine = getEval(opening);
 const bestLine = engine ? pvToSan(opening, engine.pv) : [];
 const total = stats ? sumWdb(stats.r) : undefined;
@@ -122,9 +123,27 @@ const description = stats
     </section>
   )}
 
+  {masters && masters.top.length > 0 && (
+    <section>
+      <h2>Master games</h2>
+      <p class="muted small">
+        {masters.n.toLocaleString('en')} over-the-board {masters.n === 1 ? 'game is' : 'games are'} classified under this line
+        (White {percents(masters.r)[0]}%, draw {percents(masters.r)[1]}%, Black {percents(masters.r)[2]}%). The strongest:
+      </p>
+      <ul class="games">
+        {masters.top.map((g) => (
+          <li>
+            <a href={g.path}>{titled(g.white, g.whiteTitle)}{g.whiteElo && ` (${g.whiteElo})`} – {titled(g.black, g.blackTitle)}{g.blackElo && ` (${g.blackElo})`}</a>
+            <span class="muted small"> {g.result} · {g.event} · {g.date}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )}
+
   {stats && stats.top.length > 0 && (
     <section>
-      <h2>Highest-rated games</h2>
+      <h2>Highest-rated Lichess games</h2>
       <ul class="games">
         {stats.top.map((g) => (
           <li>
@@ -165,7 +184,8 @@ const description = stats
 
   <p class="muted small">
     Opening names and moves from the <a href="https://github.com/lichess-org/chess-openings">Lichess openings dataset</a>; statistics
-    from the {statsSource}, sample of {sampleSize} games, bots excluded; evaluations from Lichess cloud analysis. All CC0.
+    from the {statsSource}, sample of {sampleSize} games, bots excluded; evaluations from Lichess cloud analysis (all CC0).
+    Master games from {masterSource} by Mark Crowther, used with permission.
   </p>
 </Layout>
 

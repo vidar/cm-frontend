@@ -1,0 +1,45 @@
+---
+import { gamePath, resultLabel, scoreFor, type GameRow } from '../lib/games';
+
+interface Props {
+  games: GameRow[];
+  /** Show the score from this player's point of view. */
+  playerId?: number;
+  showEvent?: boolean;
+}
+const { games, playerId, showEvent = true } = Astro.props;
+const who = (name: string, title: string | null, elo: number | null) => `${title ? `${title} ` : ''}${name}${elo ? ` (${elo})` : ''}`;
+---
+
+<table class="games-table">
+  <thead>
+    <tr>
+      <th>White</th><th>Black</th><th>Result</th>{showEvent && <th>Event</th>}<th>Date</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {games.map((g) => (
+      <tr>
+        <td>{g.white_id === playerId ? <strong>{who(g.white_name, g.white_title, g.white_elo)}</strong> : <a href={`/players/${g.white_slug}/`}>{who(g.white_name, g.white_title, g.white_elo)}</a>}</td>
+        <td>{g.black_id === playerId ? <strong>{who(g.black_name, g.black_title, g.black_elo)}</strong> : <a href={`/players/${g.black_slug}/`}>{who(g.black_name, g.black_title, g.black_elo)}</a>}</td>
+        <td class="res">{playerId ? scoreFor(g, playerId) : resultLabel(g.result)}</td>
+        {showEvent && <td><a href={`/events/${g.event_slug}/`}>{g.event_name}</a>{g.round && <span class="muted"> · R{g.round}</span>}</td>}
+        <td class="date">{g.date}</td>
+        <td><a href={gamePath(g)}>View</a></td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+
+<style>
+  .games-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  .games-table th, .games-table td { text-align: left; padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); vertical-align: top; }
+  .games-table .res { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .games-table .date { white-space: nowrap; color: var(--muted); }
+  .muted { color: var(--muted); }
+  @media (max-width: 40rem) {
+    .games-table thead { display: none; }
+    .games-table tr { display: grid; grid-template-columns: 1fr auto; padding: 0.4rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+    .games-table td { border: 0; padding: 0.05rem 0; }
+  }
+</style>

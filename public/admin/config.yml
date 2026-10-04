@@ -41,7 +41,7 @@ collections:
       - label: Title
         name: title
         widget: string
-        hint: The URL is made from the title when the page is created (e.g. "Contact Us" → /contact-us/). Avoid names already used by the site: admin, images, puzzle, openings, analysis, engine, chess-clock, coordinates-trainer, board-image, credits.
+        hint: The URL is made from the title when the page is created (e.g. "Contact Us" → /contact-us/). Avoid names already used by the site: admin, images, puzzle, openings, analysis, engine, games, players, events, sitemaps, chess-clock, coordinates-trainer, board-image, credits.
       - { label: Description (search engines), name: description, widget: text, required: false }
       - { label: Show in menu, name: showInMenu, widget: boolean, default: true }
       - { label: Menu order, name: menuOrder, widget: number, value_type: int, default: 10, hint: Lower numbers appear first. }

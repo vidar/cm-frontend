@@ -27,7 +27,8 @@ ${TOOLS.map((t) => `- [${t.name}](${abs(t.href)}): ${t.blurb} ${t.agent}`).join(
 - [Puzzle archive](${abs('/puzzle/archive/')})
 - [Openings index](${abs('/openings/')})
 ${pages.map((p) => `- [${p.data.title}](${abs(`/${p.id}/`)})`).join('\n')}
-- [Sitemap](${abs('/sitemap-index.xml')})
+- [Games database](${abs('/games/')}), [players](${abs('/players/')}), [events](${abs('/events/')})
+- [Sitemap](${abs('/sitemap-index.xml')}) and [games/players/events sitemap](${abs('/sitemaps/index.xml')})
 `;
   return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 };

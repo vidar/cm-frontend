@@ -1,0 +1,147 @@
+---
+import { Chess } from 'chess.js';
+import { env } from 'cloudflare:workers';
+import Layout from '../../layouts/Layout.astro';
+import BoardDiagram from '../../components/BoardDiagram.astro';
+import GameTable from '../../components/GameTable.astro';
+import '../../styles/board.css';
+import { getGame, gamePath, headToHead, resultLabel, twicIssueUrl } from '../../lib/games';
+
+export const prerender = false;
+
+const id = Number.parseInt(Astro.params.game ?? '', 10);
+const game = Number.isFinite(id) ? await getGame(id) : null;
+if (!game) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+const canonical = gamePath(game);
+if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
+Astro.response.headers.set('Cache-Control', 'public, max-age=86400');
+
+const sans = game.moves.split(' ').filter(Boolean);
+const chess = new Chess();
+let last: [string, string] | undefined;
+for (const san of sans) {
+  const m = chess.move(san);
+  last = [m.from, m.to];
+}
+const finalFen = chess.fen();
+const opening = game.opening
+  ? await (env as { DB: D1Database }).DB.prepare('SELECT name FROM openings WHERE slug = ?').bind(game.opening).first<{ name: string }>()
+  : null;
+const others = (await headToHead(game.white_id, game.black_id, 21)).filter((g) => g.id !== game.id).slice(0, 20);
+
+const who = (name: string, title: string | null) => `${title ? `${title} ` : ''}${name}`;
+const year = game.date?.slice(0, 4);
+const title = `${game.white_name} vs ${game.black_name}, ${game.event_name}${year && !game.event_name.includes(year) ? ` ${year}` : ''}`;
+const movesText = sans.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ${m}` : m)).join(' ');
+const pgn = [
+  `[Event "${game.event_name}"]`,
+  game.event_site ? `[Site "${game.event_site}"]` : null,
+  `[Date "${(game.date ?? '????').replace(/-/g, '.')}"]`,
+  game.round ? `[Round "${game.round}"]` : null,
+  `[White "${game.white_name}"]`,
+  `[Black "${game.black_name}"]`,
+  `[Result "${game.result}"]`,
+  game.white_elo ? `[WhiteElo "${game.white_elo}"]` : null,
+  game.black_elo ? `[BlackElo "${game.black_elo}"]` : null,
+  game.eco ? `[ECO "${game.eco}"]` : null,
+  `[Source "The Week in Chess ${game.twic}"]`,
+  '',
+  `${movesText} ${game.result}`,
+]
+  .filter((l) => l !== null)
+  .join('\n');
+---
+
+<Layout
+  title={title}
+  description={`${title}: ${resultLabel(game.result)} in ${Math.ceil(game.plies / 2)} moves${opening ? `, ${opening.name}` : ''}. Replay the game move by move and analyse it with Stockfish.`}
+  wide
+>
+  <nav class="crumbs"><a href="/games/">Games</a> › <a href={`/events/${game.event_slug}/`}>{game.event_name}</a></nav>
+  <h1>
+    <a href={`/players/${game.white_slug}/`}>{who(game.white_name, game.white_title)}</a>{' vs '}<a
+      href={`/players/${game.black_slug}/`}>{who(game.black_name, game.black_title)}</a>
+  </h1>
+  <p class="meta">
+    <strong>{resultLabel(game.result)}</strong>{' · '}<a href={`/events/${game.event_slug}/`}>{game.event_name}</a>{game.round && `, round ${game.round}`}
+    {game.event_site && ` · ${game.event_site}`} · {game.date}
+    {(game.white_elo || game.black_elo) && ` · ratings ${game.white_elo ?? '–'} / ${game.black_elo ?? '–'}`}
+  </p>
+  {opening && (
+    <p class="meta">Opening: <a href={`/openings/${game.opening}/`}>{opening.name}</a>{game.eco && ` (${game.eco})`}</p>
+  )}
+
+  <div class="viewer" data-moves={sans.join(' ')} data-flip="0">
+    <div class="board-col">
+      <div data-board class="board-wrap">
+        <BoardDiagram fen={finalFen} highlight={last} title={`Final position of ${title}`} />
+      </div>
+      <div class="nav">
+        <button type="button" data-nav="start" aria-label="Start">⏮</button>
+        <button type="button" data-nav="prev" aria-label="Previous move">◀</button>
+        <button type="button" data-nav="next" aria-label="Next move">▶</button>
+        <button type="button" data-nav="end" aria-label="End">⏭</button>
+        <button type="button" data-nav="flip">Flip</button>
+      </div>
+    </div>
+    <div class="side">
+      <div class="moves" role="list">
+        {Array.from({ length: Math.ceil(sans.length / 2) }, (_, i) => (
+          <div class="row" role="listitem">
+            <span class="num">{i + 1}.</span>
+            <span class="mv" data-ply={2 * i + 1}>{sans[2 * i]}</span>
+            {sans[2 * i + 1] ? <span class="mv" data-ply={2 * i + 2}>{sans[2 * i + 1]}</span> : <span></span>}
+          </div>
+        ))}
+        <div class="row result">{game.result}</div>
+      </div>
+      <p class="actions">
+        <a data-analyse href={`/analysis/?pgn=${encodeURIComponent(sans.join(' '))}`}><strong>Analyse this position with Stockfish</strong></a>
+      </p>
+      <details>
+        <summary>PGN</summary>
+        <pre class="pgn">{pgn}</pre>
+      </details>
+    </div>
+  </div>
+
+  {others.length > 0 && (
+    <section>
+      <h2>Other games between {game.white_name} and {game.black_name}</h2>
+      <GameTable games={others} showEvent />
+    </section>
+  )}
+
+  <p class="credit">
+    Game from <a href={twicIssueUrl(game.twic)} rel="nofollow">The Week in Chess #{game.twic}</a> by Mark Crowther, used with permission.
+    Please support TWIC.
+  </p>
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  h1 { font-size: 1.6rem; }
+  h1 a { color: inherit; }
+  .meta { margin: 0.25rem 0; color: var(--muted); }
+  .meta strong { color: var(--fg); }
+  .viewer { display: grid; gap: 1.25rem; margin-top: 1rem; }
+  @media (min-width: 60rem) { .viewer { grid-template-columns: minmax(0, 32rem) minmax(0, 1fr); align-items: start; } }
+  .board-wrap :global(.cm-board) { width: 100%; }
+  .nav { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
+  .nav button { flex: 1; font: inherit; padding: 0.3rem; cursor: pointer; }
+  .moves { max-height: 26rem; overflow-y: auto; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px; padding: 0.4rem 0.6rem; }
+  .moves .row { display: grid; grid-template-columns: 2.5rem 5.5rem 5.5rem; align-items: center; }
+  .moves .num { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .moves .result { display: block; font-weight: 600; padding: 0.2rem 0 0 2.5rem; }
+  .mv { cursor: pointer; padding: 0 0.3rem; border-radius: 3px; justify-self: start; }
+  .mv:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+  .mv.current { background: var(--accent); color: #fff; }
+  .pgn { white-space: pre-wrap; font-size: 0.8rem; }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>
+
+<script>
+  import { mountGameViewer } from '../../scripts/game-viewer';
+  const root = document.querySelector<HTMLElement>('.viewer');
+  if (root) mountGameViewer(root);
+</script>

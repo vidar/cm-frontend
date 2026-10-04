@@ -1,0 +1,66 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import GameTable from '../../components/GameTable.astro';
+import { getPlayer, playerGames, playerScore } from '../../lib/games';
+
+export const prerender = false;
+
+const player = await getPlayer(Astro.params.slug ?? '');
+if (!player) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+
+const q = Astro.url.searchParams;
+const page = Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1);
+const color = q.get('color') === 'w' || q.get('color') === 'b' ? (q.get('color') as 'w' | 'b') : undefined;
+const [{ games, hasMore }, score] = await Promise.all([playerGames(player.id, page, color), playerScore(player.id)]);
+const total = score.w + score.d + score.l;
+const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
+const link = (p: number, c = color) => {
+  const s = new URLSearchParams();
+  if (c) s.set('color', c);
+  if (p > 1) s.set('page', String(p));
+  return `?${s}`.replace(/\?$/, '') || './';
+};
+const name = `${player.title ? `${player.title} ` : ''}${player.name}`;
+---
+
+<Layout
+  title={`${player.name} chess games${page > 1 ? ` (page ${page})` : ''}`}
+  description={`${player.games.toLocaleString('en')} over-the-board games of ${name}${player.max_elo ? `, peak rating ${player.max_elo}` : ''}: results, opponents and every game to replay.`}
+>
+  <nav class="crumbs"><a href="/games/">Games</a> › <a href="/players/">Players</a></nav>
+  <h1>{name}</h1>
+  <p class="facts">
+    {player.games.toLocaleString('en')} games
+    {player.max_elo && <> · peak rating in database {player.max_elo}</>}
+    {player.last_date && <> · last game {player.last_date}</>}
+    {player.fide_id && <> · <a href={`https://ratings.fide.com/profile/${player.fide_id}`} rel="nofollow">FIDE profile</a></>}
+  </p>
+  <p class="facts">Score: <strong>+{score.w} ={score.d} −{score.l}</strong> ({pct(score.w)}% wins, {pct(score.d)}% draws, {pct(score.l)}% losses)</p>
+
+  <nav class="filter">
+    <a href={link(1, undefined)} aria-current={!color ? 'page' : undefined}>All games</a>
+    <a href={link(1, 'w')} aria-current={color === 'w' ? 'page' : undefined}>As White</a>
+    <a href={link(1, 'b')} aria-current={color === 'b' ? 'page' : undefined}>As Black</a>
+  </nav>
+
+  <GameTable games={games} playerId={player.id} />
+
+  <nav class="pager">
+    {page > 1 ? <a href={link(page - 1)}>← Newer</a> : <span></span>}
+    <span class="muted">Page {page}</span>
+    {hasMore ? <a href={link(page + 1)}>Older →</a> : <span></span>}
+  </nav>
+  <p class="credit">Games from <a href="https://theweekinchess.com/" rel="nofollow">The Week in Chess</a> (2012 onwards), used with permission.</p>
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .facts { margin: 0.25rem 0; color: var(--muted); }
+  .facts strong { color: var(--fg); }
+  .filter { display: flex; gap: 1rem; margin: 1rem 0; }
+  .filter a[aria-current] { font-weight: 700; color: var(--accent); }
+  .pager { display: flex; justify-content: space-between; margin-top: 1rem; }
+  .muted { color: var(--muted); }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>

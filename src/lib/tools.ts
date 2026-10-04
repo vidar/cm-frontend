@@ -13,6 +13,12 @@ export const TOOLS = [
     agent: 'One page per line at /openings/<slug>/ (games, win/draw/loss by rating, most played replies, Stockfish eval, example games); index with stats as JSON at /openings.json',
   },
   {
+    href: '/games/',
+    name: 'Games database',
+    blurb: 'Millions of over-the-board games since 2012: search players, browse tournaments, replay any game.',
+    agent: 'Game pages /games/<id>-<slug>/ (moves + PGN in the HTML), player pages /players/<slug>/ (?color=w|b, ?page=N), event pages /events/<slug>/, player search /players/?q=<name>. Source: The Week in Chess, used with permission (no bulk export).',
+  },
+  {
     href: '/analysis/',
     name: 'Analysis board',
     blurb: 'Analyse any position or game with Stockfish in your browser, with variations and PGN export.',

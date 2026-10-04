@@ -11,7 +11,11 @@
 		"directory": "./dist",
 		"binding": "ASSETS"
 	},
-	"previews": {},
+	"d1_databases": [{ "binding": "DB", "database_name": "cm-games", "database_id": "8a8b6bce-cafd-4569-8ea3-58a08dc291f3" }],
+	"previews": {
+		// Bindings aren't inherited by previews; they read the same (read-only use) games database.
+		"d1_databases": [{ "binding": "DB", "database_name": "cm-games", "database_id": "8a8b6bce-cafd-4569-8ea3-58a08dc291f3" }]
+	},
 	"observability": {
 		"enabled": true
 	}

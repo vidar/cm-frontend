@@ -1,0 +1,57 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import GameTable from '../../components/GameTable.astro';
+import { recentTopGames, recentEvents, topPlayers } from '../../lib/games';
+import { env } from 'cloudflare:workers';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'public, max-age=1800');
+const db = (env as { DB: D1Database }).DB;
+const [games, events, players, totals] = await Promise.all([
+  recentTopGames(20),
+  recentEvents(12),
+  topPlayers(24),
+  db.prepare("SELECT key, value FROM meta WHERE key IN ('games', 'players', 'events')").all<{ key: string; value: string }>(),
+]).then(([g, e, p, m]) => [g, e, p, Object.fromEntries(m.results.map((r) => [r.key, Number(r.value)])) as { games: number; players: number; events: number }] as const);
+const fmt = (n?: number) => (n ?? 0).toLocaleString('en');
+---
+
+<Layout
+  title="Chess games database: replay master games"
+  description={`${fmt(totals?.games)} over-the-board chess games from ${fmt(totals?.events)} events since 2012. Search by player, browse tournaments and replay every game.`}
+>
+  <h1>Games database</h1>
+  <p>{fmt(totals?.games)} over-the-board games from {fmt(totals?.events)} events since 2012, by {fmt(totals?.players)} players. Replay any game, then analyse it with Stockfish.</p>
+  <form method="get" action="/players/" class="search" role="search">
+    <input type="search" name="q" placeholder="Find a player, e.g. Carlsen" aria-label="Player name" />
+    <button type="submit">Search</button>
+  </form>
+
+  <h2>Recent top games</h2>
+  <GameTable games={games} />
+
+  <div class="cols">
+    <section>
+      <h2>Recent events <a class="small" href="/events/">(all)</a></h2>
+      <ul class="list">{events.map((e) => <li><a href={`/events/${e.slug}/`}>{e.name}</a> <span class="muted">{e.start_date}</span></li>)}</ul>
+    </section>
+    <section>
+      <h2>Most games <a class="small" href="/players/">(more)</a></h2>
+      <ul class="list">{players.map((p) => <li><a href={`/players/${p.slug}/`}>{p.title && `${p.title} `}{p.name}</a> <span class="muted">{fmt(p.games)}</span></li>)}</ul>
+    </section>
+  </div>
+  <p class="credit">Games from <a href="https://theweekinchess.com/" rel="nofollow">The Week in Chess</a> by Mark Crowther, used with permission. Please support TWIC.</p>
+</Layout>
+
+<style>
+  .search { display: flex; gap: 0.5rem; margin: 1rem 0; }
+  .search input { flex: 1; font: inherit; padding: 0.4rem; }
+  .search button { font: inherit; padding: 0.4rem 0.9rem; }
+  .cols { display: grid; gap: 1.5rem; }
+  @media (min-width: 40rem) { .cols { grid-template-columns: 1fr 1fr; } }
+  .list { list-style: none; padding: 0; }
+  .list li { padding: 0.25rem 0; }
+  .muted { color: var(--muted); font-size: 0.9em; }
+  .small { font-size: 0.8rem; font-weight: 400; }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>

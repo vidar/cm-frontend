@@ -3,6 +3,7 @@
 // data never ships in the Worker bundle.
 import statsData from '../data/opening-stats.json';
 import evalsData from '../data/opening-evals.json';
+import masterData from '../data/opening-master-games.json';
 import { Chess } from 'chess.js';
 import type { Opening } from './openings';
 
@@ -71,3 +72,13 @@ export function percents([w, d, b]: Wdb): Wdb {
   const pb = Math.round((b / n) * 100);
   return [pw, 100 - pw - pb, pb];
 }
+
+// Over-the-board games from TWIC (scripts/twic/opening_games.py), keyed by opening slug.
+export interface MasterGames {
+  n: number;
+  r: Wdb;
+  top: { path: string; white: string; whiteElo: number | null; whiteTitle: string | null; black: string; blackElo: number | null; blackTitle: string | null; result: string; date: string | null; event: string }[];
+}
+const master = (masterData as { lines: Record<string, MasterGames> }).lines;
+export const masterSource = masterData.source as string;
+export const getMasterGames = (o: Opening): MasterGames | undefined => master[o.slug];
