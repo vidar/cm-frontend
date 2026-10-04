@@ -1,0 +1,56 @@
+---
+// Team standings: match points, game points, and each round's opponent and match score.
+import { pts, type TeamLine } from '../../lib/event';
+import { matchScore } from '../../lib/event-view';
+
+interface Props {
+  lines: TeamLine[];
+  rounds?: number[];
+  rankOf?: Map<string, number>;
+  moves?: Map<string, number>;
+  /** Base URL of the event (for links to round pages). */
+  base: string;
+  limit?: number;
+}
+const { lines, rounds = [], rankOf, moves, base, limit = 200 } = Astro.props;
+const shown = lines.slice(0, limit);
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <thead>
+      <tr>
+        <th class="num">#</th>{moves && <th></th>}<th class="ev-sticky">Team</th>
+        {rounds.map((n) => <th class="c"><a href={`${base}round-${n}/`}>R{n}</a></th>)}
+        <th class="num" title="Match points (win 2, draw 1)">MP</th><th class="num" title="Game points">GP</th><th class="num">W–D–L</th>
+      </tr>
+    </thead>
+    <tbody>
+      {shown.map((l, i) => {
+        const mv = moves?.get(l.team);
+        return (
+          <tr class:list={{ top: i === 0 }}>
+            <td class="num muted">{l.rank}</td>
+            {moves && <td>{mv ? mv > 0 ? <span class="ev-up">▲{mv}</span> : <span class="ev-down">▼{-mv}</span> : ''}</td>}
+            <td class="name ev-sticky"><a href={`#team-${encodeURIComponent(l.team)}`}>{l.team}</a></td>
+            {rounds.map((n) => {
+              const m = l.matches.find((x) => x.round === n);
+              if (!m) return <td></td>;
+              const cls = m.my > m.their ? 'win' : m.my < m.their ? 'loss' : 'draw';
+              return (
+                <td class="c">
+                  <a class={`ev-r ${cls}`} href={`${base}round-${n}/#m-${encodeURIComponent(m.match.home)}`} title={`Round ${n} against ${m.opp}`}>
+                    <span class="opp">{rankOf?.get(m.opp) ?? ''}</span>{matchScore(m.my, m.their)}
+                  </a>
+                </td>
+              );
+            })}
+            <td class="pts">{l.mp}</td>
+            <td class="num">{pts(l.gp)}</td>
+            <td class="num muted">{l.w}–{l.d}–{l.l}</td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+</div>

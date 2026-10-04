@@ -1,0 +1,132 @@
+---
+// "The race": cumulative score after each round for the leading finishers. The podium gets the
+// first three categorical colours (direct-labelled); the rest are muted context lines.
+// Hovering (or focusing) a round shows everyone's score at that point.
+import { pts } from '../../lib/event';
+
+interface Series {
+  label: string;
+  /** Score after round 0 (start) .. last round. */
+  values: number[];
+}
+interface Props {
+  series: Series[];
+  /** Round numbers matching values[1..]. */
+  rounds: number[];
+  unit: string;
+  title: string;
+}
+const { series, rounds, unit, title } = Astro.props;
+const W = 640;
+const H = 260;
+const pad = { l: 34, r: 128, t: 12, b: 28 };
+const max = Math.max(1, ...series.flatMap((s) => s.values));
+const x = (i: number) => pad.l + (i / Math.max(1, rounds.length)) * (W - pad.l - pad.r);
+const y = (v: number) => pad.t + (1 - v / max) * (H - pad.t - pad.b);
+const step = max <= 6 ? 1 : max <= 14 ? 2 : max <= 30 ? 5 : 10;
+const ticks = Array.from({ length: Math.floor(max / step) + 1 }, (_, i) => i * step);
+const path = (vals: number[]) => vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+// Direct labels for the podium, nudged apart vertically.
+const labels = series
+  .slice(0, 3)
+  .map((s, i) => ({ i, text: `${s.label} ${pts(s.values.at(-1) ?? 0)}`, y: y(s.values.at(-1) ?? 0) }))
+  .sort((a, b) => a.y - b.y);
+for (let k = 1; k < labels.length; k++) if (labels[k].y - labels[k - 1].y < 14) labels[k].y = labels[k - 1].y + 14;
+const xLabelEvery = Math.ceil(rounds.length / 12);
+const data = JSON.stringify({ rounds, series: series.map((s) => ({ l: s.label, v: s.values })), unit });
+---
+
+<figure class="race" data-race={data}>
+  <figcaption class="race-legend">
+    {series.slice(0, 3).map((s, i) => <span><i class={`sw s${i + 1}`}></i>{s.label}</span>)}
+    {series.length > 3 && <span><i class="sw s0"></i>Next {series.length - 3}</span>}
+  </figcaption>
+  <div class="race-plot">
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={title}>
+      <title>{title}</title>
+      {ticks.map((t) => (
+        <g class="grid">
+          <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} />
+          <text x={pad.l - 6} y={y(t) + 4} text-anchor="end">{t}</text>
+        </g>
+      ))}
+      {rounds.map((n, i) => (i + 1) % xLabelEvery === 0 || i === rounds.length - 1 ? <text class="xl" x={x(i + 1)} y={H - 8} text-anchor="middle">R{n}</text> : null)}
+      {series.slice(3).reverse().map((s) => <path class="line s0" d={path(s.values)} />)}
+      {series.slice(0, 3).reverse().map((s, j) => <path class={`line s${Math.min(3, series.length) - j}`} d={path(s.values)} />)}
+      {series.slice(0, 3).map((s, i) => <circle class={`end s${i + 1}`} cx={x(s.values.length - 1)} cy={y(s.values.at(-1) ?? 0)} r="4" />)}
+      {labels.map((l) => <text class="dl" x={W - pad.r + 8} y={l.y + 4}>{l.text}</text>)}
+      <line class="cross" x1="0" x2="0" y1={pad.t} y2={H - pad.b} visibility="hidden" />
+      {rounds.map((_, i) => (
+        <rect class="hit" x={x(i + 1) - (W - pad.l - pad.r) / rounds.length / 2} y={pad.t} width={(W - pad.l - pad.r) / rounds.length} height={H - pad.t - pad.b} data-i={i + 1} data-x={x(i + 1)} tabindex="0" />
+      ))}
+    </svg>
+    <div class="race-tip" role="status" hidden></div>
+  </div>
+</figure>
+
+<style>
+  .race {
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s0: #b9b8b1;
+    margin: 0.5rem 0 1.5rem;
+    max-width: 44rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme='light'])) .race { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s0: #55544f; }
+  }
+  :root[data-theme='dark'] .race { --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s0: #55544f; }
+  .race-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.85rem; margin-bottom: 0.3rem; }
+  .sw { display: inline-block; width: 0.8rem; height: 0.2rem; border-radius: 2px; vertical-align: middle; margin-right: 0.35rem; }
+  .race-plot { position: relative; }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .grid line { stroke: currentColor; opacity: 0.1; }
+  .grid text, .xl { font-size: 11px; fill: var(--muted); }
+  .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .line.s0 { stroke-width: 1.5; }
+  .end { stroke: var(--bg); stroke-width: 2; }
+  .dl { font-size: 12px; fill: var(--fg); }
+  .s0 { stroke: var(--s0); background: var(--s0); }
+  .s1 { stroke: var(--s1); fill: var(--s1); background: var(--s1); }
+  .s2 { stroke: var(--s2); fill: var(--s2); background: var(--s2); }
+  .s3 { stroke: var(--s3); fill: var(--s3); background: var(--s3); }
+  .line.s1, .line.s2, .line.s3 { fill: none; }
+  .cross { stroke: var(--muted); stroke-dasharray: 3 3; }
+  .hit { fill: transparent; cursor: crosshair; outline: none; }
+  .race-tip {
+    position: absolute; top: 0; pointer-events: none; background: var(--bg); color: var(--fg);
+    border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px;
+    padding: 0.35rem 0.55rem; font-size: 0.8rem; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15); white-space: nowrap; z-index: 2;
+  }
+</style>
+
+<script>
+  const half = (v: number) => (Math.floor(v) ? String(Math.floor(v)) : '') + (v % 1 ? '½' : Math.floor(v) ? '' : '0');
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-race]')) {
+    const data = JSON.parse(fig.dataset.race!) as { rounds: number[]; series: { l: string; v: number[] }[]; unit: string };
+    const svg = fig.querySelector('svg')!;
+    const tip = fig.querySelector<HTMLElement>('.race-tip')!;
+    const cross = fig.querySelector<SVGLineElement>('.cross')!;
+    const show = (rect: SVGRectElement) => {
+      const i = Number(rect.dataset.i);
+      const x = Number(rect.dataset.x);
+      cross.setAttribute('x1', String(x));
+      cross.setAttribute('x2', String(x));
+      cross.setAttribute('visibility', 'visible');
+      const rows = data.series.map((s, k) => ({ l: s.l, v: s.v[i], k })).sort((a, b) => b.v - a.v);
+      tip.innerHTML = `<strong>After round ${data.rounds[i - 1]}</strong><br>` + rows.map((r) => `${r.k < 3 ? `<i class="sw s${r.k + 1}" style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.3rem;background:var(--s${r.k + 1})"></i>` : ''}${r.l}: <strong>${half(r.v)}</strong>`).join('<br>');
+      tip.hidden = false;
+      const box = svg.getBoundingClientRect();
+      const px = (x / 640) * box.width;
+      tip.style.left = px > box.width / 2 ? `${px - tip.offsetWidth - 12}px` : `${px + 12}px`;
+    };
+    const hide = () => {
+      tip.hidden = true;
+      cross.setAttribute('visibility', 'hidden');
+    };
+    for (const rect of fig.querySelectorAll<SVGRectElement>('.hit')) {
+      rect.addEventListener('pointerenter', () => show(rect));
+      rect.addEventListener('focus', () => show(rect));
+      rect.addEventListener('blur', hide);
+    }
+    svg.addEventListener('pointerleave', hide);
+  }
+</script>

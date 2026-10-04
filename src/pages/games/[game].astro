@@ -4,6 +4,7 @@ import Layout from '../../layouts/Layout.astro';
 import BoardDiagram from '../../components/BoardDiagram.astro';
 import GameTable from '../../components/GameTable.astro';
 import '../../styles/board.css';
+import { parseRound } from '../../lib/event';
 import { getGame, getOpeningName, gamePath, headToHead, resultLabel, twicIssueUrl } from '../../lib/games';
 
 export const prerender = false;
@@ -27,6 +28,7 @@ const [openingName, h2h] = await Promise.all([game.opening ? getOpeningName(game
 const opening = openingName ? { name: openingName } : null;
 const others = h2h.filter((g) => g.id !== game.id).slice(0, 20);
 
+const roundN = parseRound(game.round).n;
 const who = (name: string, title: string | null) => `${title ? `${title} ` : ''}${name}`;
 const year = game.date?.slice(0, 4);
 const title = `${game.white_name} vs ${game.black_name}, ${game.event_name}${year && !game.event_name.includes(year) ? ` ${year}` : ''}`;
@@ -55,7 +57,10 @@ const pgn = [
   description={`${title}: ${resultLabel(game.result)} in ${Math.ceil(game.plies / 2)} moves${opening ? `, ${opening.name}` : ''}. Replay the game move by move and analyse it with Stockfish.`}
   wide
 >
-  <nav class="crumbs"><a href="/games/">Games</a> › <a href={`/events/${game.event_slug}/`}>{game.event_name}</a></nav>
+  <nav class="crumbs">
+    <a href="/games/">Games</a> › <a href={`/events/${game.event_slug}/`}>{game.event_name}</a>
+    {roundN && <> › <a href={`/events/${game.event_slug}/round-${roundN}/`}>Round {roundN}</a></>}
+  </nav>
   <h1>
     <a href={`/players/${game.white_slug}/`}>{who(game.white_name, game.white_title)}</a>{' vs '}<a
       href={`/players/${game.black_slug}/`}>{who(game.black_name, game.black_title)}</a>

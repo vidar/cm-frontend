@@ -1,0 +1,46 @@
+---
+// Team round robin (leagues): every team against every other, match score per meeting.
+import type { TeamLine } from '../../lib/event';
+import { matchScore } from '../../lib/event-view';
+
+interface Props {
+  lines: TeamLine[];
+  base: string;
+}
+const { lines, base } = Astro.props;
+const order = lines.map((l) => l.team);
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <thead>
+      <tr>
+        <th class="num">#</th><th class="ev-sticky">Team</th>
+        {order.map((_, i) => <th class="c">{i + 1}</th>)}
+        <th class="num">MP</th>
+      </tr>
+    </thead>
+    <tbody>
+      {lines.map((l, i) => (
+        <tr class:list={{ top: i === 0 }}>
+          <td class="num muted">{l.rank}</td>
+          <td class="name ev-sticky">{l.team}</td>
+          {order.map((t) =>
+            t === l.team ? (
+              <td class="ev-diag"></td>
+            ) : (
+              <td class="c">
+                {l.matches.filter((m) => m.opp === t).map((m) => (
+                  <a class={`ev-r ${m.my > m.their ? 'win' : m.my < m.their ? 'loss' : 'draw'}`} href={`${base}round-${m.round}/`} title={`Round ${m.round}`}>
+                    {matchScore(m.my, m.their)}
+                  </a>
+                ))}
+              </td>
+            ),
+          )}
+          <td class="pts">{l.mp}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

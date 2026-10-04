@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS events (
   start_date TEXT,
   end_date TEXT,
   games INTEGER NOT NULL,
-  twic INTEGER
+  twic INTEGER,
+  type TEXT,
+  rounds INTEGER
 );
 CREATE TABLE IF NOT EXISTS games (
   id INTEGER PRIMARY KEY,
@@ -41,7 +43,9 @@ CREATE TABLE IF NOT EXISTS games (
   opening TEXT,
   plies INTEGER NOT NULL,
   twic INTEGER NOT NULL,
-  moves TEXT NOT NULL
+  moves TEXT NOT NULL,
+  white_team TEXT,
+  black_team TEXT
 );
 CREATE TABLE IF NOT EXISTS openings (
   slug TEXT PRIMARY KEY,
@@ -52,3 +56,8 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+-- Columns added after the first load (no-ops on a fresh database).
+ALTER TABLE events ADD COLUMN IF NOT EXISTS type TEXT;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS rounds INTEGER;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS white_team TEXT;
+ALTER TABLE games ADD COLUMN IF NOT EXISTS black_team TEXT;

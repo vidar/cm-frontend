@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS events (
   start_date TEXT,
   end_date TEXT,
   games INTEGER NOT NULL,
-  twic INTEGER                   -- first TWIC issue with games from this event
+  twic INTEGER,                  -- first TWIC issue with games from this event
+  type TEXT,                     -- most common EventType tag ('swiss', 'tourn', 'team', 'k.o.', ...), often missing
+  rounds INTEGER                 -- highest round number seen
 );
 CREATE TABLE IF NOT EXISTS games (
   id INTEGER PRIMARY KEY,
@@ -39,7 +41,9 @@ CREATE TABLE IF NOT EXISTS games (
   opening TEXT,                  -- slug of the longest matching named line (/openings/<slug>/)
   plies INTEGER NOT NULL,
   twic INTEGER NOT NULL,         -- TWIC issue number (source credit)
-  moves TEXT NOT NULL            -- SAN moves separated by spaces
+  moves TEXT NOT NULL,           -- SAN moves separated by spaces
+  white_team TEXT,               -- team events: WhiteTeam / BlackTeam tags
+  black_team TEXT
 );
 CREATE TABLE IF NOT EXISTS openings (
   slug TEXT PRIMARY KEY,         -- /openings/<slug>/

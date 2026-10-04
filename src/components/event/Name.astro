@@ -1,0 +1,11 @@
+---
+// A player's title, linked name and federation.
+import type { Player } from '../../lib/event';
+interface Props {
+  p: Player;
+  fed?: boolean;
+}
+const { p, fed = true } = Astro.props;
+---
+
+{p.title && <span class="title">{p.title}</span>}<a href={`/players/${p.slug}/`}>{p.name}</a>{fed && p.fed && <span class="fed">{p.fed}</span>}

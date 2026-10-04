@@ -1,0 +1,65 @@
+---
+// Knockout round (or a match): pairings with each game's result and who went through.
+import Name from './Name.astro';
+import { gamePath } from '../../lib/games';
+import { pts, whiteScore, type KoRound } from '../../lib/event';
+import { chip } from '../../lib/event-view';
+
+interface Props {
+  round: KoRound;
+  /** Show the running score (matches). */
+  running?: boolean;
+}
+const { round, running = false } = Astro.props;
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <tbody>
+      {round.matches.map((m) => (
+        <tr>
+          <td class="name">{m.winner === m.a.id ? <strong><Name p={m.a} /></strong> : <Name p={m.a} />} <span class="muted">{m.a.elo ?? ''}</span></td>
+          <td class="pts">{pts(m.aPts)}–{pts(m.bPts)}</td>
+          <td class="name">{m.winner === m.b.id ? <strong><Name p={m.b} /></strong> : <Name p={m.b} />} <span class="muted">{m.b.elo ?? ''}</span></td>
+          <td>
+            {m.games.map((g, i) => {
+              const s = g.white_id === m.a.id ? whiteScore(g.result) : 1 - whiteScore(g.result);
+              const c = chip(s);
+              return (
+                <a class={`ev-r ${c.cls}`} href={gamePath(g)} title={`Game ${i + 1}: ${g.white_name}–${g.black_name} ${g.result}`}>
+                  <span class={`ev-col ${g.white_id === m.a.id ? 'w' : 'b'}`}></span>{c.text}
+                </a>
+              );
+            })}
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+{running && round.matches[0] && (() => {
+  const m = round.matches[0];
+  let a = 0;
+  let b = 0;
+  return (
+    <div class="ev-scroll">
+      <table class="ev-table">
+        <thead><tr><th>Game</th><th>White</th><th>Black</th><th class="c">Result</th><th class="num">{m.a.name.split(' ').at(-1)}</th><th class="num">{m.b.name.split(' ').at(-1)}</th><th>Date</th></tr></thead>
+        <tbody>
+          {m.games.map((g, i) => {
+            const s = g.white_id === m.a.id ? whiteScore(g.result) : 1 - whiteScore(g.result);
+            a += s;
+            b += 1 - s;
+            return (
+              <tr>
+                <td class="num muted">{i + 1}</td><td>{g.white_name}</td><td>{g.black_name}</td>
+                <td class="c"><a href={gamePath(g)}>{g.result === '1/2-1/2' ? '½–½' : g.result.replace('-', '–')}</a></td>
+                <td class="pts">{pts(a)}</td><td class="pts">{pts(b)}</td><td class="muted">{g.date}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+})()}

@@ -1,0 +1,130 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import BoardDiagram from '../../../components/BoardDiagram.astro';
+import Standings from '../../../components/event/Standings.astro';
+import RoundGames from '../../../components/event/RoundGames.astro';
+import TeamMatch from '../../../components/event/TeamMatch.astro';
+import TeamStandings from '../../../components/event/TeamStandings.astro';
+import Knockout from '../../../components/event/Knockout.astro';
+import '../../../styles/event.css';
+import { featured, finalPositions, loadEvent } from '../../../lib/event-page';
+import { roundStory } from '../../../lib/event';
+import { dateRange, resultText } from '../../../lib/event-view';
+import { gamePath, twicIssueUrl } from '../../../lib/games';
+
+export const prerender = false;
+
+const n = Number.parseInt(Astro.params.n ?? '', 10);
+const data = Number.isFinite(n) ? await loadEvent(Astro.params.slug ?? '') : null;
+const round = data?.a.rounds.find((r) => r.n === n);
+if (!data || !round) return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+const { event, a } = data;
+const base = `/events/${event.slug}/`;
+const idx = a.rounds.indexOf(round);
+const prev = a.rounds[idx - 1];
+const next = a.rounds[idx + 1];
+const ko = a.format === 'knockout' ? a.knockout?.find((k) => k.n === n) : undefined;
+const roundName = ko && a.format === 'knockout' ? ko.name : a.format === 'match' ? `Game ${n}` : `Round ${n}`;
+const individual = (a.format === 'round-robin' || a.format === 'swiss') && a.complete;
+
+// Standings before and after this round, and who moved.
+const after = individual ? a.standingsAfter(n) : [];
+const before = individual && prev ? a.standingsAfter(prev.n) : [];
+const pointsBefore = individual ? new Map(a.players.size ? [...a.players.keys()].map((id) => [id, 0] as [number, number]) : []) : undefined;
+for (const l of before) pointsBefore?.set(l.player.id, l.points);
+const rankBefore = new Map(before.map((l) => [l.player.id, l.rank]));
+const moves = new Map(after.filter((l) => rankBefore.has(l.player.id)).map((l) => [l.player.id, rankBefore.get(l.player.id)! - l.rank]));
+const tAfter = a.teams?.standingsAfter(n) ?? [];
+const tBeforeRank = new Map((a.teams && prev ? a.teams.standingsAfter(prev.n) : []).map((l) => [l.team, l.rank]));
+const tMoves = new Map(tAfter.filter((l) => tBeforeRank.has(l.team)).map((l) => [l.team, tBeforeRank.get(l.team)! - l.rank]));
+const tRank = new Map(tAfter.map((l) => [l.team, l.rank]));
+
+const story = roundStory(a, n);
+const boards = await finalPositions(featured(a, n));
+const matches = a.teams?.matches.filter((m) => m.round === n) ?? [];
+const title = `${event.name}, ${roundName.toLowerCase()}: results${individual || a.teams ? ' and standings' : ''}`;
+const winnerOf = (r: string, w: string, b: string) => (r === '1-0' ? w : r === '0-1' ? b : null);
+---
+
+<Layout title={title} description={`${event.name} ${roundName.toLowerCase()} (${dateRange(round.first, round.last)}): ${story.join(' ')}`} wide>
+  <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a> › <a href={base}>{event.name}</a></nav>
+  <h1>{event.name}: {roundName}</h1>
+  <p class="ev-facts">
+    <span><strong>{dateRange(round.first, round.last)}</strong></span>
+    {event.site && <span>{event.site}</span>}
+    <span>{a.teams ? `${matches.length} matches` : `${round.games.length} games`}</span>
+  </p>
+
+  <nav class="ev-roundnav" aria-label="Rounds">
+    {a.rounds.map((r) => (r.n === n ? <span class="current" aria-current="page">{r.n}</span> : <a href={`${base}round-${r.n}/`}>{r.n}</a>))}
+  </nav>
+
+  {story.length > 0 && <div class="ev-story">{story.map((s) => <p>{s}</p>)}</div>}
+
+  {boards.length > 0 && (
+    <section>
+      <h2>Key games</h2>
+      <div class="ev-featured">
+        {boards.map(({ game: g, fen, last }) => {
+          const w = winnerOf(g.result, g.white_name, g.black_name);
+          return (
+            <figure>
+              <a href={gamePath(g)}>
+                <BoardDiagram fen={fen} highlight={last} flip={g.result === '0-1'} title={`Final position: ${g.white_name} – ${g.black_name}`} />
+                <figcaption>
+                  {g.white_name} – {g.black_name} <span class="res">{resultText(g.result)}</span><br />
+                  <span class="ev-muted">{w ? `${w} won` : 'Draw'} in {Math.ceil(g.plies / 2)} moves{g.opening_name && ` · ${g.opening_name.split(':')[0]}`}</span>
+                </figcaption>
+              </a>
+            </figure>
+          );
+        })}
+      </div>
+    </section>
+  )}
+
+  {a.teams && (
+    <section>
+      <h2>Matches</h2>
+      <div class="ev-matches">{matches.map((m) => <TeamMatch m={m} boards={a.teams!.boards} />)}</div>
+      <h2>Standings after {roundName.toLowerCase()}</h2>
+      <TeamStandings lines={tAfter} rankOf={tRank} moves={tMoves} base={base} limit={40} />
+      {tAfter.length > 40 && <p><a href={base}>Full standings</a></p>}
+    </section>
+  )}
+
+  {ko && (
+    <section>
+      <h2>{a.format === 'match' ? 'The match' : 'Matches'}</h2>
+      <Knockout round={ko} />
+    </section>
+  )}
+
+  {!a.teams && !ko && (
+    <section>
+      <h2>Results</h2>
+      <RoundGames games={round.games} players={a.players} before={individual ? pointsBefore : undefined} />
+    </section>
+  )}
+
+  {individual && (
+    <section>
+      <h2>Standings after {roundName.toLowerCase()}</h2>
+      <Standings lines={after} moves={prev ? moves : undefined} tiebreak={a.format === 'round-robin' ? 'sb' : 'buchholz'} limit={30} />
+      {after.length > 30 && <p><a href={base}>Full standings</a></p>}
+    </section>
+  )}
+
+  <nav class="ev-prevnext">
+    {prev ? <a href={`${base}round-${prev.n}/`} rel="prev">← {a.knockout?.find((k) => k.n === prev.n)?.name ?? `Round ${prev.n}`}</a> : <a href={base}>← {event.name}</a>}
+    {next ? <a href={`${base}round-${next.n}/`} rel="next">{a.knockout?.find((k) => k.n === next.n)?.name ?? `Round ${next.n}`} →</a> : <a href={base}>Final {a.format === 'round-robin' ? 'crosstable' : 'standings'} →</a>}
+  </nav>
+
+  {event.twic && <p class="credit">Games from <a href={twicIssueUrl(event.twic)} rel="nofollow">The Week in Chess</a> by Mark Crowther, used with permission.</p>}
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>

@@ -2,6 +2,7 @@
 // `HYPERDRIVE`, see scripts/twic/). Only import from on-demand routes (`export const prerender = false`).
 import { env } from 'cloudflare:workers';
 import postgres from 'postgres';
+import type { EventGame } from './event';
 
 export interface Player {
   id: number;
@@ -25,6 +26,8 @@ export interface EventRow {
   end_date: string | null;
   games: number;
   twic: number | null;
+  type: string | null;
+  rounds: number | null;
 }
 
 export interface GameRow {
@@ -161,6 +164,26 @@ export async function eventGames(eventId: number, page = 1) {
     EVENT_PAGE_SIZE,
     (page - 1) * EVENT_PAGE_SIZE,
   ]);
+}
+
+/** Every game of an event, without moves (for standings, crosstables and round pages). */
+export async function eventGamesAll(eventSlug: string) {
+  return query<EventGame>(
+    `SELECT g.id, g.white_id, g.black_id, g.white_elo, g.black_elo, g.white_title, g.black_title, g.result, g.date, g.round,
+       g.plies, g.eco, g.opening, o.name AS opening_name, g.white_team, g.black_team,
+       w.name AS white_name, w.slug AS white_slug, w.fed AS white_fed, b.name AS black_name, b.slug AS black_slug, b.fed AS black_fed,
+       e.name AS event_name, e.slug AS event_slug
+     FROM games g ${GAME_JOINS} LEFT JOIN openings o ON o.slug = g.opening
+     WHERE g.event_id = (SELECT id FROM events WHERE slug = $1) ORDER BY g.id`,
+    [eventSlug],
+  );
+}
+
+/** Moves of a few games, by id. */
+export async function gameMoves(ids: number[]) {
+  if (!ids.length) return new Map<number, string>();
+  const rows = await query<{ id: number; moves: string }>('SELECT id, moves FROM games WHERE id = ANY($1::int[])', [`{${ids.map(Number).join(',')}}`]);
+  return new Map(rows.map((r) => [r.id, r.moves]));
 }
 
 export async function searchPlayers(q: string, limit = 30) {

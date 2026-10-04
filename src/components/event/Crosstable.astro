@@ -1,0 +1,49 @@
+---
+// Round-robin crosstable: every player against every other, one chip per game.
+import Name from './Name.astro';
+import { gamePath } from '../../lib/games';
+import { pts, type Line } from '../../lib/event';
+import { chip } from '../../lib/event-view';
+
+interface Props {
+  lines: Line[];
+}
+const { lines } = Astro.props;
+const order = lines.map((l) => l.player.id);
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <thead>
+      <tr>
+        <th class="num">#</th><th class="ev-sticky">Player</th><th class="num">Rtg</th>
+        {order.map((_, i) => <th class="c">{i + 1}</th>)}
+        <th class="num">Pts</th><th class="num" title="Sonneborn-Berger">SB</th><th class="num" title="Performance rating">Perf</th>
+      </tr>
+    </thead>
+    <tbody>
+      {lines.map((l, i) => (
+        <tr class:list={{ top: i === 0 }}>
+          <td class="num muted">{l.rank}</td>
+          <td class="name ev-sticky"><Name p={l.player} /></td>
+          <td class="num muted">{l.player.elo ?? ''}</td>
+          {order.map((opp) =>
+            opp === l.player.id ? (
+              <td class="ev-diag"></td>
+            ) : (
+              <td class="c">
+                {l.results.filter((r) => r.opp === opp).sort((a, b) => a.round - b.round).map((r) => {
+                  const c = chip(r.score);
+                  return <a class={`ev-r ${c.cls}`} href={gamePath(r.game)} title={`Round ${r.round}, ${r.color === 'w' ? 'White' : 'Black'}: ${r.game.result}`}>{c.text}</a>;
+                })}
+              </td>
+            ),
+          )}
+          <td class="pts">{pts(l.points)}</td>
+          <td class="num muted">{l.sb.toFixed(2).replace(/\.?0+$/, '')}</td>
+          <td class="num muted">{l.perf ?? ''}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

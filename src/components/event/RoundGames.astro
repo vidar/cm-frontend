@@ -1,0 +1,40 @@
+---
+// One round of an individual event: boards with each player's score before the round.
+import { gamePath } from '../../lib/games';
+import { pts, type EventGame } from '../../lib/event';
+import { resultText } from '../../lib/event-view';
+import Name from './Name.astro';
+import type { Player } from '../../lib/event';
+
+interface Props {
+  games: EventGame[];
+  players: Map<number, Player>;
+  /** Points before this round, by player id (omit for incomplete events). */
+  before?: Map<number, number>;
+}
+const { games, players, before } = Astro.props;
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <thead>
+      <tr><th class="num">Bo.</th><th>White</th><th class="num">Rtg</th>{before && <th class="num">Pts</th>}<th class="c">Result</th>{before && <th class="num">Pts</th>}<th>Black</th><th class="num">Rtg</th><th>Opening</th><th class="num">Moves</th></tr>
+    </thead>
+    <tbody>
+      {games.map((g, i) => (
+        <tr>
+          <td class="num muted">{i + 1}</td>
+          <td class="name"><Name p={players.get(g.white_id)!} fed={false} /></td>
+          <td class="num muted">{g.white_elo ?? ''}</td>
+          {before && <td class="num muted">{pts(before.get(g.white_id) ?? 0)}</td>}
+          <td class="c"><a class="ev-r draw" href={gamePath(g)}>{resultText(g.result)}</a></td>
+          {before && <td class="num muted">{pts(before.get(g.black_id) ?? 0)}</td>}
+          <td class="name"><Name p={players.get(g.black_id)!} fed={false} /></td>
+          <td class="num muted">{g.black_elo ?? ''}</td>
+          <td class="muted">{g.opening_name ? <a href={`/openings/${g.opening}/`}>{g.opening_name.length > 38 ? `${g.opening_name.slice(0, 36)}…` : g.opening_name}</a> : g.eco ?? ''}</td>
+          <td class="num muted">{Math.ceil(g.plies / 2)}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

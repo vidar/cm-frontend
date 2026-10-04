@@ -1,0 +1,39 @@
+---
+// One team match: score and board-by-board games (board 1 first).
+import { gamePath } from '../../lib/games';
+import type { TeamMatch } from '../../lib/event';
+import { matchScore, resultText } from '../../lib/event-view';
+
+interface Props {
+  m: TeamMatch;
+  boards: number;
+}
+const { m, boards } = Astro.props;
+const who = (name: string, title: string | null, elo: number | null) => `${title ? `${title} ` : ''}${name}${elo ? ` ${elo}` : ''}`;
+---
+
+<article class="ev-match" id={`m-${encodeURIComponent(m.home)}`}>
+  <header>
+    <span class:list={['home', { won: m.homePts > m.awayPts }]}>{m.home}</span>
+    <span class="score">{matchScore(m.homePts, m.awayPts)}</span>
+    <span class:list={['away', { won: m.awayPts > m.homePts }]}>{m.away}</span>
+  </header>
+  <table>
+    {m.games.map((g) => {
+      const homeWhite = g.white_team === m.home;
+      const [hName, hTitle, hElo, aName, aTitle, aElo] = homeWhite
+        ? [g.white_name, g.white_title, g.white_elo, g.black_name, g.black_title, g.black_elo]
+        : [g.black_name, g.black_title, g.black_elo, g.white_name, g.white_title, g.white_elo];
+      // Result from the home side's point of view, with who had White.
+      const r = homeWhite ? resultText(g.result) : resultText(g.result).split('–').reverse().join('–');
+      return (
+        <tr>
+          <td>{homeWhite && <span class="ev-col"></span>}{!homeWhite && <span class="ev-col b"></span>}{who(hName, hTitle, hElo)}</td>
+          <td class="r"><a href={gamePath(g)}>{r}</a></td>
+          <td class="bl">{who(aName, aTitle, aElo)}</td>
+        </tr>
+      );
+    })}
+  </table>
+  {m.games.length < boards && <p class="partial">{m.games.length} of {boards} boards in the database</p>}
+</article>

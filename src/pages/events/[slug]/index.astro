@@ -1,0 +1,299 @@
+---
+import Layout from '../../../layouts/Layout.astro';
+import GameTable from '../../../components/GameTable.astro';
+import Crosstable from '../../../components/event/Crosstable.astro';
+import Standings from '../../../components/event/Standings.astro';
+import TeamStandings from '../../../components/event/TeamStandings.astro';
+import TeamCrosstable from '../../../components/event/TeamCrosstable.astro';
+import Knockout from '../../../components/event/Knockout.astro';
+import RaceChart from '../../../components/event/RaceChart.astro';
+import Name from '../../../components/event/Name.astro';
+import '../../../styles/event.css';
+import { loadEvent } from '../../../lib/event-page';
+import { FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
+import { dateRange, matchScore, resultText } from '../../../lib/event-view';
+import { eventGames, gamePath, twicIssueUrl, EVENT_PAGE_SIZE } from '../../../lib/games';
+
+export const prerender = false;
+
+const data = await loadEvent(Astro.params.slug ?? '');
+if (!data) return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+const { event, a } = data;
+const base = `/events/${event.slug}/`;
+const R = a.rounds.map((r) => r.n);
+const individual = a.format === 'round-robin' || a.format === 'swiss';
+const showAll = Astro.url.searchParams.has('all');
+
+// Final standings and the race (cumulative score after each round) for the leaders.
+const final = individual ? a.standingsAfter(Infinity) : [];
+const rankOf = new Map(final.map((l) => [l.player.id, l.rank]));
+const teamFinal = a.teams?.standingsAfter(Infinity) ?? [];
+const teamRank = new Map(teamFinal.map((l) => [l.team, l.rank]));
+let race: { label: string; values: number[] }[] = [];
+if (individual && a.complete && R.length >= 3) {
+  const after = R.map((n) => new Map(a.standingsAfter(n).map((l) => [l.player.id, l.points])));
+  race = final.slice(0, 8).map((l) => ({ label: l.player.name, values: [0, ...after.map((m) => m.get(l.player.id) ?? 0)] }));
+} else if (a.teams && R.length >= 3) {
+  const after = R.map((n) => new Map(a.teams!.standingsAfter(n).map((l) => [l.team, l.mp])));
+  race = teamFinal.slice(0, 8).map((l) => ({ label: l.team, values: [0, ...after.map((m) => m.get(l.team) ?? 0)] }));
+}
+
+// Podium.
+type Place = { who: string; href?: string; detail: string };
+let podium: Place[] = [];
+if (individual && a.complete) podium = final.slice(0, 3).map((l) => ({ who: l.player.name, href: `/players/${l.player.slug}/`, detail: `${pts(l.points)}/${l.games}${l.perf ? ` · perf ${l.perf}` : ''}` }));
+else if (a.teams) podium = teamFinal.slice(0, 3).map((l) => ({ who: l.team, href: `#team-${encodeURIComponent(l.team)}`, detail: `${l.mp} match points · ${pts(l.gp)} game points` }));
+else if (a.knockout?.length) {
+  const f = a.knockout.at(-1)!.matches[0];
+  if (f?.winner) {
+    const [w, l] = f.winner === f.a.id ? [f.a, f.b] : [f.b, f.a];
+    const [ws, ls] = f.winner === f.a.id ? [f.aPts, f.bPts] : [f.bPts, f.aPts];
+    podium = [
+      { who: w.name, href: `/players/${w.slug}/`, detail: `${a.format === 'match' ? 'won the match' : 'won the final'} ${matchScore(ws, ls)}` },
+      { who: l.name, href: `/players/${l.slug}/`, detail: a.format === 'match' ? 'runner-up' : 'finalist' },
+    ];
+  }
+}
+const places = a.format === 'knockout' || a.format === 'match' ? ['Winner', 'Runner-up'] : ['First', 'Second', 'Third'];
+
+// Rosters and best individual results in team events.
+const bestBoards = a.teams
+  ? [...a.teams.rosters.values()]
+      .flat()
+      .filter((r) => r.perf && r.games >= Math.max(3, Math.ceil(R.length * 0.6)))
+      .sort((x, y) => (y.perf ?? 0) - (x.perf ?? 0))
+      .slice(0, 10)
+  : [];
+
+// Plain game list for events without usable rounds.
+const page = Math.max(1, Number.parseInt(Astro.url.searchParams.get('page') ?? '1', 10) || 1);
+const pages = Math.max(1, Math.ceil(event.games / EVENT_PAGE_SIZE));
+const list = a.format === 'games' ? await eventGames(event.id, Math.min(page, pages)) : [];
+
+const dates = dateRange(event.start_date, event.end_date);
+const { stats } = a;
+const pct = (x: number) => Math.round((x / Math.max(1, stats.games)) * 100);
+const count = a.teams ? `${teamFinal.length} teams` : `${a.players.size} players`;
+const formatLabel = a.format === 'round-robin' && a.cycles === 2 ? 'Double round robin' : FORMAT_LABEL[a.format];
+const what = a.format === 'round-robin' ? 'crosstable' : a.format === 'knockout' ? 'bracket' : a.format === 'games' ? 'games' : 'standings';
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SportsEvent',
+  name: event.name,
+  sport: 'Chess',
+  startDate: event.start_date,
+  endDate: event.end_date,
+  ...(event.site ? { location: { '@type': 'Place', name: event.site } } : {}),
+  url: new URL(base, Astro.site ?? 'https://chessmoments.com').href,
+};
+---
+
+<Layout
+  title={`${event.name}${event.site ? `, ${event.site}` : ''}: ${what}, results and games`}
+  description={`${event.name}${event.site ? ` (${event.site})` : ''}, ${dates}: ${formatLabel.toLowerCase()}, ${count}${R.length ? `, ${R.length} rounds` : ''}. ${what[0].toUpperCase()}${what.slice(1)}, round-by-round results and all ${event.games.toLocaleString('en')} games to replay.`}
+  wide
+>
+  <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+  <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a></nav>
+  <h1>{event.name}</h1>
+  <p class="ev-facts">
+    {event.site && <span>{event.site}</span>}
+    <span>{dates}</span>
+    <span><strong>{formatLabel}</strong></span>
+    <span>{count}</span>
+    {R.length > 0 && <span>{R.length} {a.format === 'match' ? 'games' : 'rounds'}</span>}
+    {a.avgElo && <span>average rating {a.avgElo}</span>}
+    {a.category && <span>category {a.category}</span>}
+  </p>
+
+  {podium.length > 0 && (
+    <div class="ev-podium">
+      {podium.map((p, i) => (
+        <div class:list={{ first: i === 0 }}>
+          <span class="place">{places[i]}</span>
+          <a class="who" href={p.href}>{p.who}</a>
+          <span class="ev-muted">{p.detail}</span>
+        </div>
+      ))}
+    </div>
+  )}
+
+  {individual && !a.complete && (
+    <p class="ev-note">
+      The database has {stats.games.toLocaleString('en')} games from this event, mostly from the top boards: most players appear in only a few rounds.
+      The scores below count only those games, so they are not the official standings.
+    </p>
+  )}
+
+  {a.format === 'round-robin' && (
+    <section>
+      <h2>Crosstable</h2>
+      <Crosstable lines={final} />
+    </section>
+  )}
+  {a.format === 'swiss' && a.complete && (
+    <section>
+      <h2>Final standings</h2>
+      <Standings lines={final} rounds={R} rankOf={rankOf} limit={showAll ? 10000 : 100} />
+      {final.length > 100 && !showAll && <p><a href="?all">Show all {final.length} players</a></p>}
+    </section>
+  )}
+  {a.format === 'swiss' && !a.complete && (
+    <section>
+      <h2>Best scores in these games</h2>
+      <Standings lines={final} limit={30} scoreLabel="Score" />
+    </section>
+  )}
+  {a.teams && (
+    <section>
+      <h2>Team standings</h2>
+      <TeamStandings lines={teamFinal} rounds={R} rankOf={teamRank} base={base} />
+      {a.teams.roundRobin && (
+        <>
+          <h2>Crosstable</h2>
+          <TeamCrosstable lines={teamFinal} base={base} />
+        </>
+      )}
+    </section>
+  )}
+  {a.format === 'knockout' && a.knockout && (
+    <section>
+      {[...a.knockout].reverse().map((k, i) =>
+        i < 3 || k.matches.length <= 8 ? (
+          <>
+            <h2><a href={`${base}round-${k.n}/`}>{k.name}</a></h2>
+            <Knockout round={k} />
+          </>
+        ) : (
+          <details class="ko-early">
+            <summary><strong>{k.name}</strong> <span class="ev-muted">{k.matches.length} matches</span></summary>
+            <Knockout round={k} />
+            <p><a href={`${base}round-${k.n}/`}>{k.name} in detail →</a></p>
+          </details>
+        ),
+      )}
+    </section>
+  )}
+  {a.format === 'match' && a.knockout && (
+    <section>
+      <h2>The match</h2>
+      <Knockout round={a.knockout[0]} running />
+    </section>
+  )}
+
+  {race.length >= 2 && (
+    <section>
+      <h2>The race</h2>
+      <RaceChart series={race} rounds={R} unit={a.teams ? 'match points' : 'points'} title={`${a.teams ? 'Match points' : 'Score'} after each round for the leading ${a.teams ? 'teams' : 'players'}`} />
+    </section>
+  )}
+
+  {R.length > 0 && a.format !== 'match' && (
+    <section>
+      <h2>Round by round</h2>
+      <div class="ev-scroll">
+        <table class="ev-table">
+          <tbody>
+            {a.rounds.map((r) => (
+              <tr>
+                <td><a href={`${base}round-${r.n}/`}><strong>{a.knockout?.find((k) => k.n === r.n)?.name ?? `Round ${r.n}`}</strong></a></td>
+                <td class="muted">{dateRange(r.first, r.last)}</td>
+                <td class="name">{roundStory(a, r.n).join(' ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )}
+
+  {a.teams && (
+    <section>
+      {bestBoards.length > 0 && (
+        <>
+          <h2>Best individual performances</h2>
+          <div class="ev-scroll">
+            <table class="ev-table">
+              <thead><tr><th>Player</th><th>Team</th><th class="num">Board</th><th class="num">Score</th><th class="num">Perf</th></tr></thead>
+              <tbody>
+                {bestBoards.map((r) => (
+                  <tr><td class="name"><Name p={r.player} /></td><td class="muted">{r.player.team}</td><td class="num">{r.board}</td><td class="num">{pts(r.points)}/{r.games}</td><td class="pts">{r.perf}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      <h2>Teams</h2>
+      {teamFinal.map((t) => (
+        <details id={`team-${encodeURIComponent(t.team)}`}>
+          <summary><strong>{t.rank}. {t.team}</strong> <span class="ev-muted">{t.mp} MP · {pts(t.gp)} GP</span></summary>
+          <div class="ev-scroll">
+            <table class="ev-table">
+              <thead><tr><th class="num">Bd</th><th>Player</th><th class="num">Rtg</th><th class="num">Score</th><th class="num">Perf</th></tr></thead>
+              <tbody>
+                {(a.teams!.rosters.get(t.team) ?? []).map((r) => (
+                  <tr><td class="num muted">{r.board}</td><td class="name"><Name p={r.player} /></td><td class="num muted">{r.player.elo ?? ''}</td><td class="num">{pts(r.points)}/{r.games}</td><td class="num muted">{r.perf ?? ''}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ))}
+    </section>
+  )}
+
+  {stats.games > 0 && (
+    <section>
+      <h2>In numbers</h2>
+      <div class="ev-bar" role="img" aria-label={`White won ${pct(stats.white)}%, draws ${pct(stats.draws)}%, Black won ${pct(stats.black)}%`}>
+        <span class="w" style={`width:${pct(stats.white)}%`}>{pct(stats.white) >= 10 ? `1–0 ${pct(stats.white)}%` : ''}</span>
+        <span class="d" style={`width:${pct(stats.draws)}%`}>{pct(stats.draws) >= 10 ? `½ ${pct(stats.draws)}%` : ''}</span>
+        <span class="b" style={`width:${pct(stats.black)}%`}>{pct(stats.black) >= 10 ? `0–1 ${pct(stats.black)}%` : ''}</span>
+      </div>
+      <p class="ev-muted">
+        {stats.games.toLocaleString('en')} games, {pct(stats.white + stats.black)}% decisive, {stats.avgMoves} moves on average.{' '}
+        {stats.topOpening && <>Most played opening: <a href={`/openings/${stats.topOpening.slug}/`}>{stats.topOpening.name}</a> ({stats.topOpening.count} games).</>}
+      </p>
+      {a.highlights.length > 0 && (
+        <div class="ev-highlights">
+          {a.highlights.map((h) => (
+            <a href={gamePath(h.game)}>
+              <span class="label">{h.label}</span><br />
+              <strong>{h.game.white_name} – {h.game.black_name} {resultText(h.game.result)}</strong><br />
+              <span class="ev-muted">{h.game.result === '1-0' ? h.game.white_name : h.game.result === '0-1' ? h.game.black_name : ''} {h.note}{h.game.round && `, round ${h.game.round.split('.')[0]}`}</span>
+            </a>
+          ))}
+        </div>
+      )}
+    </section>
+  )}
+
+  {a.format === 'games' && (
+    <section>
+      <h2>Games</h2>
+      <GameTable games={list} showEvent={false} />
+      {pages > 1 && (
+        <nav class="pager">
+          {page > 1 ? <a href={page === 2 ? './' : `?page=${page - 1}`}>← Previous</a> : <span></span>}
+          <span class="ev-muted">Page {page} of {pages}</span>
+          {page < pages ? <a href={`?page=${page + 1}`}>Next →</a> : <span></span>}
+        </nav>
+      )}
+    </section>
+  )}
+
+  {event.twic && (
+    <p class="credit">Games from <a href={twicIssueUrl(event.twic)} rel="nofollow">The Week in Chess #{event.twic}</a> and later issues by Mark Crowther, used with permission.</p>
+  )}
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  h2 a { color: inherit; }
+  details { border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); padding: 0.3rem 0; }
+  summary { cursor: pointer; }
+  .pager { display: flex; justify-content: space-between; margin-top: 1rem; }
+  .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>

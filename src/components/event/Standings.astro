@@ -1,0 +1,69 @@
+---
+// Individual standings (Swiss or after a round), optionally with each round's opponent and result.
+import Name from './Name.astro';
+import { gamePath } from '../../lib/games';
+import { pts, type Line } from '../../lib/event';
+import { chip } from '../../lib/event-view';
+
+interface Props {
+  lines: Line[];
+  /** Round numbers to show as columns (empty: no per-round columns). */
+  rounds?: number[];
+  /** Rank by player id, for opponent numbers in the round columns. */
+  rankOf?: Map<number, number>;
+  /** Rank change since the previous round, by player id. */
+  moves?: Map<number, number>;
+  tiebreak?: 'buchholz' | 'sb';
+  limit?: number;
+  scoreLabel?: string;
+}
+const { lines, rounds = [], rankOf, moves, tiebreak = 'buchholz', limit = 100, scoreLabel = 'Pts' } = Astro.props;
+const shown = lines.slice(0, limit);
+---
+
+<div class="ev-scroll">
+  <table class="ev-table">
+    <thead>
+      <tr>
+        <th class="num">#</th>{moves && <th></th>}<th class="ev-sticky">Player</th><th class="num">Rtg</th>
+        {rounds.map((n) => <th class="c">R{n}</th>)}
+        <th class="num">{scoreLabel}</th><th class="num">Games</th>
+        <th class="num" title={tiebreak === 'sb' ? 'Sonneborn-Berger' : 'Buchholz (sum of opponents’ scores)'}>{tiebreak === 'sb' ? 'SB' : 'Buch.'}</th>
+        <th class="num" title="Performance rating">Perf</th>
+      </tr>
+    </thead>
+    <tbody>
+      {shown.map((l, i) => {
+        const mv = moves?.get(l.player.id);
+        return (
+          <tr class:list={{ top: i === 0 }}>
+            <td class="num muted">{l.rank}</td>
+            {moves && <td>{mv ? mv > 0 ? <span class="ev-up" title={`Up ${mv}`}>▲{mv}</span> : <span class="ev-down" title={`Down ${-mv}`}>▼{-mv}</span> : ''}</td>}
+            <td class="name ev-sticky"><Name p={l.player} /></td>
+            <td class="num muted">{l.player.elo ?? ''}</td>
+            {rounds.map((n) => {
+              const rs = l.results.filter((r) => r.round === n);
+              return (
+                <td class="c">
+                  {rs.map((r) => {
+                    const c = chip(r.score);
+                    return (
+                      <a class={`ev-r ${c.cls}`} href={gamePath(r.game)} title={`Round ${n} against ${r.game.white_id === r.opp ? r.game.white_name : r.game.black_name}`}>
+                        <span class="opp">{rankOf?.get(r.opp) ?? ''}</span><span class={`ev-col ${r.color}`}></span>{c.text}
+                      </a>
+                    );
+                  })}
+                </td>
+              );
+            })}
+            <td class="pts">{pts(l.points)}</td>
+            <td class="num muted">{l.games}</td>
+            <td class="num muted">{pts(tiebreak === 'sb' ? Math.round(l.sb * 2) / 2 : l.buchholz)}</td>
+            <td class="num muted">{l.perf ?? ''}</td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+</div>
+{lines.length > shown.length && <p class="ev-muted">Top {shown.length} of {lines.length} players.</p>}

@@ -19,6 +19,7 @@ Then scripts/twic/export_sql.py turns the SQLite file into SQL for D1.
 """
 import argparse
 import collections
+import datetime
 import hashlib
 import io
 import multiprocessing as mp
@@ -37,9 +38,10 @@ SCHEMA = (Path(__file__).parent / 'schema.sql').read_text()
 MOVE_NUM = re.compile(r'^\d+\.+$')
 TAG = re.compile(r'^\[(\w+)\s+"(.*)"\]\s*$')
 RESULTS = {'1-0', '0-1', '1/2-1/2'}
+EVENT_GAP = 120  # days without games that split two same-named events
 # Headers kept per game (everything else is dropped early to bound memory on ~3M games).
 KEEP = ('Event', 'Site', 'Date', 'Round', 'White', 'Black', 'Result', 'WhiteTitle', 'BlackTitle', 'WhiteElo', 'BlackElo',
-        'ECO', 'WhiteFideId', 'BlackFideId', 'EventDate')
+        'ECO', 'WhiteFideId', 'BlackFideId', 'EventDate', 'WhiteTeam', 'BlackTeam', 'EventType')
 
 
 def slugify(s: str) -> str:
@@ -144,6 +146,18 @@ def int_or_none(v):
         return int(v) if v and v.strip('?') else None
     except ValueError:
         return None
+
+
+def round_number(r):
+    """Round number from TWIC's Round tag: '5' (round), '5.3' (round.board, or round.match in team
+    events) or '5.3.2' (knockout: round.match.game). None when missing or implausible."""
+    m = re.match(r'\s*(\d+)', r or '')
+    return int(m.group(1)) if m and 0 < int(m.group(1)) <= 60 else None
+
+
+def team_name(t):
+    t = re.sub(r'\s+', ' ', t or '').strip()
+    return t if t and t not in ('?', '-') else None
 
 
 def norm_date(d):
@@ -299,13 +313,44 @@ def main():
              official[1] if official else None, official[3] if official else None, p['max_elo'], p['games'], p['last']),
         )
 
-    # Events: name + site + event start (or year).
-    ekey = lambda h: (h.get('Event', '?').strip(), h.get('Site', '').strip(), h.get('EventDate') or (h.get('Date') or '')[:4])
+    # Events: same name, games no more than EVENT_GAP days apart. (Not keyed by site or EventDate:
+    # leagues move venue every weekend, and their EventDate changes with it.) Undated games join the
+    # cluster their issue's other games of that event are in.
+    def day(h):
+        for d in (norm_date(h.get('Date')), norm_date(h.get('EventDate'))):
+            if d and len(d) == 10:
+                return datetime.date.fromisoformat(d).toordinal()
+        return None
+    by_name = collections.defaultdict(list)
+    for i, (_, h, _) in enumerate(games):
+        by_name[h.get('Event', '?').strip()].append(i)
+    gkey = [None] * len(games)
+    for name, idxs in by_name.items():
+        dated = sorted((d, i) for i in idxs if (d := day(games[i][1])) is not None)
+        cluster, prev, by_issue = 0, None, collections.defaultdict(collections.Counter)
+        for d, i in dated:
+            if prev is not None and d - prev > EVENT_GAP:
+                cluster += 1
+            prev = d
+            gkey[i] = (name, cluster)
+            by_issue[games[i][0]][cluster] += 1
+        for i in idxs:
+            if gkey[i] is None:
+                issue = games[i][0]
+                gkey[i] = (name, by_issue[issue].most_common(1)[0][0] if by_issue[issue] else f'i{issue}')
     einfo = {}
-    for issue, h, _ in games:
-        e = einfo.setdefault(ekey(h), {'start': None, 'end': None, 'games': 0, 'twic': issue})
+    for (issue, h, _), k in zip(games, gkey):
+        e = einfo.setdefault(k, {'start': None, 'end': None, 'games': 0, 'twic': issue, 'types': collections.Counter(), 'rounds': 0, 'sites': collections.Counter()})
         d = norm_date(h.get('Date'))
         e['games'] += 1
+        e['twic'] = min(e['twic'], issue)
+        if h.get('Site', '').strip():
+            e['sites'][h['Site'].strip()] += 1
+        if h.get('EventType'):
+            e['types'][h['EventType'].strip().lower()] += 1
+        r = round_number(h.get('Round'))
+        if r and r > e['rounds']:
+            e['rounds'] = r
         if d:
             e['start'] = min(e['start'] or d, d)
             e['end'] = max(e['end'] or d, d)
@@ -319,24 +364,28 @@ def main():
             base = f'{base}-{year}'
         event_id[k] = i
         db.execute(
-            'INSERT INTO events (id, name, site, slug, start_date, end_date, games, twic) VALUES (?,?,?,?,?,?,?,?)',
-            (i, k[0], k[1] or None, unique_slug(base, taken), e['start'], e['end'], e['games'], e['twic']),
+            'INSERT INTO events (id, name, site, slug, start_date, end_date, games, twic, type, rounds) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (i, k[0], e['sites'].most_common(1)[0][0] if e['sites'] else None, unique_slug(base, taken), e['start'], e['end'], e['games'], e['twic'],
+             e['types'].most_common(1)[0][0] if e['types'] else None, e['rounds'] or None),
         )
 
     rows = []
-    for gid, (issue, h, sans) in enumerate(sorted(games, key=lambda g: (norm_date(g[1].get('Date')) or '', g[0])), start=1):
+    order = sorted(range(len(games)), key=lambda i: (norm_date(games[i][1].get('Date')) or '', games[i][0]))
+    for gid, gi in enumerate(order, start=1):
+        issue, h, sans = games[gi]
         we, be = int_or_none(h.get('WhiteElo')), int_or_none(h.get('BlackElo'))
         rows.append((
-            gid, event_id[ekey(h)], player_id[pkey(h, 'White')], player_id[pkey(h, 'Black')], we, be,
+            gid, event_id[gkey[gi]], player_id[pkey(h, 'White')], player_id[pkey(h, 'Black')], we, be,
             h.get('WhiteTitle') or None, h.get('BlackTitle') or None, (we + be) // 2 if we and be else None,
             h['Result'], norm_date(h.get('Date')), h.get('Round') if h.get('Round') not in (None, '?', '-') else None,
             h.get('ECO') or None, opening_for(sans.split(' ')), sans.count(' ') + 1, issue, sans,
+            team_name(h.get('WhiteTeam')), team_name(h.get('BlackTeam')),
         ))
     used_openings = {r[13] for r in rows if r[13]}
     db.executemany('INSERT INTO openings (slug, name, eco) VALUES (?,?,?)', [(s, *NAMES[s]) for s in sorted(used_openings)])
     db.executemany(
-        'INSERT INTO games (id, event_id, white_id, black_id, white_elo, black_elo, white_title, black_title, elo_avg, result, date, round, eco, opening, plies, twic, moves) '
-        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO games (id, event_id, white_id, black_id, white_elo, black_elo, white_title, black_title, elo_avg, result, date, round, eco, opening, plies, twic, moves, white_team, black_team) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         rows,
     )
     issues = [int(re.search(r'twic(\d+)g', f.name).group(1)) for f in files]
