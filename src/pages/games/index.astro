@@ -1,18 +1,11 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import GameTable from '../../components/GameTable.astro';
-import { recentTopGames, recentEvents, topPlayers } from '../../lib/games';
-import { env } from 'cloudflare:workers';
+import { getMeta, recentTopGames, recentEvents, topPlayers } from '../../lib/games';
 
 export const prerender = false;
 Astro.response.headers.set('Cache-Control', 'public, max-age=1800');
-const db = (env as { DB: D1Database }).DB;
-const [games, events, players, totals] = await Promise.all([
-  recentTopGames(20),
-  recentEvents(12),
-  topPlayers(24),
-  db.prepare("SELECT key, value FROM meta WHERE key IN ('games', 'players', 'events')").all<{ key: string; value: string }>(),
-]).then(([g, e, p, m]) => [g, e, p, Object.fromEntries(m.results.map((r) => [r.key, Number(r.value)])) as { games: number; players: number; events: number }] as const);
+const [games, events, players, totals] = await Promise.all([recentTopGames(20), recentEvents(12), topPlayers(24), getMeta()]);
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en');
 ---
 

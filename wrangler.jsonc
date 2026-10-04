@@ -1,7 +1,7 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"compatibility_date": "2026-10-01",
-	"compatibility_flags": ["global_fetch_strictly_public"],
+	"compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
 	"name": "cm-frontend",
 	"main": "@astrojs/cloudflare/entrypoints/server",
 	"workers_dev": false,
@@ -11,10 +11,12 @@
 		"directory": "./dist",
 		"binding": "ASSETS"
 	},
-	"d1_databases": [{ "binding": "DB", "database_name": "cm-games", "database_id": "8a8b6bce-cafd-4569-8ea3-58a08dc291f3" }],
+	// TWIC games database: Neon Postgres (read-only role) through Hyperdrive. `localConnectionString`
+	// is only used by `astro dev` / `wrangler dev`; point it at a local copy if you need one.
+	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
 	"previews": {
-		// Bindings aren't inherited by previews; they read the same (read-only use) games database.
-		"d1_databases": [{ "binding": "DB", "database_name": "cm-games", "database_id": "8a8b6bce-cafd-4569-8ea3-58a08dc291f3" }]
+		// Bindings aren't inherited by previews; they read the same games database.
+		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }]
 	},
 	"observability": {
 		"enabled": true

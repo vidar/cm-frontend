@@ -30,7 +30,7 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 | :-- | :-- |
 | `/puzzle/` | Daily puzzle (on-demand; changes 00:00 UTC), archive at `/puzzle/archive/`, JSON at `/puzzle/today.json` and `/puzzle/YYYY-MM-DD.json` |
 | `/openings/` | 149 opening families → `/openings/family/<slug>/` → 3,800+ lines at `/openings/<slug>/`; JSON at `/openings.json` |
-| `/games/`, `/players/<slug>/`, `/events/<slug>/`, `/games/<id>-<slug>/` | Games database (TWIC, D1 `cm-games`): search, player/event pages, game viewer; sitemaps at `/sitemaps/index.xml` |
+| `/games/`, `/players/<slug>/`, `/events/<slug>/`, `/games/<id>-<slug>/` | Games database (TWIC, Neon Postgres via Hyperdrive): search, player/event pages, game viewer; sitemaps at `/sitemaps/index.xml` |
 | `/analysis/` | Analysis board: Stockfish (in-browser, `public/engine/`), variations, PGN/FEN import/export, `?fen=`/`?pgn=` links |
 | `/board-image/` | FEN/PGN → diagram tool; image API at `/board.svg?fen=…` (on-demand) |
 | `/chess-clock/` | Client-side chess clock |
@@ -81,5 +81,5 @@ The build command is required: `wrangler deploy` uses the server entry point tha
 
 Pushes to `main` deploy to production at https://chessmoments.com.
 
-Bindings (KV, D1, R2, env vars, etc.) are configured in `wrangler.jsonc`. Local secrets go in
+Bindings (Hyperdrive, KV, D1, R2, env vars, etc.) are configured in `wrangler.jsonc`. Local secrets go in
 `.dev.vars` (git-ignored).

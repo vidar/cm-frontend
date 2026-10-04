@@ -1,11 +1,10 @@
 ---
 import { Chess } from 'chess.js';
-import { env } from 'cloudflare:workers';
 import Layout from '../../layouts/Layout.astro';
 import BoardDiagram from '../../components/BoardDiagram.astro';
 import GameTable from '../../components/GameTable.astro';
 import '../../styles/board.css';
-import { getGame, gamePath, headToHead, resultLabel, twicIssueUrl } from '../../lib/games';
+import { getGame, getOpeningName, gamePath, headToHead, resultLabel, twicIssueUrl } from '../../lib/games';
 
 export const prerender = false;
 
@@ -24,10 +23,9 @@ for (const san of sans) {
   last = [m.from, m.to];
 }
 const finalFen = chess.fen();
-const opening = game.opening
-  ? await (env as { DB: D1Database }).DB.prepare('SELECT name FROM openings WHERE slug = ?').bind(game.opening).first<{ name: string }>()
-  : null;
-const others = (await headToHead(game.white_id, game.black_id, 21)).filter((g) => g.id !== game.id).slice(0, 20);
+const [openingName, h2h] = await Promise.all([game.opening ? getOpeningName(game.opening) : null, headToHead(game.white_id, game.black_id, 21)]);
+const opening = openingName ? { name: openingName } : null;
+const others = h2h.filter((g) => g.id !== game.id).slice(0, 20);
 
 const who = (name: string, title: string | null) => `${title ? `${title} ` : ''}${name}`;
 const year = game.date?.slice(0, 4);

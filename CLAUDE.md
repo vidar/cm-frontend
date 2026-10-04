@@ -31,13 +31,15 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   Daily puzzles are on-demand routes (`prerender = false`) that switch at 00:00 UTC; the puzzle set
   runs out on 2028-10-01, regenerate before then. New top-level routes must be added to the
   reserved-names hint in `public/admin/config.yml`.
-- **Games database (TWIC):** D1 database `cm-games` (binding `DB`, also declared under `previews`),
-  built offline by `scripts/twic/` (see its README) from The Week in Chess, used with Mark
-  Crowther's permission for non-commercial use: keep the TWIC credit + issue link on game pages,
-  offer no bulk export/API of games, and tell the user if the site becomes commercial (paid tier).
-  `src/lib/games.ts` must only be imported by on-demand routes. Avoid queries that scan the games
-  table (D1 bills rows read): use indexed lookups and the `meta` table for totals. Database pages
-  are listed in `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`.
+- **Games database (TWIC):** Neon Postgres via Hyperdrive (binding `HYPERDRIVE`, also declared under
+  `previews`; the Hyperdrive config connects as the read-only role `readonly`), loaded offline by
+  `scripts/twic/` (see its README) from The Week in Chess, used with Mark Crowther's permission for
+  non-commercial use: keep the TWIC credit + issue link on game pages, offer no bulk export/API of
+  games, and tell the user if the site becomes commercial (paid tier). `src/lib/games.ts` must only
+  be imported by on-demand routes; run queries through its `query()` helper (one connection per
+  query, `$n` parameters). Use indexed lookups (`indexes.pg.sql`) and the `meta` table for totals;
+  `ORDER BY date DESC` needs `NULLS LAST` to match the indexes. Database pages are listed in
+  `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`.
 - **Wrangler config:** keep `previews: {}` and `preview_urls: true` in `wrangler.jsonc`, and
   keep `session: false` in `astro.config.mjs` unless a KV namespace ID is configured for both
   production and `previews` (`wrangler preview` can't auto-provision bindings).
