@@ -4,7 +4,7 @@ import GameTable from '../../components/GameTable.astro';
 import { getMeta, recentTopGames, recentEvents, topPlayers } from '../../lib/games';
 
 export const prerender = false;
-Astro.response.headers.set('Cache-Control', 'public, max-age=1800');
+Astro.response.headers.set('Cache-Control', 'public, max-age=1800, s-maxage=86400');
 const [games, events, players, totals] = await Promise.all([recentTopGames(20), recentEvents(12), topPlayers(24), getMeta()]);
 const fmt = (n?: number) => (n ?? 0).toLocaleString('en');
 ---

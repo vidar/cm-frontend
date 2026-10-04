@@ -22,7 +22,7 @@ if (!data) {
   if (moved) return Astro.redirect(`/events/${moved}/`, 301);
   return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
 }
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 const { event, a } = data;
 const base = `/events/${event.slug}/`;
 const R = a.rounds.map((r) => r.n);

@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import { recentEvents } from '../../lib/games';
 
 export const prerender = false;
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 const events = await recentEvents(200);
 ---
 

@@ -17,17 +17,46 @@ const path = Astro.url.pathname.replace(/\/?$/, '/');
 const menuPages = (await getCollection('pages', ({ data }) => data.showInMenu)).sort(
   (a, b) => a.data.menuOrder - b.data.menuOrder || a.data.title.localeCompare(b.data.title),
 );
-const links = [
-  { href: '/', label: 'Home' },
-  { href: '/puzzle/', label: 'Daily puzzle' },
-  { href: '/openings/', label: 'Openings' },
-  { href: '/analysis/', label: 'Analysis' },
-  { href: '/games/', label: 'Games' },
-  { href: '/chess-clock/', label: 'Clock' },
-  { href: '/coordinates-trainer/', label: 'Coordinates' },
-  { href: '/board-image/', label: 'Board image' },
-  ...menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.title })),
+// Navigation: the tools grouped by what you do with them; CMS pages follow as plain links.
+const groups = [
+  {
+    label: 'Train',
+    items: [
+      { href: '/puzzle/', label: 'Daily puzzle', note: 'A new puzzle every day' },
+      { href: '/puzzle/archive/', label: 'Puzzle archive', note: 'Every past daily puzzle' },
+      { href: '/coordinates-trainer/', label: 'Coordinates trainer', note: 'Learn the squares in 30 seconds' },
+    ],
+  },
+  {
+    label: 'Study',
+    items: [
+      { href: '/openings/', label: 'Openings', note: 'Every named line with statistics' },
+      { href: '/analysis/', label: 'Analysis board', note: 'Stockfish in your browser' },
+    ],
+  },
+  {
+    label: 'Games',
+    items: [
+      { href: '/games/', label: 'Games database', note: 'Millions of master games' },
+      { href: '/players/', label: 'Players', note: 'Search any player' },
+      { href: '/events/', label: 'Events', note: 'Tournaments, round by round' },
+    ],
+  },
+  {
+    label: 'Tools',
+    items: [
+      { href: '/chess-clock/', label: 'Chess clock', note: 'For over-the-board games' },
+      { href: '/board-image/', label: 'Board image', note: 'Diagrams from FEN or PGN' },
+    ],
+  },
 ];
+const isCurrent = (href: string) => path === href || (href !== '/' && path.startsWith(href));
+// The most specific match wins (/puzzle/archive/ over /puzzle/).
+const currentHref = groups
+  .flatMap((g) => g.items.map((i) => i.href))
+  .filter(isCurrent)
+  .sort((a, b) => b.length - a.length)[0];
+const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.title }));
 ---
 
 <!doctype html>
@@ -50,17 +79,46 @@ const links = [
     <title>{`${title} | ${SITE_NAME}`}</title>
   </head>
   <body>
-    <header>
-      <nav>
-        {
-          links.map(({ href, label }) => (
-            <a href={href} aria-current={path === href || (href !== '/' && path.startsWith(href)) ? 'page' : undefined}>
-              {label}
-            </a>
-          ))
-        }
+    <header class:list={{ wide }}>
+      <nav aria-label="Main">
+        <a class="brand" href="/" aria-current={path === '/' ? 'page' : undefined}>{SITE_NAME}</a>
+        <ul class="menu">
+          {groups.map((g) => (
+            <li>
+              <details class="group" data-current={g.items.some((i) => i.href === currentHref) ? '' : undefined}>
+                <summary>{g.label}</summary>
+                <ul class="panel">
+                  {g.items.map((i) => (
+                    <li>
+                      <a href={i.href} aria-current={i.href === currentHref ? 'page' : undefined}>
+                        <span class="label">{i.label}</span>
+                        <span class="note">{i.note}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </li>
+          ))}
+          {pages.map((p) => (
+            <li><a class="plain" href={p.href} aria-current={isCurrent(p.href) ? 'page' : undefined}>{p.label}</a></li>
+          ))}
+        </ul>
       </nav>
     </header>
+    <script is:inline>
+      // One menu open at a time; close on outside click or Escape.
+      document.addEventListener('click', (e) => {
+        for (const d of document.querySelectorAll('nav details[open]')) if (!d.contains(e.target)) d.open = false;
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        for (const d of document.querySelectorAll('nav details[open]')) {
+          d.open = false;
+          d.querySelector('summary').focus();
+        }
+      });
+    </script>
     <main class:list={{ wide }}>
       <slot />
     </main>
@@ -114,25 +172,114 @@ const links = [
   nav {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem 1.25rem;
+    align-items: center;
+    gap: 0.25rem 1.5rem;
+    position: relative;
+  }
+  .brand {
+    font-weight: 800;
+    color: var(--fg);
+    text-decoration: none;
+    letter-spacing: -0.01em;
+  }
+  .menu {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.1rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .menu > li {
+    position: relative;
+  }
+  summary,
+  .plain {
+    color: var(--muted);
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: none;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::after {
+    content: '';
+    display: inline-block;
+    margin-left: 0.35rem;
+    border: 0.25rem solid transparent;
+    border-top-color: currentColor;
+    border-bottom-width: 0;
+    vertical-align: 0.15rem;
+  }
+  details[open] > summary::after {
+    transform: rotate(180deg);
+  }
+  summary:hover,
+  .plain:hover,
+  .plain[aria-current='page'],
+  details[open] > summary,
+  details[data-current] > summary,
+  .brand:hover {
+    color: var(--accent);
+  }
+  .panel {
+    position: absolute;
+    top: calc(100% + 0.4rem);
+    left: -0.75rem;
+    z-index: 20;
+    min-width: 16rem;
+    list-style: none;
+    margin: 0;
+    padding: 0.35rem;
+    background: var(--bg);
+    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+  }
+  .panel a {
+    display: block;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+    text-decoration: none;
+    color: var(--fg);
+    line-height: 1.3;
+  }
+  .panel a:hover,
+  .panel a:focus-visible {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .panel a[aria-current='page'] .label {
+    color: var(--accent);
+  }
+  .panel .label {
+    display: block;
+    font-weight: 600;
+  }
+  .panel .note {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  @media (max-width: 30rem) {
+    .menu > li {
+      position: static;
+    }
+    .panel {
+      left: 0;
+      right: 0;
+    }
   }
   footer a {
     color: inherit;
-  }
-  nav a {
-    color: var(--muted);
-    text-decoration: none;
-    font-weight: 500;
-  }
-  nav a:hover,
-  nav a[aria-current='page'] {
-    color: var(--accent);
   }
   main img {
     max-width: 100%;
     height: auto;
   }
-  main.wide {
+  main.wide,
+  header.wide {
     max-width: 72rem;
   }
   footer {

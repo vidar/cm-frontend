@@ -7,7 +7,7 @@ export const prerender = false;
 
 const player = await getPlayer(Astro.params.slug ?? '');
 if (!player) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 
 const q = Astro.url.searchParams;
 const page = Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1);
