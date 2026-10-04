@@ -67,7 +67,7 @@ const pgn = [
   </h1>
   <p class="meta">
     <strong>{resultLabel(game.result)}</strong>{' · '}<a href={`/events/${game.event_slug}/`}>{game.event_name}</a>{game.round && `, round ${game.round}`}
-    {game.event_site && ` · ${game.event_site}`} · {game.date}
+    {game.event_site && ` · ${game.event_site}`}{game.date && ` · ${game.date}`}
     {(game.white_elo || game.black_elo) && ` · ratings ${game.white_elo ?? '–'} / ${game.black_elo ?? '–'}`}
   </p>
   {opening && (
@@ -138,7 +138,7 @@ const pgn = [
   .moves .result { display: block; font-weight: 600; padding: 0.2rem 0 0 2.5rem; }
   .mv { cursor: pointer; padding: 0 0.3rem; border-radius: 3px; justify-self: start; }
   .mv:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
-  .mv.current { background: var(--accent); color: #fff; }
+  .mv.current { background: var(--accent-fill); color: #fff; }
   .pgn { white-space: pre-wrap; font-size: 0.8rem; }
   .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
 </style>

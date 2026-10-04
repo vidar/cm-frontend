@@ -2,7 +2,7 @@ import { PIECES } from './pieces';
 
 export const LIGHT = '#f0d9b5';
 export const DARK = '#b58863';
-const HIGHLIGHT = 'rgba(155, 199, 0, 0.41)';
+const HIGHLIGHT = 'rgba(226, 168, 48, 0.42)';
 
 const FILES = 'abcdefgh';
 

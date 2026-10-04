@@ -82,7 +82,8 @@ const presets = [
   .side {
     border: 0;
     border-radius: 12px;
-    background: color-mix(in srgb, currentColor 10%, transparent);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
     color: inherit;
     font: inherit;
     cursor: pointer;
@@ -92,16 +93,15 @@ const presets = [
     -webkit-tap-highlight-color: transparent;
   }
   .side.top { transform: rotate(180deg); }
-  .side.active { background: #16a34a; color: #fff; }
-  .side.low.active { background: #ea580c; }
-  .side.flagged { background: #dc2626; color: #fff; }
+  .side.active { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
+  .side.low.active { background: #9a3412; border-color: #9a3412; }
+  .side.flagged { background: var(--loss); border-color: var(--loss); color: #fff; }
   .time { font-size: clamp(3rem, 16vw, 7rem); font-variant-numeric: tabular-nums; font-weight: 700; line-height: 1; }
   .moves { font-size: 0.9rem; opacity: 0.8; min-height: 1.2em; }
   .bar { display: flex; gap: 0.5rem; justify-content: center; }
-  .bar button, .presets button { font: inherit; padding: 0.35rem 0.8rem; cursor: pointer; }
-  .settings fieldset { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; margin-top: 1rem; }
+  .settings fieldset { border: 1px solid var(--border); border-radius: var(--radius); margin-top: 1rem; background: var(--surface); }
   .presets { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
-  .presets button.selected { outline: 2px solid var(--accent); }
+  .presets button.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .custom { display: flex; flex-wrap: wrap; gap: 0.75rem; }
   .custom input { width: 5rem; }
 </style>

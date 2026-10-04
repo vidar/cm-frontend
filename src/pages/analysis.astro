@@ -85,8 +85,8 @@ import '../styles/board.css';
   }
   .board-wrap :global(.promo button) { font: inherit; padding: 0.4rem; cursor: pointer; }
   .board-wrap :global(.cm-board) { width: 100%; }
-  .evalbar { width: 0.9rem; border-radius: 3px; background: #1f2937; position: relative; overflow: hidden; }
-  .evalbar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f5f5f4; transition: height 0.3s; }
+  .evalbar { width: 0.9rem; border-radius: 3px; background: #2a241d; position: relative; overflow: hidden; }
+  .evalbar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f4efe6; transition: height 0.3s; }
   .evalbar.flipped .evalbar-fill { top: 0; bottom: auto; }
   .nav { display: flex; gap: 0.35rem; margin-top: 0.5rem; padding-left: 1.3rem; }
   .nav button, .move-actions button, .io button, .copy button { font: inherit; padding: 0.3rem 0.7rem; cursor: pointer; }
@@ -100,7 +100,7 @@ import '../styles/board.css';
   .moves { max-height: 22rem; overflow-y: auto; line-height: 1.9; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px; padding: 0.5rem 0.7rem; min-height: 4rem; }
   .moves :global(.mv) { cursor: pointer; padding: 0.05rem 0.25rem; border-radius: 3px; white-space: nowrap; }
   .moves :global(.mv:hover) { background: color-mix(in srgb, currentColor 10%, transparent); }
-  .moves :global(.mv.current) { background: var(--accent); color: #fff; }
+  .moves :global(.mv.current) { background: var(--accent-fill); color: #fff; }
   .moves :global(.num) { color: var(--muted); margin-left: 0.3rem; }
   .moves :global(.var) { display: block; margin-left: 1rem; color: var(--muted); font-size: 0.92em; }
   .moves :global(.var .mv) { color: var(--fg); }
@@ -109,7 +109,7 @@ import '../styles/board.css';
   .io textarea, .copy input { width: 100%; font-family: ui-monospace, monospace; font-size: 0.8rem; }
   .copy { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
   .copy input { flex: 1; min-width: 0; }
-  .error { color: #dc2626; }
+  .error { color: var(--loss); }
   .muted { color: var(--muted); }
   .small { font-size: 0.85rem; }
 </style>

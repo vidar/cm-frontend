@@ -40,6 +40,14 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   query, `$n` parameters). Use indexed lookups (`indexes.pg.sql`) and the `meta` table for totals;
   `ORDER BY date DESC` needs `NULLS LAST` to match the indexes. Database pages are listed in
   `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`.
+- **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
+  `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
+  `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),
+  with dark values under `prefers-color-scheme`. Use tokens, not hex. Amber is for links in running
+  text, the active nav item, current/selected states and key highlights; table and list links stay
+  `--fg`. Fonts (self-hosted via Astro's fonts API in `astro.config.mjs`): Fraunces for headings
+  (`--font-head`), Inter for text (`--font-body`). Global button/input styles use `:where()` so
+  component styles override them; `button.primary` is the filled amber button.
 - **Wrangler config:** keep `previews: {}` and `preview_urls: true` in `wrangler.jsonc`, and
   keep `session: false` in `astro.config.mjs` unless a KV namespace ID is configured for both
   production and `previews` (`wrangler preview` can't auto-provision bindings).

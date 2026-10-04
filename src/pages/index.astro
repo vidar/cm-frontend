@@ -24,7 +24,11 @@ const { Content } = await render(home);
 
 <style>
   .tools { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 1rem; margin-top: 2rem; }
-  .tools li { border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 8px; padding: 0.9rem 1rem; }
-  .tools a { color: var(--accent); text-decoration: none; }
-  .tools p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.95rem; }
+  .tools li { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem 1.1rem; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+  .tools li:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: var(--shadow); transform: translateY(-1px); }
+  .tools a { color: var(--fg); text-decoration: none; font-family: var(--font-head); font-size: 1.15rem; font-weight: 500; }
+  .tools a::after { content: ''; position: absolute; inset: 0; }
+  .tools a::before { content: '→'; float: right; color: var(--accent); font-family: var(--font-body); opacity: 0; transform: translateX(-4px); transition: opacity 0.15s, transform 0.15s; }
+  .tools li:hover a::before { opacity: 1; transform: none; }
+  .tools p { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.93rem; line-height: 1.5; }
 </style>

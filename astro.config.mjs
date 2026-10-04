@@ -1,5 +1,5 @@
 // @ts-check
-import { defineConfig } from 'astro/config';
+import { defineConfig, fontProviders } from 'astro/config';
 
 import cloudflare from '@astrojs/cloudflare';
 import sitemap from '@astrojs/sitemap';
@@ -19,6 +19,28 @@ export default defineConfig({
   // Sessions are unused; disabling them stops the adapter from adding a
   // SESSION KV binding, which `wrangler preview` can't auto-provision.
   session: false,
+
+  // Self-hosted at build time (downloaded from Fontsource, served from /_astro/fonts/).
+  fonts: [
+    {
+      provider: fontProviders.fontsource(),
+      name: 'Fraunces',
+      cssVariable: '--font-display',
+      weights: ['400 700'],
+      styles: ['normal'],
+      subsets: ['latin'],
+      fallbacks: ['Georgia', 'serif'],
+    },
+    {
+      provider: fontProviders.fontsource(),
+      name: 'Inter',
+      cssVariable: '--font-text',
+      weights: ['400 700'],
+      styles: ['normal'],
+      subsets: ['latin'],
+      fallbacks: ['system-ui', 'sans-serif'],
+    },
+  ],
 
   // Includes every prerendered page automatically. On-demand (SSR) routes
   // must be added via `customPages` — see CLAUDE.md.

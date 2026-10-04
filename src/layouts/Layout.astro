@@ -1,5 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
+import { Font } from 'astro:assets';
 
 interface Props {
   title: string;
@@ -76,6 +77,10 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     <meta property="og:url" content={canonical} />
     <meta name="twitter:card" content="summary" />
     <meta name="generator" content={Astro.generator} />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15120e" media="(prefers-color-scheme: dark)" />
+    <Font cssVariable="--font-display" preload />
+    <Font cssVariable="--font-text" preload />
     <title>{`${title} | ${SITE_NAME}`}</title>
   </head>
   <body>
@@ -85,9 +90,9 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
         <ul class="menu">
           {groups.map((g) => (
             <li>
-              <details class="group" data-current={g.items.some((i) => i.href === currentHref) ? '' : undefined}>
+              <details class="nav-group" data-current={g.items.some((i) => i.href === currentHref) ? '' : undefined}>
                 <summary>{g.label}</summary>
-                <ul class="panel">
+                <ul class="nav-panel">
                   {g.items.map((i) => (
                     <li>
                       <a href={i.href} aria-current={i.href === currentHref ? 'page' : undefined}>
@@ -122,7 +127,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     <main class:list={{ wide }}>
       <slot />
     </main>
-    <footer>
+    <footer class:list={{ wide }}>
       <p>
         &copy; {new Date().getFullYear()} {SITE_NAME} · <a href="/credits/">Credits</a> · <a href="/llms.txt">llms.txt</a>
       </p>
@@ -138,18 +143,41 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
 </html>
 
 <style is:global>
+  /* Design tokens: warm paper / warm black, stone greys, amber used sparingly. */
   :root {
     color-scheme: light dark;
-    --fg: #111827;
-    --bg: #ffffff;
-    --muted: #6b7280;
-    --accent: #f38020;
+    --bg: #fbfaf7;
+    --surface: #ffffff;
+    --surface-2: #f4f1ea;
+    --fg: #1c1917;
+    --muted: #6f6a64;
+    --border: #e7e1d6;
+    --border-strong: #d6cdbd;
+    --accent: #b45309; /* text-safe amber (links, active states) */
+    --accent-fill: #b45309; /* filled controls, with white text */
+    --accent-soft: #fbf0dc; /* tints */
+    --win: #2f7d46;
+    --loss: #b4382f;
+    --shadow: 0 10px 30px rgba(60, 40, 10, 0.12);
+    --radius: 8px;
+    --font-body: var(--font-text), system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-head: var(--font-display), Georgia, serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --fg: #f3f4f6;
-      --bg: #0b0f17;
-      --muted: #9ca3af;
+      --bg: #15120e;
+      --surface: #1c1814;
+      --surface-2: #26201a;
+      --fg: #efe9df;
+      --muted: #a39b90;
+      --border: #332b22;
+      --border-strong: #4a3f32;
+      --accent: #e9a94b;
+      --accent-fill: #b45309;
+      --accent-soft: #2e2416;
+      --win: #6cc28a;
+      --loss: #ec8a7f;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     }
   }
   * {
@@ -157,11 +185,157 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
   }
   body {
     margin: 0;
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--font-body);
+    font-size: 1rem;
     line-height: 1.6;
     color: var(--fg);
     background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: 'cv11', 'ss01';
   }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-head);
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    font-variation-settings: 'SOFT' 50;
+    text-wrap: balance;
+  }
+  h1 {
+    font-size: clamp(1.9rem, 1.4rem + 2vw, 2.6rem);
+    margin: 0.5rem 0 0.75rem;
+  }
+  h2,
+  h3 {
+    font-weight: 500;
+  }
+  h2 {
+    font-size: 1.45rem;
+    margin: 2rem 0 0.6rem;
+  }
+  h3 {
+    font-size: 1.15rem;
+  }
+  a {
+    color: var(--accent);
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+    text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  a:hover {
+    text-decoration-color: currentColor;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  code,
+  kbd,
+  pre {
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  kbd {
+    border: 1px solid var(--border-strong);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 0 0.3em;
+    background: var(--surface);
+  }
+
+  /* Form controls */
+  :where(button, input, select, textarea) {
+    font: inherit;
+    color: inherit;
+  }
+  :where(button, .button) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--fg);
+    cursor: pointer;
+    line-height: 1.3;
+    text-decoration: none;
+    transition: border-color 0.15s, background-color 0.15s;
+  }
+  :where(button:hover:not(:disabled), .button:hover) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  :where(button:disabled) {
+    opacity: 0.5;
+    cursor: default;
+  }
+  :where(button.primary, .button.primary) {
+    background: var(--accent-fill);
+    border-color: var(--accent-fill);
+    color: #fff;
+    font-weight: 600;
+  }
+  :where(button.primary:hover:not(:disabled), .button.primary:hover) {
+    background: color-mix(in srgb, var(--accent-fill) 88%, #000);
+    border-color: color-mix(in srgb, var(--accent-fill) 88%, #000);
+  }
+  :where(input:not([type='checkbox'], [type='radio'], [type='range']), select, textarea) {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    max-width: 100%;
+  }
+  :where(input:focus-visible, select:focus-visible, textarea:focus-visible) {
+    outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+    outline-offset: 0;
+    border-color: var(--accent);
+  }
+  :where(input[type='checkbox'], input[type='radio'], input[type='range']) {
+    accent-color: var(--accent-fill);
+  }
+  details > summary {
+    cursor: pointer;
+  }
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+  th {
+    color: var(--muted);
+    font-weight: 600;
+  }
+  /* Links inside tables, lists and breadcrumbs stay quiet; amber on hover. Links in running
+     text keep the accent. */
+  :where(td, main li, .crumbs) a:not(.ev-r) {
+    color: var(--fg);
+    text-decoration-color: var(--border-strong);
+  }
+  :where(td, main li, .crumbs) a:not(.ev-r):hover {
+    color: var(--accent);
+    text-decoration-color: currentColor;
+  }
+  .crumbs {
+    font-size: 0.88rem;
+    color: var(--muted);
+  }
+  .crumbs a {
+    color: var(--muted) !important;
+  }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Page frame */
   header,
   main,
   footer {
@@ -169,23 +343,52 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     margin: 0 auto;
     padding: 1rem;
   }
+  header {
+    padding-top: 1.1rem;
+    padding-bottom: 0.9rem;
+  }
+  main.wide,
+  header.wide,
+  footer.wide {
+    max-width: 72rem;
+  }
+  main img {
+    max-width: 100%;
+    height: auto;
+  }
+  footer {
+    margin-top: 3rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  footer a {
+    color: inherit;
+  }
+
+  /* Navigation */
   nav {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 0.25rem 1.5rem;
+    align-items: baseline;
+    gap: 0.25rem 1.75rem;
     position: relative;
   }
   .brand {
-    font-weight: 800;
+    font-family: var(--font-head);
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: -0.015em;
     color: var(--fg);
     text-decoration: none;
-    letter-spacing: -0.01em;
+  }
+  .brand::first-letter {
+    color: var(--accent);
   }
   .menu {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem 1.1rem;
+    gap: 0.25rem 1.2rem;
     list-style: none;
     margin: 0;
     padding: 0;
@@ -193,18 +396,17 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
   .menu > li {
     position: relative;
   }
-  summary,
-  .plain {
+  .nav-group > summary,
+  .menu .plain {
     color: var(--muted);
     font-weight: 500;
-    cursor: pointer;
     text-decoration: none;
     list-style: none;
   }
-  summary::-webkit-details-marker {
+  .nav-group > summary::-webkit-details-marker {
     display: none;
   }
-  summary::after {
+  .nav-group > summary::after {
     content: '';
     display: inline-block;
     margin-left: 0.35rem;
@@ -212,78 +414,73 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     border-top-color: currentColor;
     border-bottom-width: 0;
     vertical-align: 0.15rem;
+    opacity: 0.7;
   }
-  details[open] > summary::after {
+  .nav-group[open] > summary::after {
     transform: rotate(180deg);
   }
-  summary:hover,
-  .plain:hover,
-  .plain[aria-current='page'],
-  details[open] > summary,
-  details[data-current] > summary,
+  .nav-group > summary:hover,
+  .nav-group[open] > summary,
+  .menu .plain:hover,
   .brand:hover {
-    color: var(--accent);
+    color: var(--fg);
   }
-  .panel {
+  .nav-group[data-current] > summary,
+  .menu .plain[aria-current='page'] {
+    color: var(--fg);
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.45em;
+  }
+  .nav-panel {
     position: absolute;
-    top: calc(100% + 0.4rem);
+    top: calc(100% + 0.5rem);
     left: -0.75rem;
     z-index: 20;
     min-width: 16rem;
     list-style: none;
     margin: 0;
     padding: 0.35rem;
-    background: var(--bg);
-    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
-    border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
   }
-  .panel a {
+  .nav-panel a {
     display: block;
-    padding: 0.4rem 0.6rem;
+    padding: 0.45rem 0.65rem;
     border-radius: 6px;
     text-decoration: none;
     color: var(--fg);
     line-height: 1.3;
   }
-  .panel a:hover,
-  .panel a:focus-visible {
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  .nav-panel a:hover,
+  .nav-panel a:focus-visible {
+    background: var(--accent-soft);
   }
-  .panel a[aria-current='page'] .label {
+  .nav-panel a[aria-current='page'] .label {
     color: var(--accent);
   }
-  .panel .label {
+  .nav-panel .label {
     display: block;
     font-weight: 600;
   }
-  .panel .note {
+  .nav-panel .note {
     display: block;
     font-size: 0.8rem;
     color: var(--muted);
   }
   @media (max-width: 30rem) {
+    nav {
+      gap: 0.4rem 1rem;
+    }
     .menu > li {
       position: static;
     }
-    .panel {
+    .nav-panel {
       left: 0;
       right: 0;
     }
-  }
-  footer a {
-    color: inherit;
-  }
-  main img {
-    max-width: 100%;
-    height: auto;
-  }
-  main.wide,
-  header.wide {
-    max-width: 72rem;
-  }
-  footer {
-    color: var(--muted);
-    font-size: 0.875rem;
   }
 </style>
