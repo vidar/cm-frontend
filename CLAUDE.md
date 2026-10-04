@@ -17,6 +17,12 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   - exclude private/utility routes (account pages, API endpoints, admin-like UIs) with the
     sitemap `filter` option and a `Disallow` line in `src/pages/robots.txt.ts`;
   - after `npm run build`, check `dist/client/sitemap-0.xml` and `dist/client/robots.txt`.
+- **AI crawlers:** `src/pages/robots.txt.ts` is the single source of the policy: search/assistant
+  agents may read everything; AI *training* crawlers are disallowed on the TWIC database paths
+  (`/games/`, `/players/`, `/events/`, `/sitemaps/`) because Mark's permission covers display only.
+  Cloudflare's "Block AI bots", managed robots.txt and AI-training preference are therefore off for
+  the zone; don't re-enable them without updating this policy. Social preview cards: `/og.png`
+  (`src/lib/og.ts`, `og-url.ts`); pass `og={{...}}` to `Layout` for page-specific cards.
 - **llms.txt must stay current too.** `src/pages/llms.txt.ts` lists the tools (from `src/lib/tools.ts`),
   machine-readable endpoints and CMS pages. When adding a tool, add it to `TOOLS`; when adding an
   endpoint or data route, add it to llms.txt.
