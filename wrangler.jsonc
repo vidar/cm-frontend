@@ -18,6 +18,9 @@
 		// Bindings aren't inherited by previews; they read the same games database.
 		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }]
 	},
+	// Run the Worker next to Neon (Frankfurt): database pages make several sequential queries, so one
+	// long hop from the visitor beats several long hops to the database. Static assets are unaffected.
+	"placement": { "region": "aws:eu-central-1" },
 	"observability": {
 		"enabled": true
 	}
