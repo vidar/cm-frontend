@@ -4,10 +4,12 @@ import { getCollection } from 'astro:content';
 interface Props {
   title: string;
   description?: string;
+  /** Wider main column (e.g. the analysis board). */
+  wide?: boolean;
 }
 
 const SITE_NAME = 'chessmoments';
-const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.' } = Astro.props;
+const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
 const path = Astro.url.pathname.replace(/\/?$/, '/');
 
@@ -19,6 +21,7 @@ const links = [
   { href: '/', label: 'Home' },
   { href: '/puzzle/', label: 'Daily puzzle' },
   { href: '/openings/', label: 'Openings' },
+  { href: '/analysis/', label: 'Analysis' },
   { href: '/chess-clock/', label: 'Clock' },
   { href: '/coordinates-trainer/', label: 'Coordinates' },
   { href: '/board-image/', label: 'Board image' },
@@ -57,7 +60,7 @@ const links = [
         }
       </nav>
     </header>
-    <main>
+    <main class:list={{ wide }}>
       <slot />
     </main>
     <footer>
@@ -127,6 +130,9 @@ const links = [
   main img {
     max-width: 100%;
     height: auto;
+  }
+  main.wide {
+    max-width: 72rem;
   }
   footer {
     color: var(--muted);

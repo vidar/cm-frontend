@@ -25,6 +25,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   its README; Lichess, CC0). Pieces are cburnett (BSD-3) — keep the credit on `/credits/`.
   Opening stats/evals are generated offline (`scripts/`, see `src/data/README.md`) and must only be
   imported by prerendered pages so they stay out of the Worker bundle.
+  The analysis board (`/analysis/`, `src/scripts/analysis.ts`, `tree.ts`, `engine.ts`) runs Stockfish
+  from `public/engine/` (vendored lite single-threaded build, GPL-3: keep `COPYING.txt`/`README.txt`
+  with source links next to it; no COOP/COEP headers needed).
   Daily puzzles are on-demand routes (`prerender = false`) that switch at 00:00 UTC; the puzzle set
   runs out on 2028-10-01, regenerate before then. New top-level routes must be added to the
   reserved-names hint in `public/admin/config.yml`.

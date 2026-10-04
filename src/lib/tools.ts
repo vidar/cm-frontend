@@ -13,6 +13,12 @@ export const TOOLS = [
     agent: 'One page per line at /openings/<slug>/ (games, win/draw/loss by rating, most played replies, Stockfish eval, example games); index with stats as JSON at /openings.json',
   },
   {
+    href: '/analysis/',
+    name: 'Analysis board',
+    blurb: 'Analyse any position or game with Stockfish in your browser, with variations and PGN export.',
+    agent: 'Open a position: /analysis/?fen=<FEN> (spaces may be "_"), or a game: /analysis/?pgn=<SAN moves>, optional &flip=1. Engine runs client-side.',
+  },
+  {
     href: '/board-image/',
     name: 'Board image generator',
     blurb: 'Turn a FEN or PGN into a chess diagram you can embed anywhere.',

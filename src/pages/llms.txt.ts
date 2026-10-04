@@ -19,6 +19,7 @@ ${TOOLS.map((t) => `- [${t.name}](${abs(t.href)}): ${t.blurb} ${t.agent}`).join(
 - ${abs('/board.svg')}?fen=<FEN>: render any position as SVG. Parameters: fen (spaces may be "_"), flip=1, lastmove=e2e4, highlight=a1,h8, size=64..2048, coords=0. CORS enabled.
 - ${abs('/puzzle/today.json')}: today's puzzle (FEN, side to move, rating, themes, solution in SAN and UCI, image URL). Changes at 00:00 UTC.
 - ${abs('/puzzle/')}YYYY-MM-DD.json: a past daily puzzle.
+- ${abs('/openings-index.json')}: compact map of SAN move sequences (space-separated) to [slug, name, ECO] for every named opening.
 - ${abs('/openings.json')}: all named openings (name, ECO, PGN, FEN, page URL, games in a Lichess sample, white/draw/black %, top replies, Stockfish eval).
 
 ## Pages

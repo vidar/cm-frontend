@@ -21,6 +21,7 @@ const siblings = getOpenings()
 const sideToMove = opening.fen.split(' ')[1] === 'w' ? 'White' : 'Black';
 const imageUrl = `/board.svg?fen=${opening.fen.replace(/ /g, '_')}&lastmove=${opening.lastMove.join('')}`;
 const lichessUrl = `https://lichess.org/analysis/pgn/${encodeURIComponent(opening.moves.join(' '))}`;
+const analysisUrl = `/analysis/?pgn=${encodeURIComponent(opening.moves.join(' '))}`;
 const stats = getStats(opening);
 const engine = getEval(opening);
 const bestLine = engine ? pvToSan(opening, engine.pv) : [];
@@ -81,7 +82,7 @@ const description = stats
   </dl>
 
   <p class="actions">
-    <a href={imageUrl}>Board image (SVG)</a>{' · '}<a href={lichessUrl} rel="nofollow">Analyse on Lichess</a>
+    <a href={analysisUrl}><strong>Analyse with Stockfish</strong></a>{' · '}<a href={imageUrl}>Board image (SVG)</a>{' · '}<a href={lichessUrl} rel="nofollow">Open on Lichess</a>
   </p>
 
   {stats && total && (

@@ -1,0 +1,120 @@
+---
+import Layout from '../layouts/Layout.astro';
+import '../styles/board.css';
+---
+
+<Layout
+  title="Free chess analysis board with Stockfish"
+  description="Analyse any chess position or game in your browser with Stockfish: evaluation bar, top engine lines, variations, PGN and FEN import/export and shareable links."
+  wide
+>
+  <h1>Analysis board</h1>
+
+  <div class="analysis" id="analysis">
+    <div class="board-col">
+      <div class="board-row">
+        <div class="evalbar" id="evalbar" aria-hidden="true"><div class="evalbar-fill" id="evalbar-fill"></div></div>
+        <div id="board" class="board-wrap"></div>
+      </div>
+      <div class="nav" role="toolbar" aria-label="Move navigation">
+        <button type="button" data-nav="start" title="Start (↑)" aria-label="Go to start">⏮</button>
+        <button type="button" data-nav="prev" title="Previous (←)" aria-label="Previous move">◀</button>
+        <button type="button" data-nav="next" title="Next (→)" aria-label="Next move">▶</button>
+        <button type="button" data-nav="end" title="End (↓)" aria-label="Go to end">⏭</button>
+        <button type="button" id="flip" title="Flip board (f)">Flip</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <section class="engine">
+        <div class="engine-head">
+          <label class="toggle"><input type="checkbox" id="engine-on" checked /> Stockfish</label>
+          <span class="muted small" id="engine-status">loading…</span>
+        </div>
+        <ol class="lines" id="engine-lines"></ol>
+      </section>
+
+      <p class="opening" id="opening"></p>
+
+      <section class="moves" id="moves" aria-label="Moves"></section>
+      <div class="move-actions">
+        <button type="button" id="promote" disabled>Make main line</button>
+        <button type="button" id="delete" disabled>Delete from here</button>
+      </div>
+
+      <details class="io">
+        <summary>Import FEN or PGN</summary>
+        <textarea id="import-text" rows="5" spellcheck="false" placeholder="Paste a FEN or a PGN"></textarea>
+        <button type="button" id="import">Load</button>
+        <p class="error" id="import-error" role="alert" hidden></p>
+      </details>
+      <details class="io" id="export">
+        <summary>Export and share</summary>
+        <label for="fen-out">FEN</label>
+        <div class="copy"><input id="fen-out" readonly /><button type="button" data-copy="fen-out">Copy</button></div>
+        <label for="link-out">Share link</label>
+        <div class="copy"><input id="link-out" readonly /><button type="button" data-copy="link-out">Copy</button></div>
+        <label for="pgn-out">PGN (with variations)</label>
+        <textarea id="pgn-out" rows="5" readonly></textarea>
+        <div class="copy"><button type="button" data-copy="pgn-out">Copy PGN</button> <a id="image-link" href="/board-image/">Board image of this position</a></div>
+      </details>
+    </div>
+  </div>
+
+  <h2>How to use it</h2>
+  <ul>
+    <li>Drag or click pieces to play moves. Playing a different move from an earlier position creates a variation.</li>
+    <li>Use <kbd>←</kbd> <kbd>→</kbd> to step through moves, <kbd>↑</kbd> <kbd>↓</kbd> to jump to the start or end, and <kbd>f</kbd> to flip the board.</li>
+    <li>Stockfish runs entirely in your browser and shows the three best lines. Click a line to play its first move.</li>
+    <li>Link to any position with <code>/analysis/?fen=&lt;FEN&gt;</code> or a game with <code>/analysis/?pgn=&lt;moves&gt;</code> (add <code>&amp;flip=1</code> for Black's view).</li>
+  </ul>
+  <p class="muted small">
+    Engine: <a href="https://stockfishchess.org/">Stockfish</a> 19 (lite WebAssembly build via{' '}
+    <a href="https://github.com/nmrugg/stockfish.js">Stockfish.js</a>), GPLv3 — <a href="/engine/README.txt">source and licence</a>.
+  </p>
+</Layout>
+
+<style>
+  .analysis { display: grid; gap: 1.25rem; }
+  @media (min-width: 60rem) { .analysis { grid-template-columns: minmax(0, 34rem) minmax(0, 1fr); align-items: start; } }
+  .board-row { display: flex; gap: 0.4rem; }
+  .board-wrap { flex: 1; min-width: 0; position: relative; }
+  .board-wrap :global(.promo) {
+    position: absolute; inset: 25% 20%; z-index: 5; display: grid; gap: 0.4rem; padding: 0.75rem;
+    background: var(--bg); border-radius: 8px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  }
+  .board-wrap :global(.promo button) { font: inherit; padding: 0.4rem; cursor: pointer; }
+  .board-wrap :global(.cm-board) { width: 100%; }
+  .evalbar { width: 0.9rem; border-radius: 3px; background: #1f2937; position: relative; overflow: hidden; }
+  .evalbar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f5f5f4; transition: height 0.3s; }
+  .evalbar.flipped .evalbar-fill { top: 0; bottom: auto; }
+  .nav { display: flex; gap: 0.35rem; margin-top: 0.5rem; padding-left: 1.3rem; }
+  .nav button, .move-actions button, .io button, .copy button { font: inherit; padding: 0.3rem 0.7rem; cursor: pointer; }
+  .nav button { flex: 1; }
+  .engine-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  .lines { list-style: none; padding: 0; margin: 0.4rem 0 0; min-height: 4.6em; }
+  .lines :global(li) { padding: 0.2rem 0.3rem; border-radius: 4px; cursor: pointer; font-size: 0.92rem; }
+  .lines :global(li:hover) { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .lines :global(.score) { display: inline-block; min-width: 3.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .opening { min-height: 1.5em; margin: 0.6rem 0; }
+  .moves { max-height: 22rem; overflow-y: auto; line-height: 1.9; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px; padding: 0.5rem 0.7rem; min-height: 4rem; }
+  .moves :global(.mv) { cursor: pointer; padding: 0.05rem 0.25rem; border-radius: 3px; white-space: nowrap; }
+  .moves :global(.mv:hover) { background: color-mix(in srgb, currentColor 10%, transparent); }
+  .moves :global(.mv.current) { background: var(--accent); color: #fff; }
+  .moves :global(.num) { color: var(--muted); margin-left: 0.3rem; }
+  .moves :global(.var) { display: block; margin-left: 1rem; color: var(--muted); font-size: 0.92em; }
+  .moves :global(.var .mv) { color: var(--fg); }
+  .move-actions { display: flex; gap: 0.5rem; margin: 0.5rem 0 1rem; }
+  .io { margin: 0.5rem 0; }
+  .io textarea, .copy input { width: 100%; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .copy { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+  .copy input { flex: 1; min-width: 0; }
+  .error { color: #dc2626; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
+</style>
+
+<script>
+  import { mountAnalysis } from '../scripts/analysis';
+  mountAnalysis(document.getElementById('analysis')!);
+</script>

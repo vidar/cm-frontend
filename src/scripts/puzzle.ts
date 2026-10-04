@@ -97,6 +97,7 @@ export function mountPuzzle(root: HTMLElement) {
     root.querySelector<HTMLButtonElement>('#hint')!.hidden = true;
     root.querySelector<HTMLButtonElement>('#reveal')!.hidden = true;
     shareBtn.hidden = false;
+    root.querySelector<HTMLAnchorElement>('#analyse')!.hidden = false;
     showStreak();
   }
 

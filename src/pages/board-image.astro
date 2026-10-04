@@ -31,6 +31,7 @@ const origin = Astro.site!.origin;
     <div class="copy"><input id="out-url" readonly /><button type="button" data-copy="out-url">Copy</button></div>
     <label for="out-md">Markdown</label>
     <div class="copy"><input id="out-md" readonly /><button type="button" data-copy="out-md">Copy</button></div>
+    <p><a id="out-analysis" href="/analysis/">Open this position in the analysis board →</a></p>
     <label for="out-html">HTML</label>
     <div class="copy"><input id="out-html" readonly /><button type="button" data-copy="out-html">Copy</button></div>
   </div>
@@ -104,6 +105,7 @@ const origin = Astro.site!.origin;
       preview.src = url;
       $<HTMLInputElement>('out-url').value = url;
       $<HTMLInputElement>('out-md').value = `![Chess position](${url})`;
+      $<HTMLAnchorElement>('out-analysis').href = `/analysis/?fen=${encodeURIComponent(fen.replace(/ /g, '_')).replace(/%2F/g, '/')}`;
       $<HTMLInputElement>('out-html').value = `<img src="${url}" alt="Chess position" width="400" height="400">`;
       error.hidden = true;
     } catch (e) {
