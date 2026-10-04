@@ -1,4 +1,5 @@
 ---
+import { START_FEN } from '../../lib/og-url';
 import Layout from '../../layouts/Layout.astro';
 import GameTable from '../../components/GameTable.astro';
 import { getPlayer, playerGames, playerScore } from '../../lib/games';
@@ -25,6 +26,7 @@ const name = `${player.title ? `${player.title} ` : ''}${player.name}`;
 ---
 
 <Layout
+  og={{ fen: START_FEN, kicker: [player.title, player.fed].filter(Boolean).join(' · ') || 'Player', title: player.name, subtitle: `${player.games.toLocaleString('en')} games${player.max_elo ? ` · peak rating ${player.max_elo}` : ''}${player.last_date ? ` · last game ${player.last_date.slice(0, 4)}` : ''}`, footer: 'Every game to replay' }}
   title={`${player.name} chess games${page > 1 ? ` (page ${page})` : ''}`}
   description={`${player.games.toLocaleString('en')} over-the-board games of ${name}${player.fed ? ` (${player.fed})` : ''}${player.max_elo ? `, peak rating ${player.max_elo}` : ''}: results, opponents and every game to replay.`}
 >

@@ -44,7 +44,7 @@ const description = stats
   : `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagram, FEN and related lines.`;
 ---
 
-<Layout title={`${opening.name} – ${opening.eco}`} description={description}>
+<Layout title={`${opening.name} – ${opening.eco}`} description={description} og={{ fen: opening.fen, lastMove: opening.lastMove, kicker: `Opening · ${opening.eco}`, title: opening.name, subtitle: moves, footer: `${sideToMove} to move` }}>
   <nav class="crumbs"><a href="/openings/">Openings</a> › <a href={`/openings/family/${familySlug(opening.family)}/`}>{opening.family}</a></nav>
   <h1>{opening.name}</h1>
   <p class="moves"><strong>{moves}</strong></p>

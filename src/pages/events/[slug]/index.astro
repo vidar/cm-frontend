@@ -1,4 +1,5 @@
 ---
+import { START_FEN } from '../../../lib/og-url';
 import Layout from '../../../layouts/Layout.astro';
 import GameTable from '../../../components/GameTable.astro';
 import Crosstable from '../../../components/event/Crosstable.astro';
@@ -94,6 +95,7 @@ const jsonLd = {
 ---
 
 <Layout
+  og={{ fen: START_FEN, kicker: formatLabel, title: event.name, subtitle: [event.site, dates].filter(Boolean).join(' · '), footer: podium[0] ? `${places[0]}: ${podium[0].who}` : count }}
   title={`${event.name}${event.site ? `, ${event.site}` : ''}: ${what}, results and games`}
   description={`${event.name}${event.site ? ` (${event.site})` : ''}, ${dates}: ${formatLabel.toLowerCase()}, ${count}${R.length ? `, ${R.length} rounds` : ''}. ${what[0].toUpperCase()}${what.slice(1)}, round-by-round results and all ${event.games.toLocaleString('en')} games to replay.`}
   wide

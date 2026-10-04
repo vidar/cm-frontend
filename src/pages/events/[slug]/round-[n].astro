@@ -1,4 +1,5 @@
 ---
+import { START_FEN } from '../../../lib/og-url';
 import Layout from '../../../layouts/Layout.astro';
 import BoardDiagram from '../../../components/BoardDiagram.astro';
 import Standings from '../../../components/event/Standings.astro';
@@ -51,7 +52,9 @@ const title = `${event.name}, ${roundName.toLowerCase()}: results${individual ||
 const winnerOf = (r: string, w: string, b: string) => (r === '1-0' ? w : r === '0-1' ? b : null);
 ---
 
-<Layout title={title} description={`${event.name} ${roundName.toLowerCase()} (${dateRange(round.first, round.last)}): ${story.join(' ')}`} wide>
+<Layout
+  og={{ fen: boards[0]?.fen ?? START_FEN, lastMove: boards[0]?.last, kicker: `${event.name} · ${roundName}`, title: story[story.length - 1] ?? `${event.name}: ${roundName}`, subtitle: story.length > 1 ? story[0] : dateRange(round.first, round.last), footer: dateRange(round.first, round.last) }}
+  title={title} description={`${event.name} ${roundName.toLowerCase()} (${dateRange(round.first, round.last)}): ${story.join(' ')}`} wide>
   <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a> › <a href={base}>{event.name}</a></nav>
   <h1>{event.name}: {roundName}</h1>
   <p class="ev-facts">

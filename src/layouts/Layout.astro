@@ -1,16 +1,21 @@
 ---
 import { getCollection } from 'astro:content';
 import { Font } from 'astro:assets';
+import { ogUrl, START_FEN, type OgCard } from '../lib/og-url';
 
 interface Props {
   title: string;
   description?: string;
   /** Wider main column (e.g. the analysis board). */
   wide?: boolean;
+  /** Social preview card (og:image); defaults to the title on the starting position. */
+  og?: OgCard;
 }
 
 const SITE_NAME = 'chessmoments';
-const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false } = Astro.props;
+const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false, og } = Astro.props;
+const ogCard: OgCard = og ?? { fen: START_FEN, title, subtitle: description.length > 150 ? `${description.slice(0, 147).trimEnd()}…` : description };
+const ogImage = new URL(ogUrl(ogCard), Astro.site);
 const canonical = new URL(Astro.url.pathname, Astro.site);
 const path = Astro.url.pathname.replace(/\/?$/, '/');
 
@@ -75,7 +80,12 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-    <meta name="twitter:card" content="summary" />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogCard.title} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content={ogImage} />
     <meta name="generator" content={Astro.generator} />
     <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#15120e" media="(prefers-color-scheme: dark)" />

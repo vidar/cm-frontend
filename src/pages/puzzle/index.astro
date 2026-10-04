@@ -13,6 +13,7 @@ const side = puzzle.solverColor === 'w' ? 'White' : 'Black';
 ---
 
 <Layout
+  og={{ fen: puzzle.startFen, lastMove: puzzle.setupMove, flip: puzzle.solverColor === 'b', kicker: `Daily chess puzzle #${puzzle.number}`, title: `${side} to move. Find the best move.`, subtitle: `Rated ${puzzle.rating}. A new puzzle from a real game every day at 00:00 UTC.`, footer: puzzle.date }}
   title={`Daily chess puzzle #${puzzle.number}`}
   description={`Today's free daily chess puzzle (#${puzzle.number}, rated ${puzzle.rating}). ${side} to move. Solve it, keep your streak and share your result.`}
 >

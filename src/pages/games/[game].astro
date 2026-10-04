@@ -53,6 +53,7 @@ const pgn = [
 ---
 
 <Layout
+  og={{ fen: finalFen, lastMove: last, kicker: game.event_name, title: `${game.white_name} vs ${game.black_name}`, subtitle: [game.round && `Round ${game.round.split('.')[0]}`, game.event_site, game.date].filter(Boolean).join(' · '), footer: `${resultLabel(game.result)} · ${Math.ceil(game.plies / 2)} moves` }}
   title={title}
   description={`${title}: ${resultLabel(game.result)} in ${Math.ceil(game.plies / 2)} moves${opening ? `, ${opening.name}` : ''}. Replay the game move by move and analyse it with Stockfish.`}
   wide
