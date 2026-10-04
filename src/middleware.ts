@@ -3,16 +3,20 @@
 // (per data centre, for s-maxage / max-age) and served from there on the next request.
 // Prerendered pages are static assets and never reach this. Database pages get a `Cache-Tag` so
 // they can be purged after a data update (Cloudflare API: purge cache by tag "games-db").
+// The key includes the build ID, so a deploy never serves pages rendered by the previous build.
 import { defineMiddleware } from 'astro:middleware';
 
 const DB_PAGES = /^\/(games|players|events|sitemaps)\//;
+declare const __BUILD_ID__: string;
 const HOST = 'chessmoments.com'; // the Cache API is a no-op on workers.dev previews anyway
 
 export const onRequest = defineMiddleware(async (ctx, next) => {
   const { request, url } = ctx;
   if (ctx.isPrerendered || request.method !== 'GET' || url.hostname !== HOST || request.headers.has('Authorization')) return next();
   const cache = (globalThis as unknown as { caches: { default: Cache } }).caches.default;
-  const key = new Request(url.toString(), { method: 'GET' });
+  const keyUrl = new URL(url);
+  keyUrl.searchParams.set('__build', __BUILD_ID__);
+  const key = new Request(keyUrl.toString(), { method: 'GET' });
 
   const hit = await cache.match(key);
   if (hit) {

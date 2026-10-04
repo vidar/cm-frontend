@@ -20,6 +20,9 @@ export default defineConfig({
   // SESSION KV binding, which `wrangler preview` can't auto-provision.
   session: false,
 
+  // Build ID: part of the edge-cache key (src/middleware.ts), so each deploy starts with a fresh cache.
+  vite: { define: { __BUILD_ID__: JSON.stringify(Date.now().toString(36)) } },
+
   // Self-hosted at build time (downloaded from Fontsource, served from /_astro/fonts/).
   fonts: [
     {
