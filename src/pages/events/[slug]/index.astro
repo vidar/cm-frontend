@@ -12,12 +12,16 @@ import '../../../styles/event.css';
 import { loadEvent } from '../../../lib/event-page';
 import { FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
 import { dateRange, matchScore, resultText } from '../../../lib/event-view';
-import { eventGames, gamePath, twicIssueUrl, EVENT_PAGE_SIZE } from '../../../lib/games';
+import { eventGames, eventRedirect, gamePath, twicIssueUrl, EVENT_PAGE_SIZE } from '../../../lib/games';
 
 export const prerender = false;
 
 const data = await loadEvent(Astro.params.slug ?? '');
-if (!data) return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+if (!data) {
+  const moved = await eventRedirect(Astro.params.slug ?? '');
+  if (moved) return Astro.redirect(`/events/${moved}/`, 301);
+  return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+}
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
 const { event, a } = data;
 const base = `/events/${event.slug}/`;
@@ -148,7 +152,8 @@ const jsonLd = {
   {a.teams && (
     <section>
       <h2>Team standings</h2>
-      <TeamStandings lines={teamFinal} rounds={R} rankOf={teamRank} base={base} />
+      <TeamStandings lines={teamFinal} rounds={R} rankOf={teamRank} base={base} limit={showAll ? 10000 : 50} />
+      {teamFinal.length > 50 && !showAll && <p><a href="?all">Show all {teamFinal.length} teams</a></p>}
       {a.teams.roundRobin && (
         <>
           <h2>Crosstable</h2>
@@ -226,7 +231,7 @@ const jsonLd = {
         </>
       )}
       <h2>Teams</h2>
-      {teamFinal.map((t) => (
+      {teamFinal.slice(0, showAll ? undefined : 50).map((t) => (
         <details id={`team-${encodeURIComponent(t.team)}`}>
           <summary><strong>{t.rank}. {t.team}</strong> <span class="ev-muted">{t.mp} MP · {pts(t.gp)} GP</span></summary>
           <div class="ev-scroll">

@@ -9,7 +9,8 @@ slugs to the old ones where an event continues an old event: the old event whose
 event's natural slug, else the one holding most of its games. Events with no old counterpart get
 fresh ids. It refuses to run if game or player ids differ between the builds.
 
-It also writes a `changed_games` table (id, event_id, white_team, black_team) with the games whose
+Old events folded into another one get a row in `event_redirects` (old slug -> event id), so
+their URLs can redirect. It also writes a `changed_games` table (id, event_id, white_team, black_team) with the games whose
 event or teams differ from the old build, for `import_neon.py --patch`.
 """
 import argparse
@@ -77,6 +78,19 @@ def main():
     db.execute('UPDATE games SET event_id = (SELECT old FROM emap WHERE new = games.event_id)')
     db.execute('DELETE FROM events')
     db.executemany(f'INSERT INTO events VALUES ({",".join("?" * len(rows[0]))})', rows)
+
+    # Folded old events: redirect to the event that now holds most of their games.
+    holder = {}
+    for new_e, c in overlap.items():
+        for old_e, k in c.items():
+            if old_e not in holder or k > holder[old_e][1]:
+                holder[old_e] = (mapping[new_e], k)
+    kept = set(mapping.values())
+    db.execute('CREATE TABLE IF NOT EXISTS event_redirects (slug TEXT PRIMARY KEY, event_id INTEGER NOT NULL)')
+    db.execute('INSERT OR REPLACE INTO event_redirects SELECT slug, event_id FROM old.event_redirects') if db.execute(
+        "SELECT 1 FROM old.sqlite_master WHERE name = 'event_redirects'").fetchone() else None
+    db.executemany('INSERT OR REPLACE INTO event_redirects VALUES (?, ?)',
+                   [(old_slug[o], holder[o][0]) for o in old_slug if o not in kept and o in holder])
 
     db.execute('DROP TABLE IF EXISTS changed_games')
     old_cols = {r[1] for r in db.execute('PRAGMA old.table_info(games)')}

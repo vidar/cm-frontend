@@ -10,14 +10,18 @@ import '../../../styles/event.css';
 import { featured, finalPositions, loadEvent } from '../../../lib/event-page';
 import { roundStory } from '../../../lib/event';
 import { dateRange, resultText } from '../../../lib/event-view';
-import { gamePath, twicIssueUrl } from '../../../lib/games';
+import { eventRedirect, gamePath, twicIssueUrl } from '../../../lib/games';
 
 export const prerender = false;
 
 const n = Number.parseInt(Astro.params.n ?? '', 10);
 const data = Number.isFinite(n) ? await loadEvent(Astro.params.slug ?? '') : null;
 const round = data?.a.rounds.find((r) => r.n === n);
-if (!data || !round) return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+if (!data || !round) {
+  const moved = !data && Number.isFinite(n) ? await eventRedirect(Astro.params.slug ?? '') : null;
+  if (moved) return Astro.redirect(`/events/${moved}/round-${n}/`, 301);
+  return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+}
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
 const { event, a } = data;
 const base = `/events/${event.slug}/`;

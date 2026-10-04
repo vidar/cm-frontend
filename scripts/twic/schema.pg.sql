@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS event_redirects (
+  slug TEXT PRIMARY KEY,         -- slug of an event that was merged into another
+  event_id INTEGER NOT NULL
+);
 -- Columns added after the first load (no-ops on a fresh database).
 ALTER TABLE events ADD COLUMN IF NOT EXISTS type TEXT;
 ALTER TABLE events ADD COLUMN IF NOT EXISTS rounds INTEGER;

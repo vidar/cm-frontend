@@ -31,10 +31,11 @@ TABLES = {
     'openings': ('slug', [('slug', 'text'), ('name', 'text'), ('eco', 'text')]),
     'meta': ('key', [('key', 'text'), ('value', 'text')]),
     'events': ('id', [('id', 'int'), ('name', 'text'), ('site', 'text'), ('slug', 'text'), ('start_date', 'text'),
-                      ('end_date', 'text'), ('games', 'int'), ('twic', 'int')]),
+                      ('end_date', 'text'), ('games', 'int'), ('twic', 'int'), ('type', 'text'), ('rounds', 'int')]),
     'players': ('id', [('id', 'int'), ('fide_id', 'int'), ('name', 'text'), ('slug', 'text'), ('search', 'text'),
                        ('title', 'text'), ('fed', 'text'), ('born', 'int'), ('max_elo', 'int'), ('games', 'int'),
                        ('last_date', 'text')]),
+    'event_redirects': ('slug', [('slug', 'text'), ('event_id', 'int')]),
     'changed_games': ('id', [('id', 'int'), ('event_id', 'int'), ('white_team', 'text'), ('black_team', 'text')]),
     'games': ('id', [('id', 'int'), ('event_id', 'int'), ('white_id', 'int'), ('black_id', 'int'), ('white_elo', 'int'),
                      ('black_elo', 'int'), ('white_title', 'text'), ('black_title', 'text'), ('elo_avg', 'int'),
@@ -134,7 +135,7 @@ def patch(neon: Neon, src: sqlite3.Connection, batch: int):
         'DROP TABLE patch_games, patch_events',
     ])
     print(f'swapped in {time.time() - t0:.0f}s')
-    for table in ('openings', 'meta'):
+    for table in ('openings', 'meta', 'event_redirects'):
         copy_table(neon, src, table, batch)
 
 
@@ -155,7 +156,7 @@ def main():
         patch(neon, src, a.batch)
     else:
         for table in TABLES:
-            if table != 'changed_games':
+            if table != 'changed_games' and src.execute('SELECT 1 FROM sqlite_master WHERE name = ?', (table,)).fetchone():
                 copy_table(neon, src, table, a.batch)
     print('creating indexes…')
     neon.script(HERE / 'indexes.pg.sql')

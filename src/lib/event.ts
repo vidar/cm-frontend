@@ -560,10 +560,13 @@ export function roundStory(a: EventAnalysis, n: number): string[] {
 
   if (a.format === 'team' && a.teams) {
     const ms = a.teams.matches.filter((m) => m.round === n);
-    const top = ms[0];
+    const after0 = a.teams.standingsAfter(n)[0]?.team;
+    // Leagues play all matches in parallel: follow the leaders. Team Swiss: table 1.
+    const top = (a.teams.roundRobin && ms.find((m) => m.home === after0 || m.away === after0)) || ms[0];
     if (top) {
       const [w, l, ws, ls] = top.homePts >= top.awayPts ? [top.home, top.away, top.homePts, top.awayPts] : [top.away, top.home, top.awayPts, top.homePts];
-      out.push(ws === ls ? `On the top table, ${top.home} and ${top.away} drew ${pts(ws)}–${pts(ls)}.` : `On the top table, ${w} beat ${l} ${pts(ws)}–${pts(ls)}.`);
+      const where = a.teams.roundRobin ? '' : 'On the top table, ';
+      out.push(ws === ls ? `${where}${top.home} and ${top.away} drew ${pts(ws)}–${pts(ls)}.` : `${where}${w} beat ${l} ${pts(ws)}–${pts(ls)}.`);
     }
     const after = a.teams.standingsAfter(n);
     const lead = after.filter((t) => t.mp === after[0]?.mp);

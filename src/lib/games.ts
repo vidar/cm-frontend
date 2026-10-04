@@ -127,6 +127,11 @@ export async function getEvent(slug: string) {
   return first<EventRow>('SELECT * FROM events WHERE slug = $1', [slug]);
 }
 
+/** Current slug of an event that was merged into another one (old URLs redirect). */
+export async function eventRedirect(slug: string) {
+  return (await first<{ slug: string }>('SELECT e.slug FROM event_redirects r JOIN events e ON e.id = r.event_id WHERE r.slug = $1', [slug]))?.slug ?? null;
+}
+
 /** A player's games, newest first. `color`: 'w' | 'b' | undefined (both). */
 export async function playerGames(playerId: number, page: number, color?: 'w' | 'b') {
   const where = color === 'w' ? 'g.white_id = $1' : color === 'b' ? 'g.black_id = $1' : null;
