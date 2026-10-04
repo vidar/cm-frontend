@@ -8,6 +8,8 @@ export interface Player {
   name: string;
   slug: string;
   title: string | null;
+  fed: string | null;
+  born: number | null;
   max_elo: number | null;
   games: number;
   last_date: string | null;

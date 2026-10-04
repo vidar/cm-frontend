@@ -8,9 +8,13 @@
 - Merges players by FIDE ID (falling back to the name), choosing the fullest spelling for display.
 - Tags each game with the longest matching named opening line (src/data/openings/*.tsv).
 
+- With --fide (FIDE's players_list.zip, https://ratings.fide.com/download/players_list.zip), players
+  get their official full name, federation, title and birth year. A game only counts for a FIDE ID
+  if its name shares a name part with that player's name (TWIC occasionally attaches a wrong ID).
+
 Usage:
   pip install chess
-  python3 scripts/twic/build.py --dir /path/to/cache --out /path/to/twic.sqlite
+  python3 scripts/twic/build.py --dir /path/to/cache --out /path/to/twic.sqlite --fide players_list.zip
 Then scripts/twic/export_sql.py turns the SQLite file into SQL for D1.
 """
 import argparse
@@ -143,13 +147,46 @@ def int_or_none(v):
 
 
 def norm_date(d):
-    if not d:
+    """'2012.07.02' -> '2012-07-02'; keeps a valid prefix ('2012-07', '2012') when parts are unknown or invalid."""
+    parts = (d or '').split('.')
+    y = parts[0]
+    if not (len(y) == 4 and y.isdigit() and 1900 <= int(y) <= 2100):
         return None
-    y, *rest = (d.replace('?', '0') + '.00.00').split('.')[:3]
-    if not y.isdigit() or y == '0000':
-        return None
-    m, day = rest[0], rest[1]
-    return f'{y}-{m}-{day}' if m != '00' and day != '00' else (f'{y}-{m}' if m != '00' else y)
+    m = parts[1] if len(parts) > 1 else ''
+    if not (len(m) == 2 and m.isdigit() and 1 <= int(m) <= 12):
+        return y
+    day = parts[2] if len(parts) > 2 else ''
+    if not (len(day) == 2 and day.isdigit() and 1 <= int(day) <= 31):
+        return f'{y}-{m}'
+    return f'{y}-{m}-{day}'
+
+
+def load_fide(path):
+    """FIDE players list (fixed-width TXT inside the zip) -> {id: (name, fed, title, born)}."""
+    with zipfile.ZipFile(path) as z:
+        text = z.read(z.namelist()[0]).decode('latin-1')
+    lines = text.splitlines()
+    head = lines[0]
+    col = lambda name: head.index(name)
+    c_name, c_fed, c_sex, c_tit, c_wtit, c_bday, c_flag = col('Name'), col('Fed'), col('Sex'), col('Tit'), col('WTit'), col('B-day'), col('Flag')
+    out = {}
+    for line in lines[1:]:
+        try:
+            fid = int(line[:c_name].strip())
+        except ValueError:
+            continue
+        raw = line[c_name:c_fed].strip()
+        last, _, first = raw.partition(',')
+        name = f'{first.strip()} {last.strip()}'.strip() if first.strip() else last.strip()
+        title = line[c_tit:c_wtit].strip() or line[c_wtit:c_wtit + 5].strip() or None
+        born = line[c_bday:c_flag].strip()
+        out[fid] = (name, line[c_fed:c_sex].strip() or None, title, int(born) if born.isdigit() and born != '0' else None)
+    return out
+
+
+def name_parts(name):
+    """Name parts of 3+ letters, e.g. 'Carlsen,M' -> {'carlsen'}, 'Magnus Carlsen' -> {'magnus', 'carlsen'}."""
+    return {t for t in slugify(name).split('-') if len(t) >= 3}
 
 
 def display_name(variants: collections.Counter) -> str:
@@ -182,6 +219,7 @@ def main():
     ap.add_argument('--dir', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--limit', type=int, help='only the first N issues (testing)')
+    ap.add_argument('--fide', help="FIDE players_list.zip for official names, federations and titles")
     args = ap.parse_args()
 
     files = sorted(Path(args.dir).glob('twic*g.zip'), key=lambda p: int(re.search(r'twic(\d+)g', p.name).group(1)))
@@ -205,8 +243,25 @@ def main():
             if (i + 1) % 50 == 0:
                 print(f'{i + 1}/{len(files)} issues, {len(games):,} games, {time.time() - t0:.0f}s', file=sys.stderr, flush=True)
 
-    # Players: FIDE ID when present, else the exact name.
-    pkey = lambda h, side: f"f{h[side + 'FideId']}" if int_or_none(h.get(side + 'FideId')) else f"n{h.get(side, '').strip().lower()}"
+    fide = load_fide(args.fide) if args.fide else {}
+    print(f'{len(fide):,} FIDE players loaded', file=sys.stderr)
+
+    # Players: FIDE ID when the game's name matches that player (official FIDE name, else the most
+    # common TWIC spelling for the ID); otherwise the exact name.
+    id_names = collections.defaultdict(collections.Counter)
+    for _, h, _ in games:
+        for side in ('White', 'Black'):
+            fid = int_or_none(h.get(side + 'FideId'))
+            if fid:
+                id_names[fid][h.get(side, '').strip()] += 1
+    id_parts = {fid: name_parts(fide[fid][0] if fid in fide else c.most_common(1)[0][0]) for fid, c in id_names.items()}
+
+    def pkey(h, side):
+        fid = int_or_none(h.get(side + 'FideId'))
+        name = h.get(side, '').strip()
+        if fid and (name_parts(name) & id_parts[fid]):
+            return f'f{fid}'
+        return f'n{name.lower()}'
     names = collections.defaultdict(collections.Counter)
     pinfo = {}
     for issue, h, _ in games:
@@ -215,7 +270,7 @@ def main():
             names[k][h.get(side, '?').strip()] += 1
             elo = int_or_none(h.get(side + 'Elo'))
             date = norm_date(h.get('Date'))
-            p = pinfo.setdefault(k, {'max_elo': None, 'last': None, 'title': None, 'games': 0, 'fide': int_or_none(h.get(side + 'FideId'))})
+            p = pinfo.setdefault(k, {'max_elo': None, 'last': None, 'title': None, 'games': 0})
             p['games'] += 1
             if elo and (p['max_elo'] is None or elo > p['max_elo']):
                 p['max_elo'] = elo
@@ -232,12 +287,16 @@ def main():
     taken = set()
     player_id = {}
     for i, k in enumerate(sorted(pinfo, key=lambda k: -pinfo[k]['games']), start=1):
-        name = display_name(names[k])
         p = pinfo[k]
+        fid = int(k[1:]) if k.startswith('f') else None
+        official = fide.get(fid) if fid else None
+        name = official[0] if official else display_name(names[k])
+        title = (official[2] if official else None) or p['title']
         player_id[k] = i
         db.execute(
-            'INSERT INTO players (id, fide_id, name, slug, search, title, max_elo, games, last_date) VALUES (?,?,?,?,?,?,?,?,?)',
-            (i, p['fide'], name, unique_slug(slugify(name), taken), slugify(name).replace('-', ' '), p['title'], p['max_elo'], p['games'], p['last']),
+            'INSERT INTO players (id, fide_id, name, slug, search, title, fed, born, max_elo, games, last_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (i, fid, name, unique_slug(slugify(name), taken), slugify(name).replace('-', ' '), title,
+             official[1] if official else None, official[3] if official else None, p['max_elo'], p['games'], p['last']),
         )
 
     # Events: name + site + event start (or year).

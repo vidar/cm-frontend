@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS players (
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
   search TEXT NOT NULL,          -- lowercase ASCII name for searching
-  title TEXT,                    -- most recent title seen
+  title TEXT,                    -- FIDE title (or most recent title seen in TWIC)
+  fed TEXT,                      -- FIDE federation code
+  born INTEGER,                  -- birth year (FIDE)
   max_elo INTEGER,
   games INTEGER NOT NULL,
   last_date TEXT

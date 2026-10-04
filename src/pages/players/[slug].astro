@@ -26,12 +26,12 @@ const name = `${player.title ? `${player.title} ` : ''}${player.name}`;
 
 <Layout
   title={`${player.name} chess games${page > 1 ? ` (page ${page})` : ''}`}
-  description={`${player.games.toLocaleString('en')} over-the-board games of ${name}${player.max_elo ? `, peak rating ${player.max_elo}` : ''}: results, opponents and every game to replay.`}
+  description={`${player.games.toLocaleString('en')} over-the-board games of ${name}${player.fed ? ` (${player.fed})` : ''}${player.max_elo ? `, peak rating ${player.max_elo}` : ''}: results, opponents and every game to replay.`}
 >
   <nav class="crumbs"><a href="/games/">Games</a> › <a href="/players/">Players</a></nav>
   <h1>{name}</h1>
   <p class="facts">
-    {player.games.toLocaleString('en')} games
+    {player.fed && <>{player.fed} · </>}{player.born && <>born {player.born} · </>}{player.games.toLocaleString('en')} games
     {player.max_elo && <> · peak rating in database {player.max_elo}</>}
     {player.last_date && <> · last game {player.last_date}</>}
     {player.fide_id && <> · <a href={`https://ratings.fide.com/profile/${player.fide_id}`} rel="nofollow">FIDE profile</a></>}

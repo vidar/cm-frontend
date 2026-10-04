@@ -9,7 +9,8 @@ export). PGN downloads exist from issue 920 (2012) onwards.
 ```sh
 pip install zstandard chess            # python-chess may need: pip install --use-pep517 chess
 python3 scripts/twic/download.py --from 920 --to <latest> --dir /tmp/twic   # polite, resumable
-python3 scripts/twic/build.py --dir /tmp/twic --out /tmp/twic.sqlite        # ~30 min on 4 cores
+curl -o /tmp/players_list.zip https://ratings.fide.com/download/players_list.zip   # FIDE names/feds/titles
+python3 scripts/twic/build.py --dir /tmp/twic --out /tmp/twic.sqlite --fide /tmp/players_list.zip   # ~40 min, ~8 GB RAM
 python3 scripts/twic/export_sql.py --db /tmp/twic.sqlite --out /tmp/twic.sql
 python3 scripts/twic/opening_games.py --db /tmp/twic.sqlite                 # -> src/data/opening-master-games.json
 ```
@@ -26,5 +27,8 @@ Local development: `npx wrangler d1 execute cm-games --local --file /tmp/twic.sq
 - `schema.sql` is shared by the SQLite build and D1. Totals live in the `meta` table.
 - Games are validated with python-chess; invalid games and set-up positions are skipped; duplicates
   (same players, date and moves) keep the earliest issue.
-- Players are merged by FIDE ID; the display name is the fullest spelling seen.
+- Players are merged by FIDE ID and get their official FIDE name, federation, title and birth year.
+  A game only counts for a FIDE ID if its name shares a name part with that player (TWIC sometimes
+  attaches a wrong ID); otherwise it's filed under its own name. Players without a FIDE ID use the
+  fullest TWIC spelling.
 - `games.opening` is the slug of the longest matching named line (`/openings/<slug>/`).
