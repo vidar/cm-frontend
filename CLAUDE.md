@@ -54,7 +54,7 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   `--fg`. Fonts (self-hosted via Astro's fonts API in `astro.config.mjs`): Fraunces for headings
   (`--font-head`), Inter for text (`--font-body`). Global button/input styles use `:where()` so
   component styles override them; `button.primary` is the filled amber button.
-  Board styles (Walnut default, Tournament, Ice, Marble, 3D) are `--sq-*` tokens per
+  Board styles (Walnut default, Tournament, Ice, Marble) are `--sq-*` tokens per
   `html[data-board]`, chosen with `src/components/BoardStyle.astro` (footer + under boards) and
   remembered in localStorage (`cm-board`, applied before paint in Layout). Interactive boards
   (`board.css`) and inline diagrams (`BoardDiagram`, `renderBoardSvg({ themable: true })`) follow it;

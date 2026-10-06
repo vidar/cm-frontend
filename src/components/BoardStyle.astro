@@ -11,7 +11,6 @@ const BOARD_STYLES = [
   { id: 'tournament', name: 'Tournament', light: '#eeeed2', dark: '#769656' },
   { id: 'ice', name: 'Ice', light: '#dee3e6', dark: '#8ca2ad' },
   { id: 'marble', name: 'Marble', light: '#ebe7df', dark: '#a39d93' },
-  { id: '3d', name: '3D', light: '#f2d7aa', dark: '#a8724a' },
 ];
 ---
 
@@ -19,7 +18,7 @@ const BOARD_STYLES = [
   {label && <span class="bs-label">Board</span>}
   {BOARD_STYLES.map((s) => (
     <button type="button" class="bs" data-board-style={s.id} title={s.name} aria-pressed="false">
-      <span class:list={['sw', { three: s.id === '3d' }]} style={`--l:${s.light};--d:${s.dark}`} aria-hidden="true"></span>
+      <span class="sw" style={`--l:${s.light};--d:${s.dark}`} aria-hidden="true"></span>
       <span class="bs-name">{s.name}</span>
     </button>
   ))}
@@ -41,7 +40,6 @@ const BOARD_STYLES = [
     background: conic-gradient(var(--d) 0 25%, var(--l) 0 50%, var(--d) 0 75%, var(--l) 0) 0 0 / 100% 100%;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
   }
-  .sw.three { transform: perspective(30px) rotateX(28deg); box-shadow: 0 2px 0 #5b3519; }
 </style>
 
 <script>

@@ -79,7 +79,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
       // Board style chosen with BoardStyle.astro (localStorage), applied before first paint.
       try {
         var b = localStorage.getItem('cm-board');
-        if (b) document.documentElement.dataset.board = b;
+        if (b === 'tournament' || b === 'ice' || b === 'marble') document.documentElement.dataset.board = b;
       } catch (e) {}
     </script>
     {noindex && <meta name="robots" content="noindex, follow" />}
@@ -280,35 +280,24 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     --sq-dark: #b58863;
     --sq-last: rgba(226, 168, 48, 0.42);
     --sq-select: rgba(176, 102, 14, 0.5);
-    --board-edge: #6b4426;
   }
   :root[data-board='tournament'] {
     --sq-light: #eeeed2;
     --sq-dark: #769656;
     --sq-last: rgba(246, 246, 105, 0.6);
     --sq-select: rgba(20, 85, 30, 0.45);
-    --board-edge: #4d6a35;
   }
   :root[data-board='ice'] {
     --sq-light: #dee3e6;
     --sq-dark: #8ca2ad;
     --sq-last: rgba(155, 199, 0, 0.41);
     --sq-select: rgba(40, 80, 120, 0.45);
-    --board-edge: #4f6670;
   }
   :root[data-board='marble'] {
     --sq-light: #ebe7df;
     --sq-dark: #a39d93;
     --sq-last: rgba(214, 160, 70, 0.45);
     --sq-select: rgba(110, 90, 60, 0.45);
-    --board-edge: #6e685e;
-  }
-  :root[data-board='3d'] {
-    --sq-light: #f2d7aa;
-    --sq-dark: #a8724a;
-    --sq-last: rgba(226, 168, 48, 0.45);
-    --sq-select: rgba(176, 102, 14, 0.5);
-    --board-edge: #5b3519;
   }
 
   /* Form controls */

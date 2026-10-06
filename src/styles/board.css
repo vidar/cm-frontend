@@ -61,34 +61,3 @@
 .cm-board .sq.dragging svg { opacity: 0.3; }
 .cm-ghost { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 50; }
 .cm-ghost svg { width: 100%; height: 100%; display: block; }
-
-/* 3D board style: the board tilts back, pieces stand up on their squares, and the front edge
-   shows the board's thickness. Hit-testing (elementFromPoint) follows the transforms. */
-:root[data-board='3d'] .cm-board {
-  overflow: visible;
-  border-radius: 3px;
-  transform: perspective(1200px) rotateX(32deg);
-  transform-style: preserve-3d;
-  margin: -1.5rem 0 1.25rem;
-  box-shadow:
-    0 1px 0 var(--board-edge),
-    0 12px 0 var(--board-edge),
-    0 34px 40px rgba(40, 20, 0, 0.35);
-}
-:root[data-board='3d'] .cm-board {
-  /* Squares share the board's plane; lift them so clicks hit the square, not the board. The board's
-     own listeners still receive the events as they bubble up from the squares. */
-  pointer-events: none;
-}
-:root[data-board='3d'] .cm-board .sq {
-  transform-style: preserve-3d;
-  transform: translateZ(1px);
-  overflow: visible;
-  pointer-events: auto;
-}
-:root[data-board='3d'] .cm-board .sq svg {
-  transform-origin: 50% 88%;
-  transform: rotateX(-32deg) scale(1.12);
-  filter: drop-shadow(0 4px 2px rgba(0, 0, 0, 0.35));
-}
-:root[data-board='3d'] .cm-board .sq.dragging svg { opacity: 0.25; }
