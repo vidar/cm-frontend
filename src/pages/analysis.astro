@@ -1,4 +1,5 @@
 ---
+import BoardStyle from '../components/BoardStyle.astro';
 import Layout from '../layouts/Layout.astro';
 import '../styles/board.css';
 ---
@@ -23,6 +24,7 @@ import '../styles/board.css';
         <button type="button" data-nav="end" title="End (↓)" aria-label="Go to end">⏭</button>
         <button type="button" id="flip" title="Flip board (f)">Flip</button>
       </div>
+      <div class="board-style-row"><BoardStyle /></div>
     </div>
 
     <div class="panel">

@@ -54,6 +54,11 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   `--fg`. Fonts (self-hosted via Astro's fonts API in `astro.config.mjs`): Fraunces for headings
   (`--font-head`), Inter for text (`--font-body`). Global button/input styles use `:where()` so
   component styles override them; `button.primary` is the filled amber button.
+  Board styles (Walnut default, Tournament, Ice, Marble, 3D) are `--sq-*` tokens per
+  `html[data-board]`, chosen with `src/components/BoardStyle.astro` (footer + under boards) and
+  remembered in localStorage (`cm-board`, applied before paint in Layout). Interactive boards
+  (`board.css`) and inline diagrams (`BoardDiagram`, `renderBoardSvg({ themable: true })`) follow it;
+  image exports (`/board.svg`, `/og.png`) keep fixed Walnut colours.
 - **Wrangler config:** keep `previews: {}` and `preview_urls: true` in `wrangler.jsonc`, and
   keep `session: false` in `astro.config.mjs` unless a KV namespace ID is configured for both
   production and `previews` (`wrangler preview` can't auto-provision bindings).

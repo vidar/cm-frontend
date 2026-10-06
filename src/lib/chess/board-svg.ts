@@ -15,6 +15,8 @@ export interface BoardSvgOptions {
   size?: number;
   /** Draw file/rank labels on the edge squares. */
   coords?: boolean;
+  /** Colours from the page's board style (CSS variables, see Layout.astro); only for inline SVG. */
+  themable?: boolean;
   /** Squares to highlight, e.g. ["e2", "e4"] for the last move. */
   highlight?: string[];
   /** Accessible title. */
@@ -46,7 +48,9 @@ const escapeXml = (s: string) =>
   s.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]!);
 
 /** Renders a chess position as a standalone SVG string (8 units per square = 45px piece art). */
-export function renderBoardSvg({ fen, flip = false, size = 400, coords = true, highlight = [], title }: BoardSvgOptions): string {
+export function renderBoardSvg({ fen, flip = false, size = 400, coords = true, highlight = [], title, themable = false }: BoardSvgOptions): string {
+  // Fill as an attribute (works everywhere, e.g. in <img> and resvg) or as a themable style.
+  const fill = (v: string, fallback: string) => (themable ? `style="fill:var(${v}, ${fallback})"` : `fill="${fallback}"`);
   const board = parsePlacement(fen);
   const S = 45;
   const parts: string[] = [];
@@ -61,19 +65,19 @@ export function renderBoardSvg({ fen, flip = false, size = 400, coords = true, h
       const x = col * S;
       const y = row * S;
       const dark = (file + rank) % 2 === 1; // a1 (file 0, rank 1) is dark
-      parts.push(`<rect x="${x}" y="${y}" width="${S}" height="${S}" fill="${dark ? DARK : LIGHT}"/>`);
-      if (hl.has(sq)) parts.push(`<rect x="${x}" y="${y}" width="${S}" height="${S}" fill="${HIGHLIGHT}"/>`);
+      parts.push(`<rect x="${x}" y="${y}" width="${S}" height="${S}" ${dark ? fill('--sq-dark', DARK) : fill('--sq-light', LIGHT)}/>`);
+      if (hl.has(sq)) parts.push(`<rect x="${x}" y="${y}" width="${S}" height="${S}" ${fill('--sq-last', HIGHLIGHT)}/>`);
       const piece = board[8 - rank][file];
       if (piece) {
         used.add(piece);
         parts.push(`<use href="#${piece}" xlink:href="#${piece}" x="${x}" y="${y}"/>`);
       }
       if (coords) {
-        const color = dark ? LIGHT : DARK;
+        const color = dark ? fill('--sq-light', LIGHT) : fill('--sq-dark', DARK);
         if (col === 0)
-          parts.push(`<text x="${x + 1.5}" y="${y + 10}" font-size="9" font-family="sans-serif" font-weight="600" fill="${color}">${rank}</text>`);
+          parts.push(`<text x="${x + 1.5}" y="${y + 10}" font-size="9" font-family="sans-serif" font-weight="600" ${color}>${rank}</text>`);
         if (row === 7)
-          parts.push(`<text x="${x + S - 1.5}" y="${y + S - 2}" font-size="9" font-family="sans-serif" font-weight="600" text-anchor="end" fill="${color}">${FILES[file]}</text>`);
+          parts.push(`<text x="${x + S - 1.5}" y="${y + S - 2}" font-size="9" font-family="sans-serif" font-weight="600" text-anchor="end" ${color}>${FILES[file]}</text>`);
       }
     }
   }

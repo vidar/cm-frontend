@@ -1,4 +1,5 @@
 ---
+import BoardStyle from './BoardStyle.astro';
 import BoardDiagram from './BoardDiagram.astro';
 import { formatMoves } from '../lib/chess/notation';
 import { themeLabel, todayUtc, firstDate, type DailyPuzzle } from '../lib/puzzles';
@@ -44,6 +45,7 @@ const analysisUrl = `/analysis/?fen=${puzzle.startFen.replace(/ /g, '_')}${puzzl
     <a id="analyse" href={analysisUrl} hidden>Analyse this position</a>
   </div>
   <p class="streak" id="puzzle-streak"></p>
+  <div class="board-style-row"><BoardStyle /></div>
 
   <details>
     <summary>Solution and details</summary>

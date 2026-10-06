@@ -1,4 +1,5 @@
 ---
+import BoardStyle from '../../components/BoardStyle.astro';
 import { Chess } from 'chess.js';
 import Layout from '../../layouts/Layout.astro';
 import BoardDiagram from '../../components/BoardDiagram.astro';
@@ -87,6 +88,7 @@ const pgn = [
         <button type="button" data-nav="end" aria-label="End">⏭</button>
         <button type="button" data-nav="flip">Flip</button>
       </div>
+      <div class="board-style-row"><BoardStyle /></div>
     </div>
     <div class="side">
       <div class="moves" role="list">

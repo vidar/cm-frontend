@@ -1,4 +1,5 @@
 ---
+import BoardStyle from '../components/BoardStyle.astro';
 import Layout from '../layouts/Layout.astro';
 import '../styles/board.css';
 ---
@@ -30,6 +31,7 @@ import '../styles/board.css';
     <button type="button" id="share" hidden>Share score</button>
   </div>
   <p id="result" class="result" aria-live="polite"></p>
+  <div class="board-style-row"><BoardStyle /></div>
   <p class="best">Best: <span id="best-w">–</span> as White · <span id="best-b">–</span> as Black</p>
 
   <h2>Why train coordinates?</h2>

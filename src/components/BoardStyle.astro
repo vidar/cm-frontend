@@ -1,0 +1,76 @@
+---
+// Board style picker: sets <html data-board="…"> and remembers it in localStorage ('cm-board');
+// Layout.astro applies the saved style before first paint. Colours live in Layout's tokens.
+interface Props {
+  /** Show the "Board" label. */
+  label?: boolean;
+}
+const { label = true } = Astro.props;
+const BOARD_STYLES = [
+  { id: 'walnut', name: 'Walnut', light: '#f0d9b5', dark: '#b58863' },
+  { id: 'tournament', name: 'Tournament', light: '#eeeed2', dark: '#769656' },
+  { id: 'ice', name: 'Ice', light: '#dee3e6', dark: '#8ca2ad' },
+  { id: 'marble', name: 'Marble', light: '#ebe7df', dark: '#a39d93' },
+  { id: '3d', name: '3D', light: '#f2d7aa', dark: '#a8724a' },
+];
+---
+
+<div class="board-style" role="group" aria-label="Board style">
+  {label && <span class="bs-label">Board</span>}
+  {BOARD_STYLES.map((s) => (
+    <button type="button" class="bs" data-board-style={s.id} title={s.name} aria-pressed="false">
+      <span class:list={['sw', { three: s.id === '3d' }]} style={`--l:${s.light};--d:${s.dark}`} aria-hidden="true"></span>
+      <span class="bs-name">{s.name}</span>
+    </button>
+  ))}
+</div>
+
+<style>
+  .board-style { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; font-size: 0.82rem; }
+  .bs-label { color: var(--muted); margin-right: 0.15rem; }
+  .bs {
+    display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.5rem 0.2rem 0.25rem;
+    border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--fg);
+    font-size: 0.8rem; line-height: 1.2; cursor: pointer;
+  }
+  .bs:hover { border-color: var(--accent); }
+  .bs[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  /* Mini 2×2 board in the style's colours */
+  .sw {
+    width: 1.1rem; height: 1.1rem; border-radius: 3px; flex: none;
+    background: conic-gradient(var(--d) 0 25%, var(--l) 0 50%, var(--d) 0 75%, var(--l) 0) 0 0 / 100% 100%;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  }
+  .sw.three { transform: perspective(30px) rotateX(28deg); box-shadow: 0 2px 0 #5b3519; }
+</style>
+
+<script>
+  const KEY = 'cm-board';
+  const root = document.documentElement;
+  const current = () => root.dataset.board || 'walnut';
+  const sync = () => {
+    for (const b of document.querySelectorAll<HTMLButtonElement>('[data-board-style]')) b.setAttribute('aria-pressed', String(b.dataset.boardStyle === current()));
+  };
+  for (const b of document.querySelectorAll<HTMLButtonElement>('[data-board-style]')) {
+    b.addEventListener('click', () => {
+      const id = b.dataset.boardStyle!;
+      if (id === 'walnut') delete root.dataset.board;
+      else root.dataset.board = id;
+      try {
+        if (id === 'walnut') localStorage.removeItem(KEY);
+        else localStorage.setItem(KEY, id);
+      } catch {
+        /* private mode: the choice lasts for this page */
+      }
+      sync();
+    });
+  }
+  // Another tab changed the style.
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY) return;
+    if (e.newValue) root.dataset.board = e.newValue;
+    else delete root.dataset.board;
+    sync();
+  });
+  sync();
+</script>

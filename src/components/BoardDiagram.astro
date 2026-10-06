@@ -9,7 +9,7 @@ interface Props {
 }
 
 const { fen, flip, highlight, title } = Astro.props;
-const svg = renderBoardSvg({ fen, flip, highlight, title }).replace('<svg ', '<svg class="board-diagram" ');
+const svg = renderBoardSvg({ fen, flip, highlight, title, themable: true }).replace('<svg ', '<svg class="board-diagram" ');
 ---
 
 <Fragment set:html={svg} />
