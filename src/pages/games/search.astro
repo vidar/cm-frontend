@@ -1,0 +1,188 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import GameTable from '../../components/GameTable.astro';
+import { hasFilters, parseSearch, RESULTS, searchGames, searchUrl, SORTS, type SearchResult } from '../../lib/game-search';
+import { PAGE_SIZE } from '../../lib/games';
+
+export const prerender = false;
+
+const p = parseSearch(Astro.url.searchParams);
+const active = hasFilters(p);
+const r: SearchResult | null = active ? await searchGames(p) : null;
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+
+// A name that matched several players: offer each one as an exact search.
+const narrow = (field: 'white' | 'black', list: SearchResult['white']) =>
+  list.length > 1 ? list.slice(0, 8).map((x) => ({ x, href: searchUrl(p, { [field]: x.name, page: 1 }) })) : [];
+const pick = r ? { white: narrow('white', r.white), black: narrow('black', r.black) } : { white: [], black: [] };
+
+// Plain-language summary of the search.
+const who = (list: SearchResult['white'], typed: string) => (list.length === 1 ? list[0].name : `“${typed}”`);
+const parts: string[] = [];
+if (r) {
+  if (p.white && p.black) parts.push(`${who(r.white, p.white)} ${p.anyColour ? 'and' : 'with White against'} ${who(r.black, p.black)}${p.anyColour ? ' (either colour)' : ''}`);
+  else if (p.white) parts.push(`${who(r.white, p.white)} ${p.anyColour ? 'with either colour' : 'with White'}`);
+  else if (p.black) parts.push(`${who(r.black, p.black)} ${p.anyColour ? 'with either colour' : 'with Black'}`);
+  if (p.result) parts.push(RESULTS[p.result].toLowerCase());
+  if (p.event) parts.push(`events matching “${p.event}”`);
+  if (p.opening) parts.push(`opening ${p.opening}`);
+  if (p.from || p.to) parts.push(p.from && p.to ? `${p.from} to ${p.to}` : p.from ? `from ${p.from}` : `until ${p.to}`);
+  if (p.minRating) parts.push(`both players rated ${p.minRating}+`);
+  if (p.minMoves || p.maxMoves) parts.push(p.minMoves && p.maxMoves ? `${p.minMoves}–${p.maxMoves} moves` : p.maxMoves ? `up to ${p.maxMoves} moves` : `${p.minMoves}+ moves`);
+}
+const first = (p.page - 1) * PAGE_SIZE + 1;
+
+const examples = [
+  { label: 'Carlsen vs Caruana, either colour', href: searchUrl({ ...p, white: 'Magnus Carlsen', black: 'Fabiano Caruana', anyColour: true }) },
+  { label: 'Miniatures: decisive in 20 moves or less, both 2600+', href: searchUrl({ ...p, result: 'decisive', maxMoves: 20, minRating: 2600, sort: 'shortest' }) },
+  { label: 'Najdorf wins for Black, both 2700+', href: searchUrl({ ...p, opening: 'Najdorf', result: '0-1', minRating: 2700 }) },
+  { label: 'Decisive games at the Candidates 2024', href: searchUrl({ ...p, event: 'Candidates 2024', result: 'decisive', sort: 'oldest' }) },
+  { label: 'Highest-rated games of 2025', href: searchUrl({ ...p, from: '2025', to: '2025', sort: 'rating' }) },
+];
+---
+
+<Layout
+  title={active ? `Game search: ${parts.join(', ') || 'results'}` : 'Search chess games by player, event, opening and date'}
+  description="Search millions of over-the-board chess games by white and black player, result, event, opening or ECO code, date, rating and length. Replay any game."
+  noindex={active}
+  wide
+>
+  <nav class="crumbs"><a href="/games/">Games</a></nav>
+  <h1>Search games</h1>
+
+  <form method="get" action="/games/search/" class="search-form" role="search">
+    <div class="row players">
+      <label>White <input name="white" value={p.white} list="player-list" autocomplete="off" placeholder="e.g. Carlsen" data-suggest /></label>
+      <label>Black <input name="black" value={p.black} list="player-list" autocomplete="off" placeholder="e.g. Caruana" data-suggest /></label>
+      <label class="check"><input type="checkbox" name="any" value="1" checked={p.anyColour} /> Either colour</label>
+    </div>
+    <div class="row">
+      <label>Result
+        <select name="result">{Object.entries(RESULTS).map(([v, l]) => <option value={v} selected={p.result === v}>{l}</option>)}</select>
+      </label>
+      <label>Event <input name="event" value={p.event} placeholder="e.g. Olympiad, Tata Steel" /></label>
+      <label>Opening or ECO <input name="opening" value={p.opening} placeholder="e.g. Najdorf, B90 or B90-B99" /></label>
+    </div>
+    <div class="row">
+      <label>From <input name="from" value={p.from} placeholder="e.g. 2024" inputmode="numeric" /></label>
+      <label>To <input name="to" value={p.to} placeholder="e.g. 2024" inputmode="numeric" /></label>
+      <label>Min rating (both) <input name="rating" type="number" min="1000" max="3000" step="50" value={p.minRating ?? ''} placeholder="e.g. 2600" /></label>
+      <label class="moves">Moves
+        <span><input name="minmoves" type="number" min="1" max="500" value={p.minMoves ?? ''} placeholder="min" aria-label="Minimum moves" />–<input name="maxmoves" type="number" min="1" max="500" value={p.maxMoves ?? ''} placeholder="max" aria-label="Maximum moves" /></span>
+      </label>
+    </div>
+    <div class="row actions">
+      <label>Sort
+        <select name="sort">{Object.entries(SORTS).map(([v, l]) => <option value={v} selected={p.sort === v}>{l}</option>)}</select>
+      </label>
+      <button type="submit" class="primary">Search</button>
+      {active && <a href="/games/search/">Clear</a>}
+    </div>
+    <datalist id="player-list"></datalist>
+  </form>
+
+  {!active && (
+    <section>
+      <h2>Try</h2>
+      <ul class="examples">{examples.map((e) => <li><a href={e.href}>{e.label}</a></li>)}</ul>
+      <p class="muted">Names match any part of a player's name; pick a suggestion for an exact match. Dates can be a year, a month (2024-04) or a day.</p>
+    </section>
+  )}
+
+  {r && (
+    <section aria-live="polite">
+      {(pick.white.length > 0 || pick.black.length > 0) && (
+        <div class="narrow">
+          {(['white', 'black'] as const).map((f) =>
+            pick[f].length > 0 && (
+              <p>
+                “{p[f]}” matches {r[f].length >= 30 ? 'many' : r[f].length} players, most games first. Narrow to:{' '}
+                {pick[f].map(({ x, href }, i) => <>{i > 0 && ' · '}<a href={href}>{x.title && `${x.title} `}{x.name}</a> <span class="muted">({x.games.toLocaleString('en')})</span></>)}
+              </p>
+            ),
+          )}
+        </div>
+      )}
+      {r.empty ? (
+        <p class="empty">{r.empty}</p>
+      ) : r.games.length === 0 ? (
+        <p class="empty">No games match{parts.length ? `: ${parts.join(', ')}` : ''}.</p>
+      ) : (
+        <>
+          <p class="summary">
+            Games {first.toLocaleString('en')}–{(first + r.games.length - 1).toLocaleString('en')}{parts.length > 0 && <>: {parts.join(', ')}</>}. <span class="muted">{SORTS[p.sort]}.</span>
+          </p>
+          <GameTable games={r.games} />
+          <nav class="pager">
+            {p.page > 1 ? <a href={searchUrl(p, { page: p.page - 1 })}>← Previous</a> : <span></span>}
+            <span class="muted">Page {p.page}</span>
+            {r.hasMore && p.page < 200 ? <a href={searchUrl(p, { page: p.page + 1 })}>Next →</a> : <span></span>}
+          </nav>
+        </>
+      )}
+    </section>
+  )}
+</Layout>
+
+<style>
+  .search-form { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; margin: 1rem 0 1.5rem; display: grid; gap: 0.8rem; }
+  .row { display: grid; gap: 0.6rem 1rem; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); align-items: end; }
+  .row.players { grid-template-columns: 1fr 1fr auto; }
+  label { display: grid; gap: 0.2rem; font-size: 0.85rem; color: var(--muted); font-weight: 500; }
+  label input, label select { color: var(--fg); width: 100%; font-size: 0.95rem; height: 2.5rem; }
+  label.check { display: flex; align-items: center; gap: 0.4rem; color: var(--fg); padding-bottom: 0.45rem; white-space: nowrap; }
+  label.check input { width: auto; }
+  .moves span { display: flex; align-items: center; gap: 0.3rem; color: var(--muted); }
+  .moves input { min-width: 0; }
+  .actions { grid-template-columns: minmax(12rem, 16rem) auto auto; justify-content: start; }
+  .actions button { min-width: 8rem; }
+  .actions a { align-self: center; }
+  .examples { padding-left: 1.1rem; }
+  .examples li { margin: 0.25rem 0; }
+  .narrow { font-size: 0.9rem; background: var(--accent-soft); border-radius: var(--radius); padding: 0.4rem 0.8rem; margin-bottom: 1rem; }
+  .narrow p { margin: 0.3rem 0; }
+  .summary { margin: 0 0 0.5rem; }
+  .empty { font-size: 1.05rem; }
+  .muted { color: var(--muted); }
+  .pager { display: flex; justify-content: space-between; margin-top: 1rem; }
+  @media (max-width: 40rem) {
+    .search-form { padding: 0.8rem; gap: 0.6rem; }
+    .row { grid-template-columns: 1fr 1fr; gap: 0.5rem 0.6rem; }
+    .row.players { grid-template-columns: 1fr 1fr; }
+    .row.players .check { grid-column: 1 / -1; padding-bottom: 0; }
+    .row:nth-child(2) label:not(:first-child) { grid-column: 1 / -1; }
+    .actions { grid-template-columns: 1fr auto; }
+    .actions label { grid-column: 1 / -1; }
+  }
+</style>
+
+<script>
+  // Player suggestions from /players/suggest.json into the shared datalist.
+  const list = document.getElementById('player-list') as HTMLDataListElement | null;
+  let timer = 0;
+  let last = '';
+  for (const input of document.querySelectorAll<HTMLInputElement>('input[data-suggest]')) {
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 3 || q === last || !list) return;
+      timer = window.setTimeout(async () => {
+        last = q;
+        try {
+          const res = await fetch(`/players/suggest.json?q=${encodeURIComponent(q)}`);
+          const rows = (await res.json()) as { name: string; title: string | null; fed: string | null; games: number }[];
+          list.replaceChildren(
+            ...rows.map((r) => {
+              const o = document.createElement('option');
+              o.value = r.name;
+              o.label = [r.title, r.fed, `${r.games.toLocaleString('en')} games`].filter(Boolean).join(' · ');
+              return o;
+            }),
+          );
+        } catch {
+          /* suggestions are optional */
+        }
+      }, 200);
+    });
+  }
+</script>

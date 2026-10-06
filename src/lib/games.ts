@@ -87,10 +87,10 @@ export async function getOpeningName(slug: string) {
   return (await first<{ name: string }>('SELECT name FROM openings WHERE slug = $1', [slug]))?.name ?? null;
 }
 
-const GAME_COLS = `g.id, g.event_id, g.white_id, g.black_id, g.white_elo, g.black_elo, g.white_title, g.black_title,
+export const GAME_COLS = `g.id, g.event_id, g.white_id, g.black_id, g.white_elo, g.black_elo, g.white_title, g.black_title,
   g.elo_avg, g.result, g.date, g.round, g.eco, g.opening, g.plies, g.twic,
   w.name AS white_name, w.slug AS white_slug, b.name AS black_name, b.slug AS black_slug, e.name AS event_name, e.slug AS event_slug`;
-const GAME_JOINS = `JOIN players w ON w.id = g.white_id JOIN players b ON b.id = g.black_id JOIN events e ON e.id = g.event_id`;
+export const GAME_JOINS = `JOIN players w ON w.id = g.white_id JOIN players b ON b.id = g.black_id JOIN events e ON e.id = g.event_id`;
 
 export const PAGE_SIZE = 50;
 

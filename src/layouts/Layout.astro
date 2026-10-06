@@ -10,10 +10,12 @@ interface Props {
   wide?: boolean;
   /** Social preview card (og:image); defaults to the title on the starting position. */
   og?: OgCard;
+  /** Keep the page out of search indexes (links are still followed), e.g. search results. */
+  noindex?: boolean;
 }
 
 const SITE_NAME = 'chessmoments';
-const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false, og } = Astro.props;
+const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false, og, noindex = false } = Astro.props;
 const ogCard: OgCard = og ?? { fen: START_FEN, title, subtitle: description.length > 150 ? `${description.slice(0, 147).trimEnd()}…` : description };
 const ogImage = new URL(ogUrl(ogCard), Astro.site);
 const canonical = new URL(Astro.url.pathname, Astro.site);
@@ -44,6 +46,7 @@ const groups = [
     label: 'Games',
     items: [
       { href: '/games/', label: 'Games database', note: 'Millions of master games' },
+      { href: '/games/search/', label: 'Search games', note: 'By player, event, opening, date…' },
       { href: '/players/', label: 'Players', note: 'Search any player' },
       { href: '/events/', label: 'Events', note: 'Tournaments, round by round' },
     ],
@@ -71,6 +74,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex, follow" />}
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" href="/favicon.ico" />
     <link rel="sitemap" href="/sitemap-index.xml" />

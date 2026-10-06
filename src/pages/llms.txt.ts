@@ -27,7 +27,7 @@ ${TOOLS.map((t) => `- [${t.name}](${abs(t.href)}): ${t.blurb} ${t.agent}`).join(
 - [Puzzle archive](${abs('/puzzle/archive/')})
 - [Openings index](${abs('/openings/')})
 ${pages.map((p) => `- [${p.data.title}](${abs(`/${p.id}/`)})`).join('\n')}
-- [Games database](${abs('/games/')}), [players](${abs('/players/')}), [events](${abs('/events/')}): each event page (/events/<slug>/) has the crosstable or standings (team standings for team events, the bracket for knockouts) and each round has a page (/events/<slug>/round-<n>/) with results and standings after that round
+- [Games database](${abs('/games/')}), [players](${abs('/players/')}), [events](${abs('/events/')}): each event page (/events/<slug>/) has the crosstable or standings (team standings for team events, the bracket for knockouts) and each round has a page (/events/<slug>/round-<n>/) with results and standings after that round; game search at /games/search/ (parameters: white, black, any=1 for either colour, result=1-0|0-1|1/2-1/2|decisive, event, opening (name or ECO like B90 or B90-B99), from, to (YYYY or YYYY-MM-DD), rating (minimum for both), minmoves, maxmoves, sort=newest|oldest|rating|shortest, page)
 - [Sitemap](${abs('/sitemap-index.xml')}) and [games/players/events sitemap](${abs('/sitemaps/index.xml')})
 `;
   return new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });

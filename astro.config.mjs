@@ -54,6 +54,7 @@ export default defineConfig({
         'https://chessmoments.com/puzzle/archive/',
         // Games database hubs (individual games/players/events are in /sitemaps/index.xml).
         'https://chessmoments.com/games/',
+        'https://chessmoments.com/games/search/',
         'https://chessmoments.com/players/',
         'https://chessmoments.com/events/',
         ...puzzleDates.map((d) => `https://chessmoments.com/puzzle/${d}/`),
