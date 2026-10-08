@@ -14,9 +14,14 @@
 	// TWIC games database: Neon Postgres (read-only role) through Hyperdrive. `localConnectionString`
 	// is only used by `astro dev` / `wrangler dev`; point it at a local copy if you need one.
 	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
+	// Engine analysis (src/lib/analysis.ts): Stockfish service on the VPS; STOCKFISH_TOKEN is a secret.
+	"vars": { "ENGINE_URL": "https://engine.chessmoments.com" },
+	"ratelimits": [{ "name": "ANALYSIS_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }],
 	"previews": {
 		// Bindings aren't inherited by previews; they read the same games database.
-		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }]
+		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
+		"vars": { "ENGINE_URL": "https://engine.chessmoments.com" },
+		"ratelimits": [{ "name": "ANALYSIS_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }]
 	},
 	// Run the Worker next to Neon (Frankfurt): database pages make several sequential queries, so one
 	// long hop from the visitor beats several long hops to the database. Static assets are unaffected.

@@ -17,6 +17,7 @@ export const GET: APIRoute = ({ site }) => {
     'Allow: /',
     'Disallow: /admin/',
     'Disallow: /players/suggest.json',
+    'Disallow: /games/analysis/',
     '',
     '# AI training crawlers: not the TWIC games database (used with permission for display only).',
     training,

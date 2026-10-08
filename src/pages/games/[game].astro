@@ -111,6 +111,32 @@ const pgn = [
     </div>
   </div>
 
+  <section class="engine" data-analysis={game.id} data-result={game.result} hidden aria-live="polite">
+    <h2>Engine analysis</h2>
+    <div data-part="none" hidden>
+      <p>Stockfish hasn't analysed this game yet. It takes about a minute: every position is evaluated, and mistakes and the best moves are marked.</p>
+      <button type="button" class="primary" data-queue>Analyse with Stockfish</button>
+    </div>
+    <div data-part="pending" hidden>
+      <p data-progress>Queued, waiting for the engine…</p>
+      <div class="bar"><span></span></div>
+      <p class="muted small">You can leave this page: the analysis is saved for everyone when it's done.</p>
+    </div>
+    <div data-part="done" hidden>
+      <p class="now" data-now></p>
+      <svg class="graph" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Evaluation through the game: light area means White is better, dark means Black"></svg>
+      <table class="summary">
+        <thead><tr><th></th><th class="num" title="Average centipawn loss">Avg loss</th><th class="num">Inaccuracies <span class="g-t-inaccuracy">?!</span></th><th class="num">Mistakes <span class="g-t-mistake">?</span></th><th class="num">Blunders <span class="g-t-blunder">??</span></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="muted small">Stockfish 17.1, depth <span data-depth></span>. Click the graph to jump to a move.</p>
+    </div>
+    <div data-part="error" hidden>
+      <p data-message></p>
+      <button type="button" data-retry hidden>Try again</button>
+    </div>
+  </section>
+
   {others.length > 0 && (
     <section>
       <h2>Other games between {game.white_name} and {game.black_name}</h2>
@@ -143,11 +169,40 @@ const pgn = [
   .mv:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
   .mv.current { background: var(--accent-fill); color: #fff; }
   .pgn { white-space: pre-wrap; font-size: 0.8rem; }
+  .engine { margin-top: 1.5rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 1rem 1rem; }
+  .engine h2 { margin-top: 0.2rem; }
+  .engine .bar { height: 0.5rem; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .engine .bar span { display: block; height: 100%; width: 0; background: var(--accent-fill); transition: width 0.4s; }
+  .engine .now { font-weight: 500; min-height: 1.5em; }
+  .engine .graph { width: 100%; height: 7.5rem; display: block; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); }
+  .engine :global(.g-black) { fill: #2a241d; }
+  .engine :global(.g-white) { fill: #f4efe6; }
+  .engine :global(.g-mid) { stroke: #9a8f80; stroke-dasharray: 3 3; stroke-width: 1; }
+  .engine :global(.g-line) { fill: none; stroke: #b45309; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .engine :global(.g-cursor) { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+  .engine :global(.g-blunder) { fill: var(--loss); stroke: #fff; stroke-width: 1; }
+  .engine :global(.g-mistake) { fill: #d97706; stroke: #fff; stroke-width: 1; }
+  .engine :global(.g-inaccuracy) { fill: #eab308; stroke: #fff; stroke-width: 1; }
+  .engine .summary { border-collapse: collapse; margin: 0.75rem 0 0.25rem; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  .engine .summary th, .engine .summary td { padding: 0.25rem 0.9rem 0.25rem 0; text-align: left; }
+  .engine .summary .num { text-align: right; }
+  .engine :global(.g-t-blunder) { color: var(--loss); font-weight: 700; }
+  .engine :global(.g-t-mistake) { color: #c2640c; font-weight: 700; }
+  .engine :global(.g-t-inaccuracy) { color: #a16207; font-weight: 700; }
+  .moves :global(.ann) { font-weight: 700; margin-left: 0.1rem; }
+  .moves :global(.ann-blunder .ann) { color: var(--loss); }
+  .moves :global(.ann-mistake .ann) { color: #c2640c; }
+  .moves :global(.ann-inaccuracy .ann) { color: #a16207; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
   .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
 </style>
 
 <script>
   import { mountGameViewer } from '../../scripts/game-viewer';
+  import { mountGameAnalysis } from '../../scripts/game-analysis';
   const root = document.querySelector<HTMLElement>('.viewer');
+  const panel = document.querySelector<HTMLElement>('[data-analysis]');
+  if (root && panel) mountGameAnalysis(panel, root);
   if (root) mountGameViewer(root);
 </script>

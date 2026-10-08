@@ -25,6 +25,7 @@ export function mountGameViewer(root: HTMLElement) {
     board.mark('last', ply ? [ucis[ply - 1].slice(0, 2), ucis[ply - 1].slice(2, 4)] : []);
     for (const el of moveEls) el.classList.toggle('current', Number(el.dataset.ply) === ply);
     root.querySelector('[data-ply].current')?.scrollIntoView({ block: 'nearest' });
+    root.dispatchEvent(new CustomEvent('cm:ply', { detail: { ply } }));
     if (analyse) {
       const u = new URL(analyse.href);
       u.searchParams.set('pgn', sans.slice(0, ply).join(' '));
@@ -42,6 +43,8 @@ export function mountGameViewer(root: HTMLElement) {
     show(ply);
   });
   for (const el of moveEls) el.addEventListener('click', () => show(Number(el.dataset.ply)));
+  // Other widgets (the engine analysis) can jump to a move.
+  root.addEventListener('cm:goto', (e) => show((e as CustomEvent<{ ply: number }>).detail.ply));
   document.addEventListener('keydown', (e) => {
     if ((e.target as HTMLElement).closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
     const fn = { ArrowLeft: () => show(ply - 1), ArrowRight: () => show(ply + 1), ArrowUp: () => show(0), ArrowDown: () => show(sans.length), Home: () => show(0), End: () => show(sans.length) }[e.key];
