@@ -5,7 +5,7 @@
 import { env } from 'cloudflare:workers';
 import { getGame, query } from './games';
 
-export const DEPTH = 16;
+export const DEPTH = 18;
 
 interface Env {
   ENGINE_URL?: string;
@@ -27,11 +27,16 @@ interface Row {
   error: string | null;
 }
 
-/** Per position (ply 0 = start): eval from White's view as centipawns, or "#n" / "#-n" for mate; best move in UCI. */
+/**
+ * Per position (ply 0 = start): eval from White's view as centipawns, or "#n" / "#-n" for mate; best move
+ * in UCI; the engine's line (up to PV_MOVES UCI moves, space-separated; absent in analyses before depth 18).
+ */
 export interface Evals {
   e: (number | string | null)[];
   b: (string | null)[];
+  p?: (string | null)[];
 }
+const PV_MOVES = 8;
 
 export type AnalysisState =
   | { status: 'none' }
@@ -67,18 +72,20 @@ async function submit(gameId: number): Promise<{ jobId: string } | { error: stri
 
 interface EngineResult {
   ply?: number;
-  lines: { cp: number | null; mate: number | null; best: string }[];
+  lines: { cp: number | null; mate: number | null; best: string; pv?: string[] }[];
 }
 
 function compact(results: EngineResult[]): Evals {
   const e: Evals['e'] = [];
   const b: Evals['b'] = [];
+  const p: NonNullable<Evals['p']> = [];
   for (const r of results) {
     const l = r.lines[0];
     e.push(!l ? null : l.mate !== null && l.mate !== undefined ? `#${l.mate}` : l.cp);
     b.push(l?.best ?? null);
+    p.push(l?.pv?.length ? l.pv.slice(0, PV_MOVES).join(' ') : null);
   }
-  return { e, b };
+  return { e, b, p };
 }
 
 const touch = (gameId: number, set: string, params: (string | number | null)[]) =>

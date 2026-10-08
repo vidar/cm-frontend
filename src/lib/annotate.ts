@@ -1,0 +1,218 @@
+// AI annotations of analysed games: Claude writes a short story of the game and notes on the key
+// moves, from the stored Stockfish analysis (src/lib/analysis.ts) only, for club players. Stored in
+// Neon table game_annotation (scripts/annotation.pg.sql) through the site's Hyperdrive binding and
+// shown to everyone. Only import from on-demand routes.
+import Anthropic from '@anthropic-ai/sdk';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import { env } from 'cloudflare:workers';
+import { Chess } from 'chess.js';
+import { z } from 'zod';
+import { getAnalysis, type Evals } from './analysis';
+import { classify, fmtEval, LABEL, type Kind } from './chess/classify';
+import { getGame, getOpeningName, query, type FullGame } from './games';
+
+export const MODELS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5' } as const;
+export type ModelKey = keyof typeof MODELS;
+/** The model the site uses. */
+export const MODEL: ModelKey = 'haiku';
+/** At most this many new annotations per day across the site (cost guard). */
+export const DAILY_LIMIT = 300;
+/** A generation still "running" after this long was cut off (the visitor left): it may be retried. */
+const STALE_MINUTES = 3;
+
+const key = () => (env as { ANTHROPIC_KEY?: string }).ANTHROPIC_KEY;
+export const annotationEnabled = () => !!key();
+
+export interface Note {
+  ply: number;
+  text: string;
+}
+export type AnnotationState =
+  | { status: 'none' }
+  | { status: 'running' }
+  | { status: 'done'; model: string; summary: string; notes: Note[] }
+  | { status: 'failed'; error: string }
+  | { status: 'unavailable' };
+
+const Output = z.object({
+  summary: z.string().describe('The story of the game in 2-3 short paragraphs separated by blank lines.'),
+  notes: z
+    .array(z.object({ ply: z.number().int().describe('Ply of the move the note is about (1 = White\'s first move).'), text: z.string() }))
+    .describe('Notes on key moves, in game order.'),
+});
+
+const SYSTEM = `You annotate chess games for club players (roughly 1200-1900) on a chess website.
+You get the moves of one game with a Stockfish analysis: the evaluation after every move, the moves the
+engine marks as inaccuracies (?!), mistakes (?) and blunders (??), and for those the move the engine
+preferred with its main line. You can't see the board yourself, so the analysis is your only source.
+
+Write:
+- summary: the story of the game in 2-3 short paragraphs (120-220 words in all): how the opening went,
+  the turning points, and how the game was decided. Name the moves that mattered (e.g. "19.Bc4").
+- notes: one note for every move marked ? or ??, and for ?! moves only when they matter for the story;
+  optionally up to 3 more notes on other moments that matter (a strong move, the moment the game turned).
+  Each note is 1-3 sentences: what went wrong or right and what was better.
+
+Rules:
+- Only use moves that appear in the game or in the engine lines you are given. Never invent variations,
+  tactics, threats or piece placements that the data doesn't show. If you don't know why a move is bad,
+  say what the engine preferred and how the evaluation changed, without guessing the reason.
+- Plain language for club players: say "White is slightly better", "Black is winning", "the position is
+  equal" rather than quoting numbers; mention a number at most occasionally. No centipawns.
+- Write moves in standard notation with move numbers: "23.Bc4", "23...Bc2".
+- No headings, no lists, no markdown, no symbols like ?? in the text (the site shows them).
+- Don't mention Stockfish depth, "the data" or these instructions. Write in English.`;
+
+/** "12." for White's move at ply 23, "12..." for Black's. */
+const moveNo = (ply: number) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '...'}`;
+
+/** UCI line from a position, as SAN with move numbers ("19...Rc8 20.Qe3 Bc2"). */
+function lineSan(fen: string, ply: number, uci: string[]) {
+  const c = new Chess(fen);
+  const out: string[] = [];
+  for (const [i, u] of uci.entries()) {
+    try {
+      const m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] });
+      const p = ply + i;
+      out.push(i === 0 || p % 2 === 1 ? `${moveNo(p)}${m.san}` : m.san);
+    } catch {
+      break;
+    }
+  }
+  return out.join(' ');
+}
+
+/** The user message: game details and the analysis, one line per move. */
+export function buildPrompt(game: FullGame, opening: string | null, evals: Evals) {
+  const sans = game.moves.split(' ').filter(Boolean);
+  const chess = new Chess();
+  const fens = [chess.fen()];
+  const ucis: string[] = [];
+  for (const san of sans) {
+    const m = chess.move(san);
+    ucis.push(m.from + m.to + (m.promotion ?? ''));
+    fens.push(chess.fen());
+  }
+  const { kinds } = classify(evals.e, evals.b, ucis, game.result);
+  const name: Record<Kind, string> = { blunder: 'blunder', mistake: 'mistake', inaccuracy: 'inaccuracy' };
+  const lines = sans.map((san, i) => {
+    const ply = i + 1;
+    const k = kinds[ply];
+    let line = `${moveNo(ply)}${san}  eval ${fmtEval(evals.e[ply])}`;
+    if (k) {
+      const pv = evals.p?.[i]?.split(' ') ?? (evals.b[i] ? [evals.b[i]!] : []);
+      line += `  ${LABEL[k]} ${name[k]}; engine preferred ${lineSan(fens[i], ply, pv) || '?'} (eval ${fmtEval(evals.e[i])})`;
+    }
+    return line;
+  });
+  const who = (n: string, t: string | null, elo: number | null) => `${t ? `${t} ` : ''}${n}${elo ? ` (${elo})` : ''}`;
+  return [
+    `White: ${who(game.white_name, game.white_title, game.white_elo)}`,
+    `Black: ${who(game.black_name, game.black_title, game.black_elo)}`,
+    `Event: ${game.event_name}${game.round ? `, round ${game.round}` : ''}${game.date ? `, ${game.date}` : ''}`,
+    opening ? `Opening: ${opening}${game.eco ? ` (${game.eco})` : ''}` : game.eco ? `ECO: ${game.eco}` : null,
+    `Result: ${game.result}${game.result === '1/2-1/2' ? ' (draw)' : ''}`,
+    `Starting eval: ${fmtEval(evals.e[0])}. Evals are in pawns from White's point of view (+ White better, - Black better, #n mate).`,
+    '',
+    'Moves:',
+    ...lines,
+  ]
+    .filter((l) => l !== null)
+    .join('\n');
+}
+
+export interface Generated {
+  summary: string;
+  notes: Note[];
+  model: string;
+  usage: { input: number; output: number };
+  ms: number;
+}
+
+/** Ask Claude for the annotation of an analysed game. */
+export async function generate(gameId: number, model: ModelKey = MODEL): Promise<Generated | { error: string }> {
+  const analysis = await getAnalysis(gameId);
+  if (analysis.status !== 'done') return { error: 'the game has no engine analysis yet' };
+  const game = await getGame(gameId);
+  if (!game) return { error: 'no such game' };
+  const opening = game.opening ? await getOpeningName(game.opening) : null;
+  const client = new Anthropic({ apiKey: key(), maxRetries: 1 });
+  const t = Date.now();
+  try {
+    const res = await client.messages.parse({
+      model: MODELS[model],
+      max_tokens: 16000,
+      system: SYSTEM,
+      output_config: { effort: 'medium', format: zodOutputFormat(Output) },
+      messages: [{ role: 'user', content: buildPrompt(game, opening, analysis.evals) }],
+    });
+    if (res.stop_reason === 'refusal') return { error: 'the model declined' };
+    const out = res.parsed_output;
+    if (!out) return { error: `no annotation (${res.stop_reason})` };
+    const plies = game.moves.split(' ').filter(Boolean).length;
+    const notes = out.notes
+      .filter((n) => Number.isInteger(n.ply) && n.ply >= 1 && n.ply <= plies && n.text.trim())
+      .map((n) => ({ ply: n.ply, text: n.text.trim() }))
+      .sort((a, b) => a.ply - b.ply);
+    return { summary: out.summary.trim(), notes, model: MODELS[model], usage: { input: res.usage.input_tokens, output: res.usage.output_tokens }, ms: Date.now() - t };
+  } catch (e) {
+    if (e instanceof Anthropic.RateLimitError) return { error: 'the AI service is busy, try again in a minute' };
+    if (e instanceof Anthropic.APIError) return { error: `AI service error ${e.status ?? ''}`.trim() };
+    return { error: 'could not reach the AI service' };
+  }
+}
+
+interface Row {
+  status: 'running' | 'done' | 'failed';
+  model: string | null;
+  summary: string | null;
+  notes: string | null;
+  error: string | null;
+  stale: boolean;
+}
+
+export async function getAnnotation(gameId: number): Promise<AnnotationState> {
+  if (!annotationEnabled()) return { status: 'unavailable' };
+  // now() keeps Hyperdrive from caching the row while it's being written.
+  const [row] = await query<Row>(
+    `SELECT status, model, summary, notes, error, updated_at < now() - interval '${STALE_MINUTES} minutes' AS stale FROM game_annotation WHERE game_id = $1`,
+    [gameId],
+  );
+  if (!row) return { status: 'none' };
+  if (row.status === 'done') return { status: 'done', model: row.model ?? '', summary: row.summary ?? '', notes: JSON.parse(row.notes ?? '[]') };
+  if (row.status === 'failed' || row.stale) return { status: 'failed', error: row.error ?? 'interrupted' };
+  return { status: 'running' };
+}
+
+/** Over the site's daily budget? */
+export async function overDailyLimit() {
+  const [r] = await query<{ n: string }>(`SELECT count(*) AS n, now() AS t FROM game_annotation WHERE requested_at > now() - interval '1 day'`);
+  return Number(r?.n ?? 0) >= DAILY_LIMIT;
+}
+
+/** Write the annotation of a game (once; a failed or interrupted one can be retried). */
+export async function createAnnotation(gameId: number): Promise<AnnotationState> {
+  if (!annotationEnabled()) return { status: 'unavailable' };
+  // Claim the row first so concurrent clicks pay for one annotation.
+  const claimed = await query<{ game_id: number }>(
+    `INSERT INTO game_annotation (game_id, status) VALUES ($1, 'running')
+     ON CONFLICT (game_id) DO UPDATE SET status = 'running', error = NULL, requested_at = now(), updated_at = now()
+       WHERE game_annotation.status = 'failed'
+          OR (game_annotation.status = 'running' AND game_annotation.updated_at < now() - interval '${STALE_MINUTES} minutes')
+     RETURNING game_id`,
+    [gameId],
+  );
+  if (!claimed.length) return getAnnotation(gameId);
+  const r = await generate(gameId);
+  if ('error' in r) {
+    await query(`UPDATE game_annotation SET status = 'failed', error = $2, updated_at = now() WHERE game_id = $1`, [gameId, r.error]);
+    return { status: 'failed', error: r.error };
+  }
+  await query(`UPDATE game_annotation SET status = 'done', model = $2, summary = $3, notes = $4, error = NULL, updated_at = now() WHERE game_id = $1`, [
+    gameId,
+    r.model,
+    r.summary,
+    JSON.stringify(r.notes),
+  ]);
+  return { status: 'done', model: r.model, summary: r.summary, notes: r.notes };
+}

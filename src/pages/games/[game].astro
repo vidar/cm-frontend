@@ -124,12 +124,31 @@ const pgn = [
     </div>
     <div data-part="done" hidden>
       <p class="now" data-now></p>
+      <p class="now-note" data-now-note hidden></p>
       <svg class="graph" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Evaluation through the game: light area means White is better, dark means Black"></svg>
       <table class="summary">
         <thead><tr><th></th><th class="num" title="Average centipawn loss">Avg loss</th><th class="num">Inaccuracies <span class="g-t-inaccuracy">?!</span></th><th class="num">Mistakes <span class="g-t-mistake">?</span></th><th class="num">Blunders <span class="g-t-blunder">??</span></th></tr></thead>
         <tbody></tbody>
       </table>
       <p class="muted small">Stockfish 17.1, depth <span data-depth></span>. Click the graph to jump to a move.</p>
+      <div class="ai" data-ai hidden>
+        <h3>Notes</h3>
+        <div data-ai-part="none" hidden>
+          <p>Get a short story of the game and notes on the key moves, written by AI from this analysis.</p>
+          <button type="button" class="primary" data-ai-write>Write notes with AI</button>
+        </div>
+        <div data-ai-part="running" hidden>
+          <p class="writing">Writing notes… this takes about half a minute.</p>
+        </div>
+        <div data-ai-part="done" hidden>
+          <div class="ai-summary" data-ai-summary></div>
+          <p class="muted small">Written by <span data-ai-model></span> from the Stockfish analysis; notes appear under their moves. AI can get things wrong.</p>
+        </div>
+        <div data-ai-part="error" hidden>
+          <p data-ai-message></p>
+          <button type="button" data-ai-retry>Try again</button>
+        </div>
+      </div>
     </div>
     <div data-part="error" hidden>
       <p data-message></p>
@@ -196,6 +215,15 @@ const pgn = [
   .moves :global(.ann-blunder .ann) { color: var(--loss); }
   .moves :global(.ann-mistake .ann) { color: #c2640c; }
   .moves :global(.ann-inaccuracy .ann) { color: #a16207; }
+  .engine .now-note { margin: -0.4rem 0 0.6rem; font-size: 0.92rem; }
+  .engine .ai { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.25rem; }
+  .engine .ai h3 { margin: 0.6rem 0 0.4rem; font-size: 1.1rem; }
+  .engine .ai-summary { max-width: 48rem; }
+  @media (prefers-reduced-motion: no-preference) { .engine .writing { animation: pulse 1.6s ease-in-out infinite; } }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  .moves :global(.note) { font-size: 0.85rem; line-height: 1.4; color: var(--muted); padding: 0.15rem 0.3rem 0.35rem 2.5rem; cursor: pointer; border-radius: 3px; }
+  .moves :global(.note b) { color: var(--fg); font-weight: 600; }
+  .moves :global(.note:hover), .moves :global(.note.current) { background: var(--accent-soft); color: var(--fg); }
   .muted { color: var(--muted); }
   .small { font-size: 0.85rem; }
   .credit { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }

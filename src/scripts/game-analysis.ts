@@ -1,11 +1,12 @@
 import { Chess } from 'chess.js';
+import { classify, fmtEval as fmt, LABEL, type Ev } from '../lib/chess/classify';
+import { mountGameAnnotation } from './game-annotation';
 
 // Engine analysis panel on game pages: shows a stored Stockfish analysis (eval graph, mistakes,
 // best moves) or a button to queue one, then polls until the engine is done. Talks to
 // /games/analysis/<id>.json (src/pages/games/analysis/[id].json.ts) and to the game viewer
 // (cm:ply / cm:goto events, src/scripts/game-viewer.ts).
 
-type Ev = number | string | null;
 interface State {
   status: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'unavailable';
   done?: number;
@@ -14,10 +15,6 @@ interface State {
   evals?: { e: Ev[]; b: (string | null)[] };
   error?: string;
 }
-
-const winChance = (cp: number) => 2 / (1 + Math.exp(-0.00368208 * cp)) - 1; // -1..1, White's view
-const LABEL = { blunder: '??', mistake: '?', inaccuracy: '?!' } as const;
-type Kind = keyof typeof LABEL;
 
 export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
   const id = panel.dataset.analysis!;
@@ -77,35 +74,8 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
   panel.querySelector('[data-retry]')?.addEventListener('click', () => load('POST'));
 
   function render(evals: { e: Ev[]; b: (string | null)[] }, depth: number) {
-    // Eval per position from White's view; the final position of a finished game has none.
-    const end = result === '1-0' ? 1 : result === '0-1' ? -1 : 0;
-    const wc = evals.e.map((v, i) => {
-      if (v === null || v === undefined) return i === evals.e.length - 1 ? end : 0;
-      if (typeof v === 'string') return v.startsWith('#-') ? -1 : 1;
-      return winChance(v);
-    });
-    const cpOf = (v: Ev, i: number) => {
-      if (v === null || v === undefined) return i === evals.e.length - 1 ? end * 1000 : 0;
-      if (typeof v === 'string') return v.startsWith('#-') ? -1000 : 1000;
-      return Math.max(-1000, Math.min(1000, v));
-    };
-    const fmt = (v: Ev) => (v === null || v === undefined ? '–' : typeof v === 'string' ? v : `${v > 0 ? '+' : ''}${(v / 100).toFixed(2)}`);
-
     // Classify each move by the drop in winning chances for the side that moved (Lichess thresholds).
-    const kinds: (Kind | null)[] = [null];
-    const stats = { w: { blunder: 0, mistake: 0, inaccuracy: 0, loss: 0, n: 0 }, b: { blunder: 0, mistake: 0, inaccuracy: 0, loss: 0, n: 0 } };
-    for (let p = 1; p <= sans.length && p < wc.length; p++) {
-      const white = p % 2 === 1;
-      const s = white ? stats.w : stats.b;
-      const sign = white ? 1 : -1;
-      s.loss += Math.max(0, (cpOf(evals.e[p - 1], p - 1) - cpOf(evals.e[p], p)) * sign);
-      s.n++;
-      const drop = (wc[p - 1] - wc[p]) * sign;
-      const best = evals.b[p - 1];
-      const kind: Kind | null = best && best === ucis[p - 1] ? null : drop >= 0.3 ? 'blunder' : drop >= 0.2 ? 'mistake' : drop >= 0.1 ? 'inaccuracy' : null;
-      kinds.push(kind);
-      if (kind) s[kind]++;
-    }
+    const { kinds, stats, wc } = classify(evals.e, evals.b, ucis, result);
 
     // Annotate the move list.
     for (const el of viewer.querySelectorAll<HTMLElement>('[data-ply]')) {
@@ -180,6 +150,7 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
     viewer.addEventListener('cm:ply', (e) => update((e as CustomEvent<{ ply: number }>).detail.ply));
     update(current);
     showPart('done');
+    mountGameAnnotation(panel, viewer);
   }
 
   viewer.addEventListener('cm:ply', (e) => (current = (e as CustomEvent<{ ply: number }>).detail.ply));

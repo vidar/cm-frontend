@@ -53,7 +53,14 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   (status reads include `now()` so Hyperdrive doesn't cache them). Endpoint
   `/games/analysis/<id>.json` (GET state, POST queue; same-site, rate-limited by `ANALYSIS_LIMITER`,
   refused while the engine queue is long); UI in `src/scripts/game-analysis.ts`. The panel stays hidden
-  until `ENGINE_URL` and the secret are configured.
+  until `ENGINE_URL` and the secret are configured. Depth 18; move marks come from `src/lib/chess/classify.ts`
+  (shared by the page and the AI prompt).
+- **AI notes (on demand):** once a game is analysed, "Write notes with AI" has Claude (`MODEL` in
+  `src/lib/annotate.ts`, Haiku 5.5; Worker secret `ANTHROPIC_KEY`, set for Production and Previews) write a
+  summary and notes on key moves for club players from the stored analysis only (no invented lines). Stored in
+  Neon table `game_annotation` (`scripts/annotation.pg.sql`), endpoint `/games/annotation/<id>.json` (GET state,
+  POST write; same-site, rate-limited, at most `DAILY_LIMIT` new annotations a day). UI in
+  `src/scripts/game-annotation.ts`: summary in the analysis panel, notes under their moves.
 - **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
   `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
   `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),
