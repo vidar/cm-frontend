@@ -180,9 +180,12 @@ const pgn = [
   .engine :global(.g-mid) { stroke: #9a8f80; stroke-dasharray: 3 3; stroke-width: 1; }
   .engine :global(.g-line) { fill: none; stroke: #b45309; stroke-width: 1.5; vector-effect: non-scaling-stroke; }
   .engine :global(.g-cursor) { stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
-  .engine :global(.g-blunder) { fill: var(--loss); stroke: #fff; stroke-width: 1; }
-  .engine :global(.g-mistake) { fill: #d97706; stroke: #fff; stroke-width: 1; }
-  .engine :global(.g-inaccuracy) { fill: #eab308; stroke: #fff; stroke-width: 1; }
+  .engine :global(.g-dot line) { stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .engine :global(.g-ring) { stroke: #fff; stroke-width: 10; }
+  .engine :global(.g-fill) { stroke-width: 8; }
+  .engine :global(.g-blunder .g-fill) { stroke: var(--loss); }
+  .engine :global(.g-mistake .g-fill) { stroke: #d97706; }
+  .engine :global(.g-inaccuracy .g-fill) { stroke: #eab308; }
   .engine .summary { border-collapse: collapse; margin: 0.75rem 0 0.25rem; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
   .engine .summary th, .engine .summary td { padding: 0.25rem 0.9rem 0.25rem 0; text-align: left; }
   .engine .summary .num { text-align: right; }

@@ -131,7 +131,14 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
       `<path class="g-white" d="${line}L${W},${H}L0,${H}Z"/>` +
       `<line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" class="g-mid"/>` +
       `<path class="g-line" d="${line}"/>` +
-      kinds.map((k, i) => (k ? `<circle class="g-${k}" cx="${x(i).toFixed(1)}" cy="${y(wc[i]).toFixed(1)}" r="4"><title>${Math.ceil(i / 2)}${i % 2 ? '.' : '…'} ${sans[i - 1]} ${LABEL[k]}</title></circle>` : '')).join('') +
+      // Dots as zero-length round-capped strokes in screen pixels, so they stay round although the graph stretches.
+      kinds
+        .map((k, i) => {
+          if (!k) return '';
+          const pt = `x1="${x(i).toFixed(1)}" x2="${x(i).toFixed(1)}" y1="${y(wc[i]).toFixed(1)}" y2="${y(wc[i]).toFixed(1)}"`;
+          return `<g class="g-dot g-${k}"><title>${Math.ceil(i / 2)}${i % 2 ? '.' : '…'} ${sans[i - 1]} ${LABEL[k]}</title><line class="g-ring" ${pt}/><line class="g-fill" ${pt}/></g>`;
+        })
+        .join('') +
       `<line class="g-cursor" x1="0" x2="0" y1="0" y2="${H}"/>`;
     const cursor = svg.querySelector<SVGLineElement>('.g-cursor')!;
     const plyAt = (ev: MouseEvent) => {
