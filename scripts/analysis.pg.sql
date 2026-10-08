@@ -11,8 +11,5 @@ CREATE TABLE IF NOT EXISTS game_analysis (
   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-GRANT SELECT ON game_analysis TO readonly;
--- The Worker writes through its own role (Hyperdrive config "cm-analysis"); run after creating it
--- in the Neon console:
---   GRANT USAGE ON SCHEMA public TO analysis_writer;
---   GRANT SELECT, INSERT, UPDATE ON game_analysis TO analysis_writer;
+-- The site's Hyperdrive role writes analyses (and only needs to write this table).
+GRANT SELECT, INSERT, UPDATE ON game_analysis TO readonly;

@@ -1,31 +1,22 @@
 // On-demand Stockfish analysis of database games. The engine runs on our VPS (ENGINE_URL, bearer
 // STOCKFISH_TOKEN; API described at ENGINE_URL/llm.txt). Results live in Neon table game_analysis
-// (scripts/analysis.pg.sql), written through the least-privilege Hyperdrive binding
-// HYPERDRIVE_ANALYSIS. Only import from on-demand routes.
+// (scripts/analysis.pg.sql), through the site's Hyperdrive binding (its role may insert/update
+// that table only). Only import from on-demand routes.
 import { env } from 'cloudflare:workers';
-import postgres from 'postgres';
-import { getGame } from './games';
+import { getGame, query } from './games';
 
 export const DEPTH = 16;
 
 interface Env {
-  HYPERDRIVE_ANALYSIS?: Hyperdrive;
   ENGINE_URL?: string;
   STOCKFISH_TOKEN?: string;
 }
 const cfg = () => env as unknown as Env;
 
-/** Analysis is switched on when the engine and the writer database are configured. */
-export const analysisEnabled = () => !!(cfg().HYPERDRIVE_ANALYSIS && cfg().ENGINE_URL && cfg().STOCKFISH_TOKEN);
+/** Analysis is switched on when the engine URL and token are configured. */
+export const analysisEnabled = () => !!(cfg().ENGINE_URL && cfg().STOCKFISH_TOKEN);
 
-async function aquery<T>(text: string, params: (string | number | null)[] = []): Promise<T[]> {
-  const sql = postgres(cfg().HYPERDRIVE_ANALYSIS!.connectionString, { max: 1, fetch_types: false });
-  try {
-    return (await sql.unsafe(text, params)) as unknown as T[];
-  } finally {
-    sql.end().catch(() => {});
-  }
-}
+const aquery = query;
 
 interface Row {
   game_id: number;
@@ -96,7 +87,8 @@ const touch = (gameId: number, set: string, params: (string | number | null)[]) 
 /** Current state; advances a running job (fetches the result when the engine is done). */
 export async function getAnalysis(gameId: number): Promise<AnalysisState> {
   if (!analysisEnabled()) return { status: 'unavailable' };
-  const [row] = await aquery<Row>('SELECT game_id, status, job_id, depth, evals, error FROM game_analysis WHERE game_id = $1', [gameId]);
+  // now() keeps Hyperdrive from caching the row: its status changes while a job runs.
+  const [row] = await aquery<Row>('SELECT game_id, status, job_id, depth, evals, error, now() AS t FROM game_analysis WHERE game_id = $1', [gameId]);
   if (!row) return { status: 'none' };
   if (row.status === 'done' && row.evals) return { status: 'done', depth: row.depth ?? DEPTH, evals: JSON.parse(row.evals) };
   if (row.status === 'failed') return { status: 'failed', error: row.error ?? 'failed' };

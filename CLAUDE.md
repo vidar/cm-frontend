@@ -49,11 +49,11 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
   at `ENGINE_URL` (https://engine.chessmoments.com, API in its `/llm.txt`; Worker secret
   `STOCKFISH_TOKEN`). `src/lib/analysis.ts` submits a game as a job and polls it; results are stored in
-  Neon table `game_analysis` (`scripts/analysis.pg.sql`) through the write-capable Hyperdrive binding
-  `HYPERDRIVE_ANALYSIS` (role `analysis_writer`, rights on that table only). Endpoint
+  Neon table `game_analysis` (`scripts/analysis.pg.sql`) through the site's `HYPERDRIVE` binding
+  (status reads include `now()` so Hyperdrive doesn't cache them). Endpoint
   `/games/analysis/<id>.json` (GET state, POST queue; same-site, rate-limited by `ANALYSIS_LIMITER`,
   refused while the engine queue is long); UI in `src/scripts/game-analysis.ts`. The panel stays hidden
-  until the binding, URL and secret are all configured.
+  until `ENGINE_URL` and the secret are configured.
 - **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
   `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
   `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),
