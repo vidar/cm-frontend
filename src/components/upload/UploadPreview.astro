@@ -1,0 +1,60 @@
+---
+// Preview of an uploaded tournament (organiser page and admin page): standings as the event page
+// will compute them, and each round's games.
+import { FORMAT_LABEL, pts } from '../../lib/event';
+import { previewAnalysis, type Upload, type UploadRound } from '../../lib/uploads';
+
+interface Props {
+  upload: Upload;
+  rounds: UploadRound[];
+}
+const { upload, rounds } = Astro.props;
+const a = rounds.length ? previewAnalysis(upload, rounds) : null;
+const individual = a && (a.format === 'swiss' || a.format === 'round-robin');
+const standings = individual ? a.standingsAfter(Infinity).slice(0, 40) : [];
+const teams = a?.teams?.standingsAfter(Infinity).slice(0, 40) ?? [];
+const RES: Record<string, string> = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½', '*': '*' };
+---
+
+{a && (
+  <section class="preview">
+    <h2>Preview</h2>
+    <p class="muted">
+      Read as: <strong>{FORMAT_LABEL[a.format]}</strong>, {a.players.size} players, {rounds.length} round{rounds.length === 1 ? '' : 's'},{' '}
+      {rounds.reduce((n, r) => n + r.games.length, 0)} games.
+    </p>
+    {standings.length > 0 && (
+      <table class="standings">
+        <thead><tr><th>#</th><th>Player</th><th class="num">Points</th><th class="num">Games</th></tr></thead>
+        <tbody>{standings.map((l) => <tr><td>{l.rank}</td><td>{l.player.title && `${l.player.title} `}{l.player.name}</td><td class="num">{pts(l.points)}</td><td class="num">{l.games}</td></tr>)}</tbody>
+      </table>
+    )}
+    {teams.length > 0 && (
+      <table class="standings">
+        <thead><tr><th>#</th><th>Team</th><th class="num">Match points</th><th class="num">Game points</th></tr></thead>
+        <tbody>{teams.map((l) => <tr><td>{l.rank}</td><td>{l.team}</td><td class="num">{l.mp}</td><td class="num">{pts(l.gp)}</td></tr>)}</tbody>
+      </table>
+    )}
+    {rounds.map((r) => (
+      <details>
+        <summary>Round {r.round}: {r.games.length} game{r.games.length === 1 ? '' : 's'}</summary>
+        <ol class="games">
+          {r.games.map((g) => (
+            <li>{g.white}{g.whiteElo && ` (${g.whiteElo})`} – {g.black}{g.blackElo && ` (${g.blackElo})`} <strong>{RES[g.result]}</strong> <span class="muted">{Math.ceil(g.plies / 2)} moves</span></li>
+          ))}
+        </ol>
+      </details>
+    ))}
+  </section>
+)}
+
+<style>
+  .preview { margin-top: 1.5rem; }
+  .standings { border-collapse: collapse; margin: 0.5rem 0 1rem; font-variant-numeric: tabular-nums; }
+  .standings th, .standings td { padding: 0.25rem 0.9rem 0.25rem 0; text-align: left; border-bottom: 1px solid var(--border); }
+  .standings .num { text-align: right; }
+  details { margin: 0.3rem 0; }
+  summary { cursor: pointer; }
+  .games { font-size: 0.9rem; }
+  .muted { color: var(--muted); }
+</style>

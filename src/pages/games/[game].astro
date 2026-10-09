@@ -45,7 +45,7 @@ const pgn = [
   game.white_elo ? `[WhiteElo "${game.white_elo}"]` : null,
   game.black_elo ? `[BlackElo "${game.black_elo}"]` : null,
   game.eco ? `[ECO "${game.eco}"]` : null,
-  `[Source "The Week in Chess ${game.twic}"]`,
+  game.twic ? `[Source "The Week in Chess ${game.twic}"]` : null,
   '',
   `${movesText} ${game.result}`,
 ]
@@ -165,10 +165,14 @@ const pgn = [
     </section>
   )}
 
-  <p class="credit">
-    Game from <a href={twicIssueUrl(game.twic)} rel="nofollow">The Week in Chess #{game.twic}</a> by Mark Crowther, used with permission.
-    Please support TWIC.
-  </p>
+  {game.twic ? (
+    <p class="credit">
+      Game from <a href={twicIssueUrl(game.twic)} rel="nofollow">The Week in Chess #{game.twic}</a> by Mark Crowther, used with permission.
+      Please support TWIC.
+    </p>
+  ) : (
+    <p class="credit">Game uploaded by the tournament organiser.</p>
+  )}
 </Layout>
 
 <style>

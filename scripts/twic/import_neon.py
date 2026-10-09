@@ -9,6 +9,9 @@ in Postgres. --reset drops the tables first (do this for a full rebuild). Afterw
 the indexes (indexes.pg.sql), grants SELECT to the read-only role used by Hyperdrive (--reader),
 and ANALYZEs. Use the owner role's direct (non-pooler) connection string. Standard library only.
 
+Uploaded tournaments (/upload/, ids from 100000000) are left alone, except by --reset, which drops
+them from games/players/events: republish them afterwards from /upload/admin/.
+
 --patch updates a loaded database in place from a build processed by remap_events.py (same game
 ids): it uploads `changed_games` and the events table into staging tables, then swaps them in with
 one transaction, so the site never sees a half-updated database.
@@ -102,7 +105,8 @@ def copy_table(neon: Neon, src: sqlite3.Connection, table: str, batch: int, targ
     names = ', '.join(c for c, _ in cols)
     total = src.execute(f'SELECT COUNT(*) FROM {source}').fetchone()[0]
     if key == 'id':
-        done = int(neon(f'SELECT COALESCE(MAX(id), 0) AS m FROM {table}')['rows'][0]['m'])
+        # Uploaded tournaments (src/lib/uploads.ts) use ids from UPLOAD_ID_BASE up: resume below them.
+        done = int(neon(f'SELECT COALESCE(MAX(id), 0) AS m FROM {table} WHERE id < {UPLOAD_ID_BASE}')['rows'][0]['m'])
     else:
         done = None  # small key/value tables: upsert everything
     insert = (f'INSERT INTO {table} ({names}) SELECT * FROM unnest('
@@ -130,13 +134,16 @@ def patch(neon: Neon, src: sqlite3.Connection, batch: int):
     t0 = time.time()
     neon.transaction([
         'UPDATE games g SET event_id = p.event_id, white_team = p.white_team, black_team = p.black_team FROM patch_games p WHERE g.id = p.id',
-        'DELETE FROM events',
+        f'DELETE FROM events WHERE id < {UPLOAD_ID_BASE}',  # keep uploaded tournaments
         'INSERT INTO events SELECT * FROM patch_events',
         'DROP TABLE patch_games, patch_events',
     ])
     print(f'swapped in {time.time() - t0:.0f}s')
     for table in ('openings', 'meta', 'event_redirects'):
         copy_table(neon, src, table, batch)
+
+
+UPLOAD_ID_BASE = 100_000_000  # src/lib/uploads.ts
 
 
 def main():

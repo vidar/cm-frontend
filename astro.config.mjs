@@ -49,6 +49,8 @@ export default defineConfig({
   // must be added via `customPages` — see CLAUDE.md.
   integrations: [
     sitemap({
+      // Organiser uploads and their admin page are private utility pages (noindex, robots Disallow).
+      filter: (page) => !page.includes('/upload/'),
       customPages: [
         'https://chessmoments.com/puzzle/',
         'https://chessmoments.com/puzzle/archive/',

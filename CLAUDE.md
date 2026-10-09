@@ -64,6 +64,16 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   postamble set the game in its tournament: standings going into the round and after it (team standings and the
   match score in team events, the match score in knockouts/matches), from `src/lib/annotate-context.ts`, which
   gives only what was known at the time (no final standings).
+- **Tournament uploads (`/upload/`):** organisers create a tournament and get a secret link
+  (`/upload/<token>/`, only a SHA-256 of the token is stored) to upload PGN round by round (or a whole file
+  split by Round tags), replace or remove rounds, and preview standings. Uploads live in Neon tables `uploads`
+  and `upload_rounds` (`scripts/uploads.pg.sql`) until the site owner approves them at `/upload/admin/` (Worker
+  secret `ADMIN_KEY`); approval publishes them into `events`/`players`/`games` with ids from
+  `UPLOAD_ID_BASE` (100000000, `src/lib/uploads.ts`), and later rounds publish at once. `games.twic = 0` and
+  ids ≥ `UPLOAD_ID_BASE` mark uploaded data: those pages credit the organiser instead of TWIC, and uploaded
+  event pages are cached for 5 minutes. Players match existing ones by FIDE ID only, else by exact name among
+  uploaded players. The TWIC importer resumes below `UPLOAD_ID_BASE` and `--patch` keeps uploaded events;
+  after a `--reset` reload use "Republish all approved" on the admin page. PGN parsing: `src/lib/pgn.ts`.
 - **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
   `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
   `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),

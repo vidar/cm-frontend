@@ -13,6 +13,7 @@ import '../../../styles/event.css';
 import { loadEvent } from '../../../lib/event-page';
 import { FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
 import { dateRange, matchScore, resultText } from '../../../lib/event-view';
+import { isUploaded } from '../../../lib/uploads';
 import { eventGames, eventRedirect, gamePath, twicIssueUrl, EVENT_PAGE_SIZE } from '../../../lib/games';
 
 export const prerender = false;
@@ -23,8 +24,9 @@ if (!data) {
   if (moved) return Astro.redirect(`/events/${moved}/`, 301);
   return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
 }
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 const { event, a } = data;
+// Uploaded tournaments change while they run: cache them briefly.
+Astro.response.headers.set('Cache-Control', isUploaded(event.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=3600, s-maxage=86400');
 const base = `/events/${event.slug}/`;
 const R = a.rounds.map((r) => r.n);
 const individual = a.format === 'round-robin' || a.format === 'swiss';
@@ -291,6 +293,7 @@ const jsonLd = {
     </section>
   )}
 
+  {isUploaded(event.id) && <p class="credit">Games uploaded by the tournament organiser.</p>}
   {event.twic && (
     <p class="credit">Games from <a href={twicIssueUrl(event.twic)} rel="nofollow">The Week in Chess #{event.twic}</a> and later issues by Mark Crowther, used with permission.</p>
   )}

@@ -11,6 +11,7 @@ import '../../../styles/event.css';
 import { featured, finalPositions, loadEvent } from '../../../lib/event-page';
 import { roundStory } from '../../../lib/event';
 import { dateRange, resultText } from '../../../lib/event-view';
+import { isUploaded } from '../../../lib/uploads';
 import { eventRedirect, gamePath, twicIssueUrl } from '../../../lib/games';
 
 export const prerender = false;
@@ -23,8 +24,9 @@ if (!data || !round) {
   if (moved) return Astro.redirect(`/events/${moved}/round-${n}/`, 301);
   return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
 }
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 const { event, a } = data;
+// Uploaded tournaments change while they run: cache them briefly.
+Astro.response.headers.set('Cache-Control', isUploaded(event.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=3600, s-maxage=86400');
 const base = `/events/${event.slug}/`;
 const idx = a.rounds.indexOf(round);
 const prev = a.rounds[idx - 1];
@@ -128,6 +130,7 @@ const winnerOf = (r: string, w: string, b: string) => (r === '1-0' ? w : r === '
     {next ? <a href={`${base}round-${next.n}/`} rel="next">{a.knockout?.find((k) => k.n === next.n)?.name ?? `Round ${next.n}`} →</a> : <a href={base}>Final {a.format === 'round-robin' ? 'crosstable' : 'standings'} →</a>}
   </nav>
 
+  {isUploaded(event.id) && <p class="credit">Games uploaded by the tournament organiser.</p>}
   {event.twic && <p class="credit">Games from <a href={twicIssueUrl(event.twic)} rel="nofollow">The Week in Chess</a> by Mark Crowther, used with permission.</p>}
 </Layout>
 

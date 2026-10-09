@@ -1,0 +1,110 @@
+---
+// Site owner's review of uploaded tournaments: approve (publishes), reject (takes down), preview.
+// Needs the Worker secret ADMIN_KEY; the key comes as ?key= (bookmark the page) or a form field.
+import Layout from '../../layouts/Layout.astro';
+import UploadPreview from '../../components/upload/UploadPreview.astro';
+import { adminConfigured, approve, FORMATS, getRounds, getUpload, isAdmin, listUploads, reject, republishAll } from '../../lib/uploads';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+
+let key = Astro.url.searchParams.get('key') ?? '';
+let message = '';
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  key = String(form.get('key') ?? '');
+  if (isAdmin(key)) {
+    const id = Number(form.get('id'));
+    const action = form.get('action');
+    if (action === 'approve' && id) message = (await approve(id)) ? `Approved and published #${id}.` : 'Not found.';
+    else if (action === 'reject' && id) {
+      await reject(id);
+      message = `Rejected #${id} (removed from the site if it was published).`;
+    } else if (action === 'republish') message = `Republished ${await republishAll()} approved tournaments.`;
+  }
+}
+const ok = isAdmin(key);
+const list = ok ? await listUploads() : [];
+const viewId = Number(Astro.url.searchParams.get('id'));
+const view = ok && viewId ? await getUpload(viewId) : null;
+const viewRounds = view ? await getRounds(view.id) : [];
+const self = (extra = '') => `/upload/admin/?key=${encodeURIComponent(key)}${extra}`;
+---
+
+<Layout title="Uploaded tournaments" noindex>
+  <h1>Uploaded tournaments</h1>
+  {!adminConfigured() ? (
+    <p>Reviewing uploads needs the Worker secret <code>ADMIN_KEY</code> (Cloudflare dashboard → Workers → cm-frontend → Settings → Variables and secrets).</p>
+  ) : !ok ? (
+    <form method="get" class="login">
+      <label>Admin key <input name="key" type="password" autocomplete="current-password" /></label>
+      <button type="submit" class="primary">Open</button>
+    </form>
+  ) : (
+    <>
+      {message && <p class="message" role="status">{message}</p>}
+      <table class="list">
+        <thead><tr><th>#</th><th>Tournament</th><th>Format</th><th class="num">Rounds</th><th class="num">Games</th><th>Contact</th><th>Created</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {list.map((u) => (
+            <tr class={u.status}>
+              <td>{u.id}</td>
+              <td><a href={self(`&id=${u.id}`)}>{u.name}</a>{u.site && <span class="muted"> · {u.site}</span>}</td>
+              <td>{FORMATS[u.format]}</td>
+              <td class="num">{u.rounds}</td>
+              <td class="num">{u.games}</td>
+              <td class="muted">{u.contact}</td>
+              <td class="muted">{u.created_at.slice(0, 10)}</td>
+              <td>{u.status}</td>
+              <td class="actions">
+                {u.status !== 'approved' && u.games > 0 && (
+                  <form method="post"><input type="hidden" name="key" value={key} /><input type="hidden" name="id" value={u.id} /><button name="action" value="approve" class="primary">Approve</button></form>
+                )}
+                {u.status !== 'rejected' && (
+                  <form method="post" data-confirm={`Reject "${u.name}"${u.status === 'approved' ? ' and remove it from the site' : ''}?`}><input type="hidden" name="key" value={key} /><input type="hidden" name="id" value={u.id} /><button name="action" value="reject">Reject</button></form>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {list.length === 0 && <p class="muted">No uploads yet.</p>}
+      <form method="post" class="republish" data-confirm="Publish all approved tournaments again? (Only needed after a full TWIC reload.)">
+        <input type="hidden" name="key" value={key} /><button name="action" value="republish">Republish all approved</button>
+        <span class="muted">Only needed after a full TWIC <code>--reset</code> reload.</span>
+      </form>
+      {view && (
+        <section class="view">
+          <h2>#{view.id} {view.name}</h2>
+          <p class="muted">{FORMATS[view.format]}{view.site && ` · ${view.site}`} · {view.status}{view.contact && ` · contact: ${view.contact}`}</p>
+          <UploadPreview upload={view} rounds={viewRounds} />
+        </section>
+      )}
+    </>
+  )}
+</Layout>
+
+<style>
+  .list { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
+  .list th, .list td { padding: 0.35rem 0.6rem 0.35rem 0; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .list .num { text-align: right; }
+  .list tr.pending td:first-child { box-shadow: inset 3px 0 var(--accent); padding-left: 0.4rem; }
+  .list tr.rejected { color: var(--muted); }
+  .actions { display: flex; gap: 0.4rem; }
+  .actions form { margin: 0; }
+  .republish { margin-top: 1rem; display: flex; gap: 0.6rem; align-items: center; }
+  .message { font-weight: 600; color: var(--win); }
+  .muted { color: var(--muted); }
+  .view { margin-top: 2rem; border-top: 1px solid var(--border); }
+  .login { display: flex; gap: 0.6rem; align-items: end; }
+  .login label { display: grid; gap: 0.25rem; }
+</style>
+
+<script>
+  for (const f of document.querySelectorAll<HTMLFormElement>('form[data-confirm]'))
+    f.addEventListener('submit', (e) => {
+      if (!confirm(f.dataset.confirm)) e.preventDefault();
+    });
+</script>

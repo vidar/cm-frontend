@@ -57,3 +57,11 @@ from Neon) and point `localConnectionString` in `wrangler.jsonc` at it.
   `round.board` in individual events, `round.match` in team events (boards in id order) and
   `round.match.game` in knockouts; the event pages work out the format (src/lib/event.ts).
 - `games.opening` is the slug of the longest matching named line (`/openings/<slug>/`).
+
+## Uploaded tournaments
+
+Organisers' uploads (`/upload/`, `src/lib/uploads.ts`) are published into the same `events`, `players` and
+`games` tables with ids from 100000000. `import_neon.py` resumes below that range and `--patch` keeps those
+events. `--reset` drops them with everything else: afterwards open `/upload/admin/` and use "Republish all
+approved" (the uploads themselves are kept in `uploads`/`upload_rounds`; republished games get new ids, so
+their Stockfish analyses and AI notes are lost).

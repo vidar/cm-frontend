@@ -77,6 +77,17 @@ export async function query<T>(text: string, params: Param[] = []): Promise<T[]>
 }
 const first = async <T>(text: string, params: Param[] = []) => (await query<T>(text, params))[0] ?? null;
 
+export type Q = <T>(text: string, params?: (Param | Param[])[]) => Promise<T[]>;
+/** Run several queries in one transaction on one connection (writes that must land together). */
+export async function transaction<T>(fn: (q: Q) => Promise<T>): Promise<T> {
+  const sql = postgres((env as { HYPERDRIVE: Hyperdrive }).HYPERDRIVE.connectionString, { max: 1, fetch_types: false });
+  try {
+    return (await sql.begin((tx) => fn(async (text, params = []) => (await tx.unsafe(text, params as never[])) as never))) as T;
+  } finally {
+    sql.end().catch(() => {});
+  }
+}
+
 /** Totals from the `meta` table ('games', 'players', 'events', ...), as numbers. */
 export async function getMeta() {
   const rows = await query<{ key: string; value: string }>('SELECT key, value FROM meta');

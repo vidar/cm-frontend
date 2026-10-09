@@ -1,0 +1,64 @@
+---
+// Organisers start a tournament upload here and get a secret link to manage it (src/lib/uploads.ts).
+import { env } from 'cloudflare:workers';
+import Layout from '../../layouts/Layout.astro';
+import { createUpload, FORMATS } from '../../lib/uploads';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+
+let error = '';
+const values = { name: '', site: '', format: 'swiss', contact: '' };
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  for (const k of Object.keys(values) as (keyof typeof values)[]) values[k] = String(form.get(k) ?? '');
+  const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
+  if (!form.get('rights')) error = 'Please confirm that you may publish these games.';
+  else if (limiter && !(await limiter.limit({ key: `up:${Astro.clientAddress}` })).success) error = 'Too many requests, please try again in a minute.';
+  else {
+    const r = await createUpload(values);
+    if ('token' in r && r.token) return Astro.redirect(`/upload/${r.token}/?new=1`, 303);
+    error = r.error ?? 'Something went wrong.';
+  }
+}
+---
+
+<Layout title="Upload a tournament" description="Organisers can upload their tournament's games as PGN, round by round, to get standings, round pages, engine analysis and AI notes." noindex>
+  <h1>Upload a tournament</h1>
+  <p>
+    Organisers can put their tournament on chessmoments: upload the games as PGN, one round at a time or all at
+    once, and the site works out the standings, round-by-round pages and crosstables. Every game can be analysed by
+    Stockfish and annotated by AI.
+  </p>
+  <ol class="steps">
+    <li>Create the tournament below. You get a <strong>secret link</strong> to manage it: keep it, and only share it with the people who should be able to change the tournament.</li>
+    <li>Upload rounds as PGN files (from Swiss-Manager, Vega, Lichess, ChessBase…). You can replace or remove a round at any time.</li>
+    <li>We check new tournaments before they appear on the site. Once approved, new rounds go live as soon as you upload them.</li>
+  </ol>
+
+  <form method="post" class="card">
+    {error && <p class="error" role="alert">{error}</p>}
+    <label>Tournament name <input name="name" required minlength="3" maxlength="120" value={values.name} placeholder="e.g. Oslo Chess Club Championship 2026" /></label>
+    <label>Place <input name="site" maxlength="120" value={values.site} placeholder="e.g. Oslo, Norway" /></label>
+    <label>Format
+      <select name="format">{Object.entries(FORMATS).map(([v, l]) => <option value={v} selected={values.format === v}>{l}</option>)}</select>
+    </label>
+    <label>Your name or email <span class="muted">(optional, only for us, in case we have a question)</span>
+      <input name="contact" maxlength="200" value={values.contact} />
+    </label>
+    <label class="check"><input type="checkbox" name="rights" value="1" required /> I organise this tournament or have permission to publish its games.</label>
+    <button type="submit" class="primary">Create tournament</button>
+  </form>
+</Layout>
+
+<style>
+  .steps li { margin: 0.35rem 0; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.1rem; display: grid; gap: 0.8rem; max-width: 36rem; margin-top: 1.25rem; }
+  label { display: grid; gap: 0.25rem; font-weight: 500; min-width: 0; }
+  label input:not([type='checkbox']), label select { width: 100%; box-sizing: border-box; }
+  label.check { display: flex; gap: 0.5rem; align-items: flex-start; font-weight: 400; }
+  label.check input { margin-top: 0.25rem; }
+  .muted { color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+  .error { color: var(--loss); font-weight: 600; margin: 0; }
+  button { justify-self: start; }
+</style>

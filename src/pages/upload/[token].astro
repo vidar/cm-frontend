@@ -1,0 +1,164 @@
+---
+// An organiser's tournament, opened with its secret link: upload, replace or remove rounds, and preview
+// the standings. Nothing is public until the site owner approves the tournament (src/lib/uploads.ts).
+import { env } from 'cloudflare:workers';
+import Layout from '../../layouts/Layout.astro';
+import UploadPreview from '../../components/upload/UploadPreview.astro';
+import { query } from '../../lib/games';
+import { deleteRound, findUpload, FORMATS, getRounds, LIMITS, saveRounds } from '../../lib/uploads';
+import type { PgnProblem } from '../../lib/pgn';
+
+export const prerender = false;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+
+const token = Astro.params.token ?? '';
+const upload = await findUpload(token);
+if (!upload) return new Response('This link is not valid.', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+
+let message = '';
+let error = '';
+let problems: PgnProblem[] = [];
+if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
+  if (upload.status === 'rejected') error = 'This tournament was not accepted, so it can no longer be changed.';
+  else if (limiter && !(await limiter.limit({ key: `up:${Astro.clientAddress}` })).success) error = 'Too many requests, please try again in a minute.';
+  else if (form.get('action') === 'delete') {
+    const n = Number(form.get('round'));
+    if (Number.isInteger(n) && n > 0) {
+      await deleteRound(upload, n);
+      message = `Round ${n} removed.`;
+    }
+  } else {
+    const file = form.get('file');
+    const text = file instanceof File && file.size ? await file.text() : String(form.get('pgn') ?? '');
+    const roundField = String(form.get('round') ?? '').trim();
+    const forced = roundField ? Number(roundField) : null;
+    if (!text.trim()) error = 'Choose a PGN file or paste the games.';
+    else if (forced !== null && !(Number.isInteger(forced) && forced >= 1 && forced <= LIMITS.rounds)) error = `The round must be a number from 1 to ${LIMITS.rounds}.`;
+    else {
+      const r = await saveRounds(upload, forced, text);
+      problems = r.problems ?? [];
+      if ('error' in r && r.error) error = r.error;
+      else if ('saved' in r && r.saved)
+        message =
+          r.saved.map((s) => `Round ${s.round}: ${s.games} game${s.games === 1 ? '' : 's'}`).join(', ') +
+          ` saved${upload.status === 'approved' ? ' and published' : ''}.`;
+    }
+  }
+}
+
+const rounds = await getRounds(upload.id);
+const event = upload.event_id ? (await query<{ slug: string }>('SELECT slug FROM events WHERE id = $1', [upload.event_id]))[0] : null;
+const link = new URL(`/upload/${token}/`, Astro.url).href;
+const next = rounds.length ? Math.max(...rounds.map((r) => r.round)) + 1 : 1;
+---
+
+<Layout title={`Manage: ${upload.name}`} noindex>
+  <nav class="crumbs"><a href="/upload/">Upload a tournament</a></nav>
+  <h1>{upload.name}</h1>
+  <p class="meta">{FORMATS[upload.format]}{upload.site && ` · ${upload.site}`}</p>
+
+  {upload.status === 'pending' && <p class="status pending">Waiting for approval. You can keep adding rounds; nothing is public until we have approved the tournament.</p>}
+  {upload.status === 'approved' && (
+    <p class="status ok">Published{event && <>: <a href={`/events/${event.slug}/`}>chessmoments.com/events/{event.slug}/</a></>}. New and replaced rounds go live straight away (pages can take a few minutes to update).</p>
+  )}
+  {upload.status === 'rejected' && <p class="status no">This tournament was not accepted for the site.</p>}
+
+  {Astro.url.searchParams.has('new') && !message && !error && (
+    <div class="secret">
+      <p><strong>Save this link.</strong> It's the only way to manage the tournament, and anyone who has it can change it.</p>
+      <p><input readonly value={link} aria-label="Secret link" onclick="this.select()" /> <button type="button" data-copy>Copy</button></p>
+    </div>
+  )}
+
+  {message && <p class="message" role="status">{message}</p>}
+  {error && <p class="error" role="alert">{error}</p>}
+  {problems.length > 0 && (
+    <div class="problems">
+      <p>{problems.length} game{problems.length === 1 ? ' was' : 's were'} skipped:</p>
+      <ul>{problems.slice(0, 30).map((p) => <li>Game {p.game} in the file: {p.message}</li>)}</ul>
+    </div>
+  )}
+
+  {upload.status !== 'rejected' && (
+    <form method="post" enctype="multipart/form-data" class="card">
+      <h2>Upload a round</h2>
+      <label>Round <input name="round" type="number" min="1" max={LIMITS.rounds} value={next} />
+        <span class="hint">Leave empty to use the games' Round tags (for a file with several rounds). Uploading a round that exists replaces it.</span>
+      </label>
+      <label>PGN file <input name="file" type="file" accept=".pgn,application/x-chess-pgn,text/plain" /></label>
+      <label>…or paste the games <textarea name="pgn" rows="5" placeholder='[Event "..."]&#10;[White "..."]&#10;...'></textarea></label>
+      <button type="submit" class="primary">Upload</button>
+    </form>
+  )}
+
+  {rounds.length > 0 && (
+    <section>
+      <h2>Rounds</h2>
+      <table class="rounds">
+        <thead><tr><th>Round</th><th class="num">Games</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody>
+          {rounds.map((r) => (
+            <tr>
+              <td>{r.round}</td>
+              <td class="num">{r.games.length}</td>
+              <td class="muted">{r.uploaded_at.slice(0, 16)} UTC</td>
+              <td>
+                {upload.status !== 'rejected' && (
+                  <form method="post" data-confirm={`Remove round ${r.round}?`}>
+                    <input type="hidden" name="action" value="delete" /><input type="hidden" name="round" value={r.round} />
+                    <button type="submit" class="link">Remove</button>
+                  </form>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )}
+
+  <UploadPreview upload={upload} rounds={rounds} />
+</Layout>
+
+<style>
+  .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .meta { color: var(--muted); margin-top: 0; }
+  .status { border-radius: var(--radius); padding: 0.55rem 0.8rem; background: var(--surface-2); }
+  .status.pending { background: var(--accent-soft); }
+  .status.no { color: var(--loss); }
+  .secret { border: 2px solid var(--accent); border-radius: var(--radius); padding: 0.5rem 0.9rem; margin: 1rem 0; }
+  .secret input { width: min(100%, 34rem); font-family: monospace; font-size: 0.85rem; }
+  .message { font-weight: 600; color: var(--win); }
+  .error { font-weight: 600; color: var(--loss); }
+  .problems { font-size: 0.9rem; background: var(--surface-2); border-radius: var(--radius); padding: 0.4rem 0.9rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 1.1rem 1rem; display: grid; gap: 0.75rem; max-width: 40rem; margin: 1.25rem 0; }
+  .card h2 { margin: 0.2rem 0 0; }
+  label { display: grid; gap: 0.25rem; font-weight: 500; }
+  label { min-width: 0; }
+  label input, label textarea { width: 100%; box-sizing: border-box; min-width: 0; }
+  label input[type='number'] { max-width: 7rem; }
+  .hint { font-weight: 400; font-size: 0.85rem; color: var(--muted); }
+  textarea { font-family: monospace; font-size: 0.85rem; }
+  button.primary { justify-self: start; }
+  .rounds { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .rounds th, .rounds td { padding: 0.3rem 1rem 0.3rem 0; text-align: left; border-bottom: 1px solid var(--border); }
+  .rounds .num { text-align: right; }
+  .rounds form { margin: 0; }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; font: inherit; }
+  .muted { color: var(--muted); }
+</style>
+
+<script>
+  document.querySelector('[data-copy]')?.addEventListener('click', (e) => {
+    const input = (e.currentTarget as HTMLElement).parentElement?.querySelector('input');
+    if (input) navigator.clipboard?.writeText(input.value).then(() => ((e.target as HTMLElement).textContent = 'Copied'));
+  });
+  for (const f of document.querySelectorAll<HTMLFormElement>('form[data-confirm]'))
+    f.addEventListener('submit', (e) => {
+      if (!confirm(f.dataset.confirm)) e.preventDefault();
+    });
+</script>
