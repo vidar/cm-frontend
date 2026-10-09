@@ -56,7 +56,8 @@ Write:
 - postamble: when tournament information is given, one short paragraph (40-90 words) on what the result meant:
   how the standings (or the team match, or the match score) changed after the round, and the situation with
   the rounds still to play. Use only the standings you are given; you don't know later rounds.
-  Leave preamble and postamble empty when no tournament information is given.
+  Leave preamble and postamble empty when no tournament information is given. Take every score, place and
+  leader from the key facts exactly as given; don't add up points or compare players yourself.
 - summary: the story of the game in 2-3 short paragraphs (120-220 words in all): how the opening went,
   the turning points, and how the game was decided. Call the players by their surnames. Name the moves
   that mattered (e.g. "19.Bc4").

@@ -17,6 +17,40 @@ function table<T>(lines: T[], label: (l: T) => string, keep: (l: T) => boolean) 
 const lineText = (l: Line) => `  ${l.rank}. ${l.player.name} ${pts(l.points)}/${l.games}`;
 const teamText = (l: TeamLine) => `  ${l.rank}. ${l.team} ${l.mp} match points, ${pts(l.gp)} game points (${l.played} matches)`;
 
+/** Place with ties by score: "3rd", "shared 2nd-4th". */
+function place<T>(lines: T[], line: T, score: (l: T) => number) {
+  const v = score(line);
+  const first = lines.findIndex((l) => score(l) === v) + 1;
+  const count = lines.filter((l) => score(l) === v).length;
+  const ord = (k: number) => `${k}${k % 10 === 1 && k % 100 !== 11 ? 'st' : k % 10 === 2 && k % 100 !== 12 ? 'nd' : k % 10 === 3 && k % 100 !== 13 ? 'rd' : 'th'}`;
+  return count > 1 ? `shared ${ord(first)}-${ord(first + count - 1)}` : ord(first);
+}
+
+/** Key facts worked out for the model: leaders, and each side's place and score before and after. */
+function facts<T>(
+  before: T[] | null,
+  after: T[],
+  score: (l: T) => number,
+  name: (l: T) => string,
+  fmt: (l: T) => string,
+  sides: { label: string; is: (l: T) => boolean }[],
+) {
+  const leaders = (lines: T[]) => {
+    const top = lines.filter((l) => score(l) === score(lines[0]));
+    return `${top.map(name).join(', ')} (${fmt(top[0])}${top.length > 1 ? ', shared lead' : ''})`;
+  };
+  const out = ['Key facts (copy these numbers and places exactly; do not work them out from the tables):'];
+  if (before?.length) out.push(`- Leader(s) going into the round: ${leaders(before)}.`);
+  if (after.length) out.push(`- Leader(s) after the round: ${leaders(after)}.`);
+  for (const side of sides) {
+    const b = before?.find(side.is);
+    const a = after.find(side.is);
+    if (!a) continue;
+    out.push(`- ${side.label}: ${b ? `${place(before!, b, score)} with ${fmt(b)} going into the round` : 'no games before this round'}; ${place(after, a, score)} with ${fmt(a)} after it.`);
+  }
+  return out.join('\n');
+}
+
 /** A player's score in the event from the rounds before `n`. */
 function scoreBefore(a: EventAnalysis, id: number, n: number) {
   let points = 0;
@@ -82,8 +116,16 @@ export async function tournamentContext(game: FullGame): Promise<string | null> 
       );
     }
     const keep = (l: TeamLine) => l.team === wt || l.team === bt;
-    if (prev) out.push(`Team standings going into round ${n}:`, table(t.standingsAfter(prev.n), teamText, keep));
-    out.push(`Team standings after round ${n}:`, table(t.standingsAfter(n), teamText, keep));
+    const before = prev ? t.standingsAfter(prev.n) : null;
+    const after = t.standingsAfter(n);
+    if (before) out.push(`Team standings going into round ${n}:`, table(before, teamText, keep));
+    out.push(`Team standings after round ${n}:`, table(after, teamText, keep));
+    out.push(
+      facts(before, after, (l) => l.mp, (l) => l.team, (l) => `${l.mp} match points`, [
+        { label: `${wt} (${game.white_name}'s team)`, is: (l) => l.team === wt },
+        { label: `${bt} (${game.black_name}'s team)`, is: (l) => l.team === bt },
+      ]),
+    );
     for (const [id, name] of [
       [W, game.white_name],
       [B, game.black_name],
@@ -96,10 +138,16 @@ export async function tournamentContext(game: FullGame): Promise<string | null> 
 
   // Individual round robin or Swiss.
   const keep = (l: Line) => l.player.id === W || l.player.id === B;
-  if (prev) {
-    const before = a.standingsAfter(prev.n);
-    out.push(`Standings going into round ${n} (rank, player, points/games):`, table(before, lineText, keep));
-  } else out.push('This was the first round.');
-  out.push(`Standings after round ${n}:`, table(a.standingsAfter(n), lineText, keep));
+  const before = prev ? a.standingsAfter(prev.n) : null;
+  const after = a.standingsAfter(n);
+  if (before) out.push(`Standings going into round ${n} (rank, player, points/games):`, table(before, lineText, keep));
+  else out.push('This was the first round.');
+  out.push(`Standings after round ${n}:`, table(after, lineText, keep));
+  out.push(
+    facts(before, after, (l) => l.points, (l) => l.player.name, (l) => `${pts(l.points)}/${l.games}`, [
+      { label: game.white_name, is: (l) => l.player.id === W },
+      { label: game.black_name, is: (l) => l.player.id === B },
+    ]),
+  );
   return out.join('\n');
 }
