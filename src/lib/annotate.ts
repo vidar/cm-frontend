@@ -8,6 +8,7 @@ import { env } from 'cloudflare:workers';
 import { Chess } from 'chess.js';
 import { z } from 'zod';
 import { getAnalysis, type Evals } from './analysis';
+import { tournamentContext } from './annotate-context';
 import { classify, fmtEval, LABEL, type Kind } from './chess/classify';
 import { getGame, getOpeningName, query, type FullGame } from './games';
 
@@ -30,11 +31,13 @@ export interface Note {
 export type AnnotationState =
   | { status: 'none' }
   | { status: 'running' }
-  | { status: 'done'; model: string; summary: string; notes: Note[] }
+  | { status: 'done'; model: string; preamble: string; summary: string; notes: Note[]; postamble: string }
   | { status: 'failed'; error: string }
   | { status: 'unavailable' };
 
 const Output = z.object({
+  preamble: z.string().describe('The tournament situation going into the game, one short paragraph; empty if no tournament information was given.'),
+  postamble: z.string().describe('What the result meant for the tournament, one short paragraph; empty if no tournament information was given.'),
   summary: z.string().describe('The story of the game in 2-3 short paragraphs separated by blank lines.'),
   notes: z
     .array(z.object({ move: z.string().describe('The move the note is about, with its number as in the move list: "21.Bb3" or "23...Bc2".'), text: z.string() }))
@@ -47,6 +50,13 @@ engine marks as inaccuracies (?!), mistakes (?) and blunders (??), and for those
 preferred with its main line. You can't see the board yourself, so the analysis is your only source.
 
 Write:
+- preamble: when tournament information is given, one short paragraph (40-90 words) on the situation going
+  into the game: the stage of the event, where both players (or their teams, or the match) stood, and what
+  was at stake for each. Use only the standings you are given; don't reveal how the game or the event ended.
+- postamble: when tournament information is given, one short paragraph (40-90 words) on what the result meant:
+  how the standings (or the team match, or the match score) changed after the round, and the situation with
+  the rounds still to play. Use only the standings you are given; you don't know later rounds.
+  Leave preamble and postamble empty when no tournament information is given.
 - summary: the story of the game in 2-3 short paragraphs (120-220 words in all): how the opening went,
   the turning points, and how the game was decided. Call the players by their surnames. Name the moves
   that mattered (e.g. "19.Bc4").
@@ -87,7 +97,7 @@ function lineSan(fen: string, ply: number, uci: string[]) {
 }
 
 /** The user message: game details and the analysis, one line per move. */
-export function buildPrompt(game: FullGame, opening: string | null, evals: Evals) {
+export function buildPrompt(game: FullGame, opening: string | null, evals: Evals, context: string | null = null) {
   const sans = game.moves.split(' ').filter(Boolean);
   const chess = new Chess();
   const fens = [chess.fen()];
@@ -118,6 +128,8 @@ export function buildPrompt(game: FullGame, opening: string | null, evals: Evals
     `Result: ${game.result}${game.result === '1/2-1/2' ? ' (draw)' : ''}`,
     `Starting eval: ${fmtEval(evals.e[0])}. Evals are in pawns from White's point of view (+ White better, - Black better, #n mate).`,
     '',
+    context ? `Tournament information (only what was known at the time):\n${context}` : 'No tournament information is available for this game.',
+    '',
     'Moves:',
     ...lines,
   ]
@@ -140,6 +152,8 @@ export function plyOf(move: string, sans: string[]) {
 }
 
 export interface Generated {
+  preamble: string;
+  postamble: string;
   summary: string;
   notes: Note[];
   model: string;
@@ -153,7 +167,7 @@ export async function generate(gameId: number, model: ModelKey = MODEL): Promise
   if (analysis.status !== 'done') return { error: 'the game has no engine analysis yet' };
   const game = await getGame(gameId);
   if (!game) return { error: 'no such game' };
-  const opening = game.opening ? await getOpeningName(game.opening) : null;
+  const [opening, context] = await Promise.all([game.opening ? getOpeningName(game.opening) : null, tournamentContext(game).catch(() => null)]);
   const client = new Anthropic({ apiKey: key(), maxRetries: 1 });
   const t = Date.now();
   try {
@@ -162,7 +176,7 @@ export async function generate(gameId: number, model: ModelKey = MODEL): Promise
       max_tokens: 16000,
       system: SYSTEM,
       output_config: { effort: 'medium', format: zodOutputFormat(Output) },
-      messages: [{ role: 'user', content: buildPrompt(game, opening, analysis.evals) }],
+      messages: [{ role: 'user', content: buildPrompt(game, opening, analysis.evals, context) }],
     });
     if (res.stop_reason === 'refusal') return { error: 'the model declined' };
     const out = res.parsed_output;
@@ -178,7 +192,7 @@ export async function generate(gameId: number, model: ModelKey = MODEL): Promise
       }
     }
     notes.sort((a, b) => a.ply - b.ply);
-    return { summary: out.summary.trim(), notes, model: MODELS[model], usage: { input: res.usage.input_tokens, output: res.usage.output_tokens }, ms: Date.now() - t };
+    return { preamble: context ? out.preamble.trim() : '', postamble: context ? out.postamble.trim() : '', summary: out.summary.trim(), notes, model: MODELS[model], usage: { input: res.usage.input_tokens, output: res.usage.output_tokens }, ms: Date.now() - t };
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return { error: 'the AI service is busy, try again in a minute' };
     if (e instanceof Anthropic.APIError) return { error: `AI service error ${e.status ?? ''}`.trim() };
@@ -189,8 +203,10 @@ export async function generate(gameId: number, model: ModelKey = MODEL): Promise
 interface Row {
   status: 'running' | 'done' | 'failed';
   model: string | null;
+  preamble: string | null;
   summary: string | null;
   notes: string | null;
+  postamble: string | null;
   error: string | null;
   stale: boolean;
 }
@@ -199,11 +215,12 @@ export async function getAnnotation(gameId: number): Promise<AnnotationState> {
   if (!annotationEnabled()) return { status: 'unavailable' };
   // now() keeps Hyperdrive from caching the row while it's being written.
   const [row] = await query<Row>(
-    `SELECT status, model, summary, notes, error, updated_at < now() - interval '${STALE_MINUTES} minutes' AS stale FROM game_annotation WHERE game_id = $1`,
+    `SELECT status, model, preamble, summary, notes, postamble, error, updated_at < now() - interval '${STALE_MINUTES} minutes' AS stale FROM game_annotation WHERE game_id = $1`,
     [gameId],
   );
   if (!row) return { status: 'none' };
-  if (row.status === 'done') return { status: 'done', model: row.model ?? '', summary: row.summary ?? '', notes: JSON.parse(row.notes ?? '[]') };
+  if (row.status === 'done')
+    return { status: 'done', model: row.model ?? '', preamble: row.preamble ?? '', summary: row.summary ?? '', notes: JSON.parse(row.notes ?? '[]'), postamble: row.postamble ?? '' };
   if (row.status === 'failed' || row.stale) return { status: 'failed', error: row.error ?? 'interrupted' };
   return { status: 'running' };
 }
@@ -232,11 +249,9 @@ export async function createAnnotation(gameId: number): Promise<AnnotationState>
     await query(`UPDATE game_annotation SET status = 'failed', error = $2, updated_at = now() WHERE game_id = $1`, [gameId, r.error]);
     return { status: 'failed', error: r.error };
   }
-  await query(`UPDATE game_annotation SET status = 'done', model = $2, summary = $3, notes = $4, error = NULL, updated_at = now() WHERE game_id = $1`, [
-    gameId,
-    r.model,
-    r.summary,
-    JSON.stringify(r.notes),
-  ]);
-  return { status: 'done', model: r.model, summary: r.summary, notes: r.notes };
+  await query(
+    `UPDATE game_annotation SET status = 'done', model = $2, summary = $3, notes = $4, preamble = $5, postamble = $6, error = NULL, updated_at = now() WHERE game_id = $1`,
+    [gameId, r.model, r.summary, JSON.stringify(r.notes), r.preamble, r.postamble],
+  );
+  return { status: 'done', model: r.model, preamble: r.preamble, summary: r.summary, notes: r.notes, postamble: r.postamble };
 }

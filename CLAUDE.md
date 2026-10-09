@@ -60,7 +60,10 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   summary and notes on key moves for club players from the stored analysis only (no invented lines). Stored in
   Neon table `game_annotation` (`scripts/annotation.pg.sql`), endpoint `/games/annotation/<id>.json` (GET state,
   POST write; same-site, rate-limited, at most `DAILY_LIMIT` new annotations a day). UI in
-  `src/scripts/game-annotation.ts`: summary in the analysis panel, notes under their moves.
+  `src/scripts/game-annotation.ts`: summary in the analysis panel, notes under their moves. A preamble and
+  postamble set the game in its tournament: standings going into the round and after it (team standings and the
+  match score in team events, the match score in knockouts/matches), from `src/lib/annotate-context.ts`, which
+  gives only what was known at the time (no final standings).
 - **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
   `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
   `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),

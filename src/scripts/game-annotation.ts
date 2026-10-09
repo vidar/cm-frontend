@@ -1,6 +1,6 @@
 // AI notes on game pages, once the engine analysis is shown: a button to have Claude write them
-// (POST /games/annotation/<id>.json, src/pages/games/annotation/[id].json.ts), then the summary in the
-// analysis panel, notes under their moves in the move list, and the current move's note under the eval.
+// (POST /games/annotation/<id>.json, src/pages/games/annotation/[id].json.ts), then the tournament
+// situation before the game, the summary and what the result meant in the analysis panel, notes under their moves in the move list, and the current move's note under the eval.
 
 interface Note {
   ply: number;
@@ -9,8 +9,10 @@ interface Note {
 interface State {
   status: 'none' | 'running' | 'done' | 'failed' | 'unavailable';
   model?: string;
+  preamble?: string;
   summary?: string;
   notes?: Note[];
+  postamble?: string;
   error?: string;
 }
 
@@ -69,6 +71,14 @@ export function mountGameAnnotation(panel: HTMLElement, viewer: HTMLElement) {
         .filter((p) => p.trim())
         .map((p) => Object.assign(document.createElement('p'), { textContent: p.trim() })),
     );
+    for (const [sel, text] of [
+      ['[data-ai-pre]', state.preamble],
+      ['[data-ai-post]', state.postamble],
+    ] as const) {
+      const el = box.querySelector<HTMLElement>(sel)!;
+      el.hidden = !text;
+      el.querySelector('p')!.textContent = text ?? '';
+    }
     box.querySelector('[data-ai-model]')!.textContent = MODEL_NAMES[state.model ?? ''] ?? 'Claude';
     byPly = new Map((state.notes ?? []).map((n) => [n.ply, n.text]));
 

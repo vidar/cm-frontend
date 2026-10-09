@@ -141,7 +141,9 @@ const pgn = [
           <p class="writing">Writing notes… this takes about half a minute.</p>
         </div>
         <div data-ai-part="done" hidden>
+          <div class="ai-context" data-ai-pre hidden><span class="label">Before the game</span><p></p></div>
           <div class="ai-summary" data-ai-summary></div>
+          <div class="ai-context" data-ai-post hidden><span class="label">After the round</span><p></p></div>
           <p class="muted small">Written by <span data-ai-model></span> from the Stockfish analysis; notes appear under their moves. AI can get things wrong.</p>
         </div>
         <div data-ai-part="error" hidden>
@@ -219,6 +221,9 @@ const pgn = [
   .engine .ai { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.25rem; }
   .engine .ai h3 { margin: 0.6rem 0 0.4rem; font-size: 1.1rem; }
   .engine .ai-summary { max-width: 48rem; }
+  .engine .ai-context { max-width: 48rem; background: var(--accent-soft); border-radius: var(--radius); padding: 0.55rem 0.8rem; margin: 0.75rem 0; }
+  .engine .ai-context p { margin: 0.15rem 0 0; }
+  .engine .ai-context .label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
   @media (prefers-reduced-motion: no-preference) { .engine .writing { animation: pulse 1.6s ease-in-out infinite; } }
   @keyframes pulse { 50% { opacity: 0.45; } }
   .moves :global(.note) { font-size: 0.85rem; line-height: 1.4; color: var(--muted); padding: 0.15rem 0.3rem 0.35rem 2.5rem; cursor: pointer; border-radius: 3px; }
