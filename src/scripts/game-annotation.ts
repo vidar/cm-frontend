@@ -18,8 +18,9 @@ const MODEL_NAMES: Record<string, string> = { 'claude-haiku-5-5': 'Claude Haiku 
 const moveNo = (ply: number) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '…'}`;
 
 export function mountGameAnnotation(panel: HTMLElement, viewer: HTMLElement) {
-  const box = panel.querySelector<HTMLElement>('[data-ai]');
-  if (!box || box.dataset.mounted) return;
+  const found = panel.querySelector<HTMLElement>('[data-ai]');
+  if (!found || found.dataset.mounted) return;
+  const box: HTMLElement = found;
   box.dataset.mounted = '1';
   const id = panel.dataset.analysis!;
   const sans = (viewer.dataset.moves ?? '').split(' ').filter(Boolean);

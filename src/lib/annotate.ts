@@ -37,7 +37,7 @@ export type AnnotationState =
 const Output = z.object({
   summary: z.string().describe('The story of the game in 2-3 short paragraphs separated by blank lines.'),
   notes: z
-    .array(z.object({ ply: z.number().int().describe('Ply of the move the note is about (1 = White\'s first move).'), text: z.string() }))
+    .array(z.object({ move: z.string().describe('The move the note is about, with its number as in the move list: "21.Bb3" or "23...Bc2".'), text: z.string() }))
     .describe('Notes on key moves, in game order.'),
 });
 
@@ -48,14 +48,18 @@ preferred with its main line. You can't see the board yourself, so the analysis 
 
 Write:
 - summary: the story of the game in 2-3 short paragraphs (120-220 words in all): how the opening went,
-  the turning points, and how the game was decided. Name the moves that mattered (e.g. "19.Bc4").
+  the turning points, and how the game was decided. Call the players by their surnames. Name the moves
+  that mattered (e.g. "19.Bc4").
 - notes: one note for every move marked ? or ??, and for ?! moves only when they matter for the story;
   optionally up to 3 more notes on other moments that matter (a strong move, the moment the game turned).
-  Each note is 1-3 sentences: what went wrong or right and what was better.
+  Give the move exactly as in the move list ("21.Bb3", "23...Bc2"). The note text is shown right after
+  the move, so don't start it by repeating the move. Each note is 1-3 sentences: what went wrong or right
+  and what was better; when an engine line is given, use it to show what the better move achieves.
+  Vary the wording from note to note.
 
 Rules:
 - Only use moves that appear in the game or in the engine lines you are given. Never invent variations,
-  tactics, threats or piece placements that the data doesn't show. If you don't know why a move is bad,
+  tactics, threats, captures, material gains or piece placements that the moves don't show. If you don't know why a move is bad,
   say what the engine preferred and how the evaluation changed, without guessing the reason.
 - Plain language for club players: say "White is slightly better", "Black is winning", "the position is
   equal" rather than quoting numbers; mention a number at most occasionally. No centipawns.
@@ -121,6 +125,20 @@ export function buildPrompt(game: FullGame, opening: string | null, evals: Evals
     .join('\n');
 }
 
+const bare = (san: string) => san.replace(/[+#!?]/g, '');
+
+/** Ply of a move written as "21.Bb3" / "23...Bc2" / "23... Bc2", checked against the game; null if it isn't one. */
+export function plyOf(move: string, sans: string[]) {
+  const m = /^\s*(\d+)\s*(\.{1,3}|…)\s*([^\s]+)/.exec(move);
+  if (!m) return null;
+  const n = Number(m[1]);
+  const black = m[2].length > 1;
+  const san = bare(m[3]);
+  // Trust the move itself if the number and dots disagree with it.
+  for (const ply of black ? [2 * n, 2 * n - 1] : [2 * n - 1, 2 * n]) if (sans[ply - 1] && bare(sans[ply - 1]) === san) return ply;
+  return null;
+}
+
 export interface Generated {
   summary: string;
   notes: Note[];
@@ -149,11 +167,17 @@ export async function generate(gameId: number, model: ModelKey = MODEL): Promise
     if (res.stop_reason === 'refusal') return { error: 'the model declined' };
     const out = res.parsed_output;
     if (!out) return { error: `no annotation (${res.stop_reason})` };
-    const plies = game.moves.split(' ').filter(Boolean).length;
-    const notes = out.notes
-      .filter((n) => Number.isInteger(n.ply) && n.ply >= 1 && n.ply <= plies && n.text.trim())
-      .map((n) => ({ ply: n.ply, text: n.text.trim() }))
-      .sort((a, b) => a.ply - b.ply);
+    const sans = game.moves.split(' ').filter(Boolean);
+    const seen = new Set<number>();
+    const notes: Note[] = [];
+    for (const n of out.notes) {
+      const ply = plyOf(n.move, sans);
+      if (ply && !seen.has(ply) && n.text.trim()) {
+        seen.add(ply);
+        notes.push({ ply, text: n.text.trim() });
+      }
+    }
+    notes.sort((a, b) => a.ply - b.ply);
     return { summary: out.summary.trim(), notes, model: MODELS[model], usage: { input: res.usage.input_tokens, output: res.usage.output_tokens }, ms: Date.now() - t };
   } catch (e) {
     if (e instanceof Anthropic.RateLimitError) return { error: 'the AI service is busy, try again in a minute' };
