@@ -107,6 +107,9 @@ export const PAGE_SIZE = 50;
 
 export const twicIssueUrl = (n: number) => `https://theweekinchess.com/html/twic${n}.html`;
 
+/** Publication date (a Monday) of a TWIC issue: #920 came out on 2012-06-25 and one follows every week. */
+export const twicIssueDate = (n: number) => new Date(Date.UTC(2012, 5, 25) + (n - 920) * 7 * 86_400_000).toISOString().slice(0, 10);
+
 export function slugify(s: string) {
   return s
     .normalize('NFKD')
@@ -128,6 +131,25 @@ export function gamePath(g: Pick<GameRow, 'id' | 'white_name' | 'black_name' | '
 
 export async function getGame(id: number): Promise<FullGame | null> {
   return first<FullGame>(`SELECT ${GAME_COLS}, g.moves, e.site AS event_site FROM games g ${GAME_JOINS} WHERE g.id = $1`, [id]);
+}
+
+/** Everything the game page needs in one statement: the game with its opening name, and the other games between the two players (newest first). */
+export async function getGamePage(id: number, others = 20): Promise<{ game: FullGame & { opening_name: string | null }; others: GameRow[] } | null> {
+  const row = await first<FullGame & { opening_name: string | null; h2h: GameRow[] | null }>(
+    `WITH gm AS (
+       SELECT ${GAME_COLS}, g.moves, e.site AS event_site, o.name AS opening_name
+       FROM games g ${GAME_JOINS} LEFT JOIN openings o ON o.slug = g.opening WHERE g.id = $1)
+     SELECT gm.*, (
+       SELECT json_agg(h) FROM (
+         SELECT ${GAME_COLS} FROM games g ${GAME_JOINS}
+         WHERE ((g.white_id = gm.white_id AND g.black_id = gm.black_id) OR (g.white_id = gm.black_id AND g.black_id = gm.white_id)) AND g.id <> gm.id
+         ORDER BY g.date DESC NULLS LAST LIMIT $2) h) AS h2h
+     FROM gm`,
+    [id, others],
+  );
+  if (!row) return null;
+  const { h2h, ...game } = row;
+  return { game, others: h2h ?? [] };
 }
 
 export async function getPlayer(slug: string) {
@@ -156,6 +178,34 @@ export async function playerGames(playerId: number, page: number, color?: 'w' | 
        ) t ORDER BY date DESC NULLS LAST, id DESC LIMIT $2 OFFSET $3`;
   const results = await query<GameRow>(sql, [playerId, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE]);
   return { games: results.slice(0, PAGE_SIZE), hasMore: results.length > PAGE_SIZE };
+}
+
+/**
+ * Everything the player page needs in one statement: the player, a page of their games (newest first,
+ * optionally one colour) and their overall score. Each colour's games come straight off its index,
+ * limited before the merge, so busy players don't cost a full scan per page.
+ */
+export async function getPlayerPage(slug: string, page: number, color?: 'w' | 'b') {
+  const offset = (page - 1) * PAGE_SIZE;
+  const branch = (side: 'white' | 'black') =>
+    `(SELECT ${GAME_COLS} FROM games g ${GAME_JOINS} WHERE g.${side}_id = (SELECT id FROM p) ORDER BY g.date DESC NULLS LAST, g.id DESC LIMIT $2)`;
+  const union = color === 'w' ? branch('white') : color === 'b' ? branch('black') : `${branch('white')} UNION ALL ${branch('black')}`;
+  const row = await first<{ player: Player; games: GameRow[] | null; score: { w: number; d: number; l: number } }>(
+    `WITH p AS (SELECT * FROM players WHERE slug = $1)
+     SELECT row_to_json(p) AS player,
+       (SELECT json_agg(t) FROM (SELECT * FROM (${union}) u ORDER BY date DESC NULLS LAST, id DESC LIMIT $3 OFFSET $4) t) AS games,
+       (SELECT json_build_object(
+          'w', COUNT(*) FILTER (WHERE (white_id = (SELECT id FROM p) AND result = '1-0') OR (black_id = (SELECT id FROM p) AND result = '0-1')),
+          'd', COUNT(*) FILTER (WHERE result = '1/2-1/2'),
+          'l', COUNT(*) FILTER (WHERE (white_id = (SELECT id FROM p) AND result = '0-1') OR (black_id = (SELECT id FROM p) AND result = '1-0')))
+        FROM (SELECT white_id, black_id, result FROM games WHERE white_id = (SELECT id FROM p)
+              UNION ALL SELECT white_id, black_id, result FROM games WHERE black_id = (SELECT id FROM p)) s) AS score
+     FROM p`,
+    [slug, offset + PAGE_SIZE + 1, PAGE_SIZE + 1, offset],
+  );
+  if (!row) return null;
+  const games = row.games ?? [];
+  return { player: row.player, games: games.slice(0, PAGE_SIZE), hasMore: games.length > PAGE_SIZE, score: row.score };
 }
 
 /** Score summary for a player: [wins, draws, losses] overall. */
@@ -193,6 +243,23 @@ export async function eventGamesAll(eventSlug: string) {
      WHERE g.event_id = (SELECT id FROM events WHERE slug = $1) ORDER BY g.id`,
     [eventSlug],
   );
+}
+
+/** An event and every game of it (without moves) in one statement; null when there's no such event. */
+export async function getEventWithGames(slug: string): Promise<{ event: EventRow; games: EventGame[] } | null> {
+  const row = await first<{ event: EventRow; games: EventGame[] | null }>(
+    `SELECT row_to_json(ev) AS event, (
+       SELECT json_agg(x) FROM (
+         SELECT g.id, g.white_id, g.black_id, g.white_elo, g.black_elo, g.white_title, g.black_title, g.result, g.date, g.round,
+           g.plies, g.eco, g.opening, o.name AS opening_name, g.white_team, g.black_team,
+           w.name AS white_name, w.slug AS white_slug, w.fed AS white_fed, b.name AS black_name, b.slug AS black_slug, b.fed AS black_fed,
+           e.name AS event_name, e.slug AS event_slug
+         FROM games g ${GAME_JOINS} LEFT JOIN openings o ON o.slug = g.opening
+         WHERE g.event_id = ev.id ORDER BY g.id) x) AS games
+     FROM events ev WHERE ev.slug = $1`,
+    [slug],
+  );
+  return row ? { event: row.event, games: row.games ?? [] } : null;
 }
 
 /** Moves of a few games, by id. */

@@ -21,3 +21,10 @@ export function dateRange(a: string | null, b: string | null) {
 }
 
 export const resultText = (r: string) => (r === '1/2-1/2' ? '½–½' : r.replace('-', '–'));
+
+/** Edge cache lifetime for a TWIC event page: a month once the event is three weeks past, a day while it may still get games. */
+export function eventCacheControl(event: { end_date: string | null; start_date: string | null }, now = new Date()) {
+  const end = event.end_date ?? event.start_date;
+  const finished = !!end && Date.parse(end) < now.getTime() - 21 * 86_400_000;
+  return finished ? 'public, max-age=86400, s-maxage=2592000' : 'public, max-age=3600, s-maxage=86400';
+}

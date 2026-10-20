@@ -1,11 +1,12 @@
 // Data loading shared by the event overview and round pages (on-demand routes only).
 import { Chess } from 'chess.js';
-import { getEvent, eventGamesAll, gameMoves } from './games';
+import { gameMoves, getEventWithGames } from './games';
 import { analyseEvent, type EventAnalysis, type EventGame } from './event';
 
 export async function loadEvent(slug: string) {
-  const [event, games] = await Promise.all([getEvent(slug), eventGamesAll(slug)]);
-  if (!event) return null;
+  const data = await getEventWithGames(slug);
+  if (!data) return null;
+  const { event, games } = data;
   return { event, games, a: analyseEvent(games, event.type) };
 }
 

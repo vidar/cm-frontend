@@ -2,18 +2,18 @@
 import { START_FEN } from '../../lib/og-url';
 import Layout from '../../layouts/Layout.astro';
 import GameTable from '../../components/GameTable.astro';
-import { getPlayer, playerGames, playerScore } from '../../lib/games';
+import { getPlayerPage } from '../../lib/games';
 
 export const prerender = false;
-
-const player = await getPlayer(Astro.params.slug ?? '');
-if (!player) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 
 const q = Astro.url.searchParams;
 const page = Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1);
 const color = q.get('color') === 'w' || q.get('color') === 'b' ? (q.get('color') as 'w' | 'b') : undefined;
-const [{ games, hasMore }, score] = await Promise.all([playerGames(player.id, page, color), playerScore(player.id)]);
+const data = await getPlayerPage(Astro.params.slug ?? '', page, color);
+if (!data) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+// New games arrive weekly (TWIC) and the cache is purged by tag after imports: a week at the edge.
+Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=604800');
+const { player, games, hasMore, score } = data;
 const total = score.w + score.d + score.l;
 const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
 const link = (p: number, c = color) => {

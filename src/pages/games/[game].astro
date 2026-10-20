@@ -6,16 +6,18 @@ import BoardDiagram from '../../components/BoardDiagram.astro';
 import GameTable from '../../components/GameTable.astro';
 import '../../styles/board.css';
 import { parseRound } from '../../lib/event';
-import { getGame, getOpeningName, gamePath, headToHead, resultLabel, twicIssueUrl } from '../../lib/games';
+import { getGamePage, gamePath, resultLabel, twicIssueUrl } from '../../lib/games';
 
 export const prerender = false;
 
 const id = Number.parseInt(Astro.params.game ?? '', 10);
-const game = Number.isFinite(id) ? await getGame(id) : null;
-if (!game) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+const data = Number.isFinite(id) ? await getGamePage(id) : null;
+if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+const { game, others } = data;
 const canonical = gamePath(game);
 if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
-Astro.response.headers.set('Cache-Control', 'public, max-age=86400');
+// The page itself never changes (analysis and notes load separately): a month at the edge.
+Astro.response.headers.set('Cache-Control', 'public, max-age=86400, s-maxage=2592000');
 
 const sans = game.moves.split(' ').filter(Boolean);
 const chess = new Chess();
@@ -25,9 +27,7 @@ for (const san of sans) {
   last = [m.from, m.to];
 }
 const finalFen = chess.fen();
-const [openingName, h2h] = await Promise.all([game.opening ? getOpeningName(game.opening) : null, headToHead(game.white_id, game.black_id, 21)]);
-const opening = openingName ? { name: openingName } : null;
-const others = h2h.filter((g) => g.id !== game.id).slice(0, 20);
+const opening = game.opening_name ? { name: game.opening_name } : null;
 
 const roundN = parseRound(game.round).n;
 const who = (name: string, title: string | null) => `${title ? `${title} ` : ''}${name}`;

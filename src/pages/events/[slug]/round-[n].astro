@@ -12,6 +12,7 @@ import { featured, finalPositions, loadEvent } from '../../../lib/event-page';
 import { roundStory } from '../../../lib/event';
 import { dateRange, resultText } from '../../../lib/event-view';
 import { isUploaded } from '../../../lib/uploads';
+import { eventCacheControl } from '../../../lib/event-view';
 import { eventRedirect, gamePath, twicIssueUrl } from '../../../lib/games';
 
 export const prerender = false;
@@ -25,8 +26,9 @@ if (!data || !round) {
   return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
 }
 const { event, a } = data;
-// Uploaded tournaments change while they run: cache them briefly.
-Astro.response.headers.set('Cache-Control', isUploaded(event.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=3600, s-maxage=86400');
+// Uploaded tournaments change while they run: cache them briefly. TWIC events that ended a few weeks
+// ago don't change any more (late games are rare; the cache is purged by tag after imports): a month.
+Astro.response.headers.set('Cache-Control', isUploaded(event.id) ? 'public, max-age=60, s-maxage=300' : eventCacheControl(event));
 const base = `/events/${event.slug}/`;
 const idx = a.rounds.indexOf(round);
 const prev = a.rounds[idx - 1];

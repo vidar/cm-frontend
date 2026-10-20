@@ -69,11 +69,15 @@ function scoreBefore(a: EventAnalysis, id: number, n: number) {
 
 /** The tournament context as prompt text, or null when there's none worth giving (no rounds, too few games). */
 export async function tournamentContext(game: FullGame): Promise<string | null> {
+  if (!parseRound(game.round).n) return null;
+  const data = await loadEvent(game.event_slug);
+  return data ? contextFromAnalysis(game, data.a) : null;
+}
+
+/** The pure part: the context text from the event's analysis (null when the game isn't in a round of it). */
+export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event_name' | 'white_id' | 'black_id' | 'white_name' | 'black_name'>, a: EventAnalysis): string | null {
   const n = parseRound(game.round).n;
   if (!n) return null;
-  const data = await loadEvent(game.event_slug);
-  if (!data) return null;
-  const { a } = data;
   const eg: EventGame | undefined = a.rounds.find((r) => r.n === n)?.games.find((g) => g.id === game.id);
   if (!eg || a.format === 'games') return null;
   const total = a.rounds.length ? a.rounds[a.rounds.length - 1].n : n;

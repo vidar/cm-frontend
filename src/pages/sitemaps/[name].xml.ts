@@ -1,5 +1,5 @@
 import type { APIRoute } from 'astro';
-import { gamePath, getMeta, query, type GameRow } from '../../lib/games';
+import { gamePath, getMeta, query, twicIssueDate, type GameRow } from '../../lib/games';
 
 // Sitemaps for the database pages (on-demand routes aren't covered by @astrojs/sitemap):
 //   /sitemaps/index.xml       sitemap index
@@ -11,12 +11,21 @@ export const prerender = false;
 const CHUNK = 50_000;
 const EVENT_CHUNK = 2_500;
 const SITE = 'https://chessmoments.com';
+// A week at the edge: the database changes once a week (TWIC) and the cache is purged by tag after imports.
 const xml = (body: string) =>
   new Response(`<?xml version="1.0" encoding="UTF-8"?>\n${body}`, {
-    headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400' },
+    headers: { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=86400, s-maxage=604800' },
   });
-const urlset = (urls: string[]) =>
-  xml(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((u) => `<url><loc>${SITE}${u}</loc></url>`).join('')}</urlset>`);
+// <lastmod> tells crawlers that old pages haven't changed, so they spend their visits on new ones.
+const urlset = (urls: { loc: string; lastmod?: string | null }[]) =>
+  xml(
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls
+      .map((u) => `<url><loc>${SITE}${u.loc}</loc>${u.lastmod ? `<lastmod>${u.lastmod}</lastmod>` : ''}</url>`)
+      .join('')}</urlset>`,
+  );
+
+/** Only complete YYYY-MM-DD dates are valid in <lastmod>. */
+const fullDate = (d: string | null) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
 
 export const GET: APIRoute = async ({ params }) => {
   const name = params.name ?? '';
@@ -33,23 +42,27 @@ export const GET: APIRoute = async ({ params }) => {
   if (!m) return new Response('Not found', { status: 404 });
   const n = Number(m[2]);
   if (m[1] === 'events') {
-    const results = await query<{ slug: string; rounds: number | null }>('SELECT slug, rounds FROM events WHERE id BETWEEN $1 AND $2 ORDER BY id', [
-      (n - 1) * EVENT_CHUNK + 1,
-      n * EVENT_CHUNK,
-    ]);
-    const urls = results.flatMap((e) => [`/events/${e.slug}/`, ...Array.from({ length: e.rounds && e.rounds > 1 ? e.rounds : 0 }, (_, i) => `/events/${e.slug}/round-${i + 1}/`)]);
+    const results = await query<{ slug: string; rounds: number | null; end_date: string | null; start_date: string | null }>(
+      'SELECT slug, rounds, end_date, start_date FROM events WHERE id BETWEEN $1 AND $2 ORDER BY id',
+      [(n - 1) * EVENT_CHUNK + 1, n * EVENT_CHUNK],
+    );
+    const urls = results.flatMap((e) => {
+      const lastmod = fullDate(e.end_date ?? e.start_date);
+      return [{ loc: `/events/${e.slug}/`, lastmod }, ...Array.from({ length: e.rounds && e.rounds > 1 ? e.rounds : 0 }, (_, i) => ({ loc: `/events/${e.slug}/round-${i + 1}/`, lastmod }))];
+    });
     return urls.length ? urlset(urls) : new Response('Not found', { status: 404 });
   }
   const [lo, hi] = [(n - 1) * CHUNK + 1, n * CHUNK];
   if (m[1] === 'players') {
-    const results = await query<{ slug: string }>('SELECT slug FROM players WHERE id BETWEEN $1 AND $2 ORDER BY id', [lo, hi]);
-    return results.length ? urlset(results.map((p) => `/players/${p.slug}/`)) : new Response('Not found', { status: 404 });
+    const results = await query<{ slug: string; last_date: string | null }>('SELECT slug, last_date FROM players WHERE id BETWEEN $1 AND $2 ORDER BY id', [lo, hi]);
+    return results.length ? urlset(results.map((p) => ({ loc: `/players/${p.slug}/`, lastmod: fullDate(p.last_date) }))) : new Response('Not found', { status: 404 });
   }
-  const results = await query<Pick<GameRow, 'id' | 'white_name' | 'black_name' | 'event_name' | 'date'>>(
-    `SELECT g.id, w.name AS white_name, b.name AS black_name, e.name AS event_name, g.date
+  const results = await query<Pick<GameRow, 'id' | 'white_name' | 'black_name' | 'event_name' | 'date' | 'twic'>>(
+    `SELECT g.id, w.name AS white_name, b.name AS black_name, e.name AS event_name, g.date, g.twic
      FROM games g JOIN players w ON w.id = g.white_id JOIN players b ON b.id = g.black_id JOIN events e ON e.id = g.event_id
      WHERE g.id BETWEEN $1 AND $2 ORDER BY g.id`,
     [lo, hi],
   );
-  return results.length ? urlset(results.map(gamePath)) : new Response('Not found', { status: 404 });
+  // A game page dates from the TWIC issue that brought the game (uploaded games have no issue).
+  return results.length ? urlset(results.map((g) => ({ loc: gamePath(g), lastmod: g.twic ? twicIssueDate(g.twic) : fullDate(g.date) }))) : new Response('Not found', { status: 404 });
 };

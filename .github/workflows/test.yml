@@ -1,0 +1,17 @@
+# Unit tests on every push and pull request. Integration tests that need the games database skip
+# themselves here (no TEST_DATABASE_URL); run them locally against a Postgres copy.
+name: Tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test

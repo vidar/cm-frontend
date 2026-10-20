@@ -12,7 +12,8 @@
     "preview": "astro build && wrangler dev",
     "deploy": "astro build && wrangler deploy",
     "astro": "astro",
-    "generate-types": "wrangler types"
+    "generate-types": "wrangler types",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",
@@ -27,5 +28,8 @@
   "allowScripts": {
     "esbuild": true,
     "workerd": true
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
