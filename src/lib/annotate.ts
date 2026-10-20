@@ -145,7 +145,7 @@ export function plyOf(move: string, sans: string[]) {
   const m = /^\s*(\d+)\s*(\.{1,3}|…)\s*([^\s]+)/.exec(move);
   if (!m) return null;
   const n = Number(m[1]);
-  const black = m[2].length > 1;
+  const black = m[2] === '…' || m[2].length > 1; // "5..." or "5…" is Black's move
   const san = bare(m[3]);
   // Trust the move itself if the number and dots disagree with it.
   for (const ply of black ? [2 * n, 2 * n - 1] : [2 * n - 1, 2 * n]) if (sans[ply - 1] && bare(sans[ply - 1]) === san) return ply;

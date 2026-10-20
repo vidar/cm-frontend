@@ -234,9 +234,8 @@ describe('plyOf', () => {
   it('returns null on an empty move list', () => {
     expect(plyOf('1.e4', [])).toBeNull();
   });
-  // Bug (annotate.ts:148): `black = m[2].length > 1` reads the single-character ellipsis "…" as White's dot,
-  // so "5…O-O" resolves to White's castling (ply 9) when both sides castled at move 5.
-  it.fails('reads the ellipsis character as Black’s move', () => {
+  // "5…O-O" is Black's castling even when both sides castled at move 5.
+  it('reads the ellipsis character as Black’s move', () => {
     expect(plyOf('5…O-O', SANS)).toBe(10);
   });
 });

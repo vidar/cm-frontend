@@ -442,9 +442,8 @@ describe('scoreFor', () => {
     expect(scoreFor(g, 1)).toBe('½');
     expect(scoreFor(g, 2)).toBe('½');
   });
-  // Bug: anything but '1-0' and a draw counts as a black win, so an unfinished game ('*', which
-  // uploaded tournaments can contain) shows '1' for the black player and '0' for white.
-  it.fails('an unfinished game is not a win for black', () => {
+  // An unfinished game ('*', which uploaded tournaments can contain) is no win for either side.
+  it('an unfinished game is not a win for black', () => {
     const g = { result: '*', white_id: 1 };
     expect(scoreFor(g, 2)).not.toBe('1');
     expect(scoreFor(g, 1)).not.toBe('0');

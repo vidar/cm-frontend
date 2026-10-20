@@ -307,6 +307,7 @@ export async function headToHead(a: number, b: number, limit = 20) {
 /** Score from a player's perspective: "1", "½", "0". */
 export function scoreFor(g: Pick<GameRow, 'result' | 'white_id'>, playerId: number) {
   if (g.result === '1/2-1/2') return '½';
+  if (g.result !== '1-0' && g.result !== '0-1') return '*'; // unfinished (uploaded tournaments can have them)
   const whiteWon = g.result === '1-0';
   return (g.white_id === playerId) === whiteWon ? '1' : '0';
 }
