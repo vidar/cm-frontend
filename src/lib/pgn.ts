@@ -87,7 +87,7 @@ export function parseGame(text: string): ParsedGame | string {
   for (const line of text.split('\n')) {
     const m = /^\s*\[(\w+)\s+"((?:[^"\\]|\\.)*)"\s*\]\s*$/.exec(line);
     if (m) tags[m[1]] = m[2].replace(/\\(.)/g, '$1');
-    else body.push(line);
+    else if (!line.startsWith('%')) body.push(line); // '%' in column 1 is an escape line (PGN standard 6)
   }
   if (tags.FEN || (tags.SetUp && tags.SetUp !== '0')) return 'games from a set-up position are not supported';
   if (tags.Variant && !/^standard$/i.test(tags.Variant)) return `variant "${tags.Variant}" is not supported`;

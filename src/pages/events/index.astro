@@ -5,17 +5,41 @@ import { recentEvents } from '../../lib/games';
 export const prerender = false;
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
 const events = await recentEvents(200);
+// "This week": events that finished within a week of the newest data (the latest TWIC issue).
+const latest = events.reduce<string | null>((m, e) => (e.end_date && (!m || e.end_date > m) ? e.end_date : m), null);
+const day = 86_400_000;
+const thisWeek = latest ? events.filter((e) => e.end_date && Date.parse(latest) - Date.parse(e.end_date) < 7 * day) : [];
+const earlier = events.filter((e) => !thisWeek.includes(e));
+const dates = (e: (typeof events)[number]) => (e.start_date && e.end_date && e.start_date !== e.end_date ? `${e.start_date} – ${e.end_date}` : (e.start_date ?? ''));
+const describe = (e: (typeof events)[number]) => [e.site, dates(e), `${e.games.toLocaleString('en')} games`].filter(Boolean).join(' · ');
 ---
 
-<Layout title="Chess tournaments and events" description="Recent over-the-board chess tournaments with every game to replay.">
+<Layout
+  title="Chess tournaments this week and recent events"
+  description={`The tournaments that just finished${latest ? ` (games to ${latest})` : ''} and recent over-the-board events, each with standings, round-by-round results and every game to replay.`}
+>
   <nav class="crumbs"><a href="/games/">Games</a></nav>
   <h1>Events</h1>
   <p class="organisers">Organising a tournament? <a href="/upload/">Upload its games</a> round by round.</p>
-  <ul class="list">
-    {events.map((e) => (
-      <li><a href={`/events/${e.slug}/`}>{e.name}</a> <span class="muted">{e.site && `${e.site} · `}{e.start_date} · {e.games} games</span></li>
-    ))}
-  </ul>
+  {thisWeek.length > 0 && (
+    <section>
+      <h2>This week</h2>
+      <p class="muted">Tournaments that finished in the week to {latest}, from the latest issue of The Week in Chess.</p>
+      <ul class="list">
+        {thisWeek.map((e) => (
+          <li><a href={`/events/${e.slug}/`}>{e.name}</a> <span class="muted">{describe(e)}</span></li>
+        ))}
+      </ul>
+    </section>
+  )}
+  <section>
+    <h2>{thisWeek.length > 0 ? 'Earlier' : 'Recent events'}</h2>
+    <ul class="list">
+      {earlier.map((e) => (
+        <li><a href={`/events/${e.slug}/`}>{e.name}</a> <span class="muted">{describe(e)}</span></li>
+      ))}
+    </ul>
+  </section>
 </Layout>
 
 <style>

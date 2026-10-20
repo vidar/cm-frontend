@@ -532,7 +532,7 @@ export function winners(a: EventAnalysis): string[] {
     const final = a.knockout.at(-1)!.matches[0];
     return final.winner ? [players(a, final.winner)] : [];
   }
-  if (!a.complete) return [];
+  if (!a.complete || !a.rounds.length) return []; // loose games without rounds have no standings
   const s = a.standingsAfter(Infinity);
   return s.filter((l) => l.points === s[0]?.points).map((l) => l.player.name);
 }
