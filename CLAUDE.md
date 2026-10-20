@@ -53,7 +53,15 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   or two statements and check with `scratchpad measure.sh`-style counting (log_statement) before adding
   a query. Edge cache lifetimes (`src/middleware.ts` honours `s-maxage`): game pages a month, player
   pages and sitemaps a week, TWIC events a month once three weeks past (`eventCacheControl()`), a day
-  while running, uploaded events 5 minutes; purge the `games-db` tag after an import.
+  while running, uploaded events 5 minutes; 301/404s of database pages are cached too; purge the
+  `games-db` tag after an import. Database pages are cache-keyed by `DATA_VERSION` (middleware), not
+  the build id: bump it when their templates change. The "not analysed yet"/"no notes yet" JSON answers
+  are cached 5 minutes; clients that just queued work poll with `?poll=1`. Crawlers (`src/lib/bots.ts`)
+  are paced on cache misses of database pages (bindings `CRAWL_SEARCH` 600/min, `CRAWL_ASSISTANT` 60,
+  `CRAWL_BOT` 20; 429 + Retry-After beyond), browsers never; robots.txt keeps crawlers off
+  `/players/*?` and `/games/search/?`. Maintenance: `MAINTENANCE=1` (`src/worker.ts`) closes only
+  the database routes with 503; the rest of the site stays up. Costs and the Neon/Hyperdrive settings
+  that matter are in `docs/database-costs.md`.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
   at `ENGINE_URL` (https://engine.chessmoments.com, API in its `/llm.txt`; Worker secret
   `STOCKFISH_TOKEN`). `src/lib/analysis.ts` submits a game as a job and polls it; results are stored in
