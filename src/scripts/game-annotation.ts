@@ -36,12 +36,18 @@ export function mountGameAnnotation(panel: HTMLElement, viewer: HTMLElement) {
   let byPly = new Map<number, string>();
   let timer = 0;
 
+  // The first look may come from the edge cache; after we ask for notes, poll the live state (?poll=1).
+  let polling = false;
+
   async function load(method: 'GET' | 'POST' = 'GET') {
     clearTimeout(timer);
-    if (method === 'POST') show('running');
+    if (method === 'POST') {
+      show('running');
+      polling = true;
+    }
     let state: State;
     try {
-      const res = await fetch(`/games/annotation/${id}.json`, { method, headers: { Accept: 'application/json' } });
+      const res = await fetch(`/games/annotation/${id}.json${polling && method === 'GET' ? '?poll=1' : ''}`, { method, headers: { Accept: 'application/json' } });
       state = await res.json();
       if (!res.ok && state.error) return fail(state.error);
     } catch {

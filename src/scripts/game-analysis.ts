@@ -40,12 +40,15 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
   };
   let timer = 0;
   let current = sans.length;
+  // The first look may come from the edge cache; after we queue work, poll the live state (?poll=1).
+  let polling = false;
 
   async function load(method: 'GET' | 'POST' = 'GET') {
     clearTimeout(timer);
+    if (method === 'POST') polling = true;
     let state: State;
     try {
-      const res = await fetch(`/games/analysis/${id}.json`, { method, headers: { Accept: 'application/json' } });
+      const res = await fetch(`/games/analysis/${id}.json${polling && method === 'GET' ? '?poll=1' : ''}`, { method, headers: { Accept: 'application/json' } });
       state = await res.json();
       if (!res.ok && 'error' in state) return fail(String(state.error));
     } catch {

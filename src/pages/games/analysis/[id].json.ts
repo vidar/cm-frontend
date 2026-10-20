@@ -13,12 +13,15 @@ const gameId = (s: string | undefined) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
-export const GET: APIRoute = async ({ params }) => {
+export const GET: APIRoute = async ({ params, url }) => {
   const id = gameId(params.id);
   if (!id) return json({ error: 'bad game id' }, 400);
   const state = await getAnalysis(id);
-  // A finished analysis never changes: let the edge cache it.
-  return json(state, 200, state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : 'no-store');
+  // A finished analysis never changes: let the edge cache it. "Not analysed yet" is cached for a few
+  // minutes too (most views of most games), except for the ?poll=1 requests of a client that has just
+  // queued the game. Queued/running states are never cached.
+  const cache = state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
+  return json(state, 200, cache);
 };
 
 export const POST: APIRoute = async ({ params, request, url, clientAddress }) => {

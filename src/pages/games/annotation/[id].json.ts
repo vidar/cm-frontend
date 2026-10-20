@@ -15,11 +15,13 @@ const gameId = (s: string | undefined) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
-export const GET: APIRoute = async ({ params }) => {
+export const GET: APIRoute = async ({ params, url }) => {
   const id = gameId(params.id);
   if (!id) return json({ error: 'bad game id' }, 400);
   const state = await getAnnotation(id);
-  return json(state, 200, state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : 'no-store');
+  // Finished notes never change; "no notes yet" is cached a few minutes except for a client's ?poll=1.
+  const cache = state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
+  return json(state, 200, cache);
 };
 
 export const POST: APIRoute = async ({ params, request, url, clientAddress }) => {

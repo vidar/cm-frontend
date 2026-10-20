@@ -5,7 +5,9 @@
 // stored with the Cache API (per data centre, for s-maxage / max-age) and served from there next
 // time. Prerendered pages are static assets and never reach this. Database pages get a `Cache-Tag`
 // so they can be purged after a data update (Cloudflare API: purge cache by tag "games-db"). The
-// key includes the build ID, so a deploy never serves pages rendered by the previous build.
+// key includes the build ID, so a deploy never serves pages rendered by the previous build, except
+// for the database pages, which are keyed by DATA_VERSION instead: content deploys (every CMS commit)
+// would otherwise throw away millions of cached pages. Bump DATA_VERSION when their templates change.
 //
 // Crawlers: a cache miss on a database page costs a database query, and the database is billed by
 // the hour it is awake, so crawlers are paced on misses (never on hits): each crawler family has a
@@ -17,6 +19,8 @@ import { env } from 'cloudflare:workers';
 import { classifyBot, CRAWL_LIMIT, type BotKind } from './lib/bots';
 
 const DB_PAGES = /^\/(games|players|events|sitemaps)\//;
+/** Bump when the markup of the games/players/events/sitemaps pages changes (keeps their cache across other deploys). */
+const DATA_VERSION = '2026-10-20';
 declare const __BUILD_ID__: string;
 const HOST = 'chessmoments.com'; // the Cache API is a no-op on workers.dev previews anyway
 
@@ -31,7 +35,7 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   if (ctx.isPrerendered || request.method !== 'GET' || url.hostname !== HOST || request.headers.has('Authorization')) return next();
   const cache = (globalThis as unknown as { caches: { default: Cache } }).caches.default;
   const keyUrl = new URL(url);
-  keyUrl.searchParams.set('__build', __BUILD_ID__);
+  keyUrl.searchParams.set('__build', DB_PAGES.test(url.pathname) ? DATA_VERSION : __BUILD_ID__);
   const key = new Request(keyUrl.toString(), { method: 'GET' });
 
   const hit = await cache.match(key);
