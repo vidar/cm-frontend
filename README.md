@@ -69,6 +69,7 @@ as duplicates.
 | `npm run preview`        | Build and preview locally in the Workers runtime         |
 | `npm run deploy`         | Build and deploy to Cloudflare (`wrangler deploy`)       |
 | `npm run generate-types` | Generate types for bindings in `wrangler.jsonc`          |
+| `npm test`               | Run the tests (vitest; database tests need a local copy)  |
 
 ## Deploying
 
