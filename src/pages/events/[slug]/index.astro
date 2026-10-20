@@ -22,8 +22,8 @@ export const prerender = false;
 const data = await loadEvent(Astro.params.slug ?? '');
 if (!data) {
   const moved = await eventRedirect(Astro.params.slug ?? '');
-  if (moved) return Astro.redirect(`/events/${moved}/`, 301);
-  return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+  if (moved) return new Response(null, { status: 301, headers: { Location: `/events/${moved}/`, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
+  return new Response('Event not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
 }
 const { event, a } = data;
 // Uploaded tournaments change while they run: cache them briefly. TWIC events that ended a few weeks

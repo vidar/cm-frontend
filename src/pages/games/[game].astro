@@ -12,10 +12,11 @@ export const prerender = false;
 
 const id = Number.parseInt(Astro.params.game ?? '', 10);
 const data = Number.isFinite(id) ? await getGamePage(id) : null;
-if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+// Missing games and old URLs are cached at the edge too: crawlers retry them and each costs a query.
+if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
 const { game, others } = data;
 const canonical = gamePath(game);
-if (Astro.url.pathname !== canonical) return Astro.redirect(canonical, 301);
+if (Astro.url.pathname !== canonical) return new Response(null, { status: 301, headers: { Location: canonical, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
 // The page itself never changes (analysis and notes load separately): a month at the edge.
 Astro.response.headers.set('Cache-Control', 'public, max-age=86400, s-maxage=2592000');
 

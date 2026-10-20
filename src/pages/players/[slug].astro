@@ -10,7 +10,7 @@ const q = Astro.url.searchParams;
 const page = Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1);
 const color = q.get('color') === 'w' || q.get('color') === 'b' ? (q.get('color') as 'w' | 'b') : undefined;
 const data = await getPlayerPage(Astro.params.slug ?? '', page, color);
-if (!data) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+if (!data) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
 // New games arrive weekly (TWIC) and the cache is purged by tag after imports: a week at the edge.
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=604800');
 const { player, games, hasMore, score } = data;
