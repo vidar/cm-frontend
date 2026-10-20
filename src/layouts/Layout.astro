@@ -13,10 +13,14 @@ interface Props {
   og?: OgCard;
   /** Keep the page out of search indexes (links are still followed), e.g. search results. */
   noindex?: boolean;
+  /** Structured data (schema.org JSON-LD): an object or a @graph array; the @context is added here. */
+  jsonLd?: object | object[];
 }
 
 const SITE_NAME = 'chessmoments';
-const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false, og, noindex = false } = Astro.props;
+const { title, description = 'Daily chess puzzles, opening explorer and free chess tools.', wide = false, og, noindex = false, jsonLd } = Astro.props;
+// </script> inside a JSON string would end the element early.
+const ld = jsonLd ? JSON.stringify({ '@context': 'https://schema.org', ...(Array.isArray(jsonLd) ? { '@graph': jsonLd } : jsonLd) }).replace(/</g, '\\u003c') : null;
 const ogCard: OgCard = og ?? { fen: START_FEN, title, subtitle: description.length > 150 ? `${description.slice(0, 147).trimEnd()}…` : description };
 const ogImage = new URL(ogUrl(ogCard), Astro.site);
 const canonical = new URL(Astro.url.pathname, Astro.site);
@@ -104,6 +108,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     <Font cssVariable="--font-display" preload />
     <Font cssVariable="--font-text" preload />
     <title>{`${title} | ${SITE_NAME}`}</title>
+    {ld && <script is:inline type="application/ld+json" set:html={ld} />}
   </head>
   <body>
     <header class:list={{ wide }}>

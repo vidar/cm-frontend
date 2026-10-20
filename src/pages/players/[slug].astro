@@ -23,12 +23,34 @@ const link = (p: number, c = color) => {
   return `?${s}`.replace(/\?$/, '') || './';
 };
 const name = `${player.title ? `${player.title} ` : ''}${player.name}`;
+const abs = (p: string) => new URL(p, Astro.site ?? 'https://chessmoments.com').href;
+const jsonLd = [
+  {
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Games', item: abs('/games/') },
+      { '@type': 'ListItem', position: 2, name: 'Players', item: abs('/players/') },
+      { '@type': 'ListItem', position: 3, name: player.name },
+    ],
+  },
+  {
+    '@type': 'Person',
+    '@id': abs(`/players/${player.slug}/`),
+    name: player.name,
+    url: abs(`/players/${player.slug}/`),
+    ...(player.title ? { honorificPrefix: player.title } : {}),
+    ...(player.born ? { birthDate: String(player.born) } : {}),
+    ...(player.fide_id ? { sameAs: [`https://ratings.fide.com/profile/${player.fide_id}`] } : {}),
+    description: `Chess player${player.fed ? ` (${player.fed})` : ''} with ${player.games.toLocaleString('en')} games in the database${player.max_elo ? `, peak rating ${player.max_elo}` : ''}.`,
+  },
+];
 ---
 
 <Layout
   og={{ fen: START_FEN, kicker: [player.title, player.fed].filter(Boolean).join(' · ') || 'Player', title: player.name, subtitle: `${player.games.toLocaleString('en')} games${player.max_elo ? ` · peak rating ${player.max_elo}` : ''}${player.last_date ? ` · last game ${player.last_date.slice(0, 4)}` : ''}`, footer: 'Every game to replay' }}
   title={`${player.name} chess games${page > 1 ? ` (page ${page})` : ''}`}
   description={`${player.games.toLocaleString('en')} over-the-board games of ${name}${player.fed ? ` (${player.fed})` : ''}${player.max_elo ? `, peak rating ${player.max_elo}` : ''}: results, opponents and every game to replay.`}
+  jsonLd={jsonLd}
 >
   <nav class="crumbs"><a href="/games/">Games</a> › <a href="/players/">Players</a></nav>
   <h1>{name}</h1>

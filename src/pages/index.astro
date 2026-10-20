@@ -6,9 +6,16 @@ import { TOOLS } from '../lib/tools';
 const home = await getEntry('home', 'home');
 if (!home) throw new Error('Missing homepage content: src/content/home.md');
 const { Content } = await render(home);
+const site = (Astro.site ?? new URL('https://chessmoments.com')).href;
+const jsonLd = {
+  '@type': 'WebSite',
+  name: 'chessmoments',
+  url: site,
+  potentialAction: { '@type': 'SearchAction', target: { '@type': 'EntryPoint', urlTemplate: `${site}players/?q={search_term_string}` }, 'query-input': 'required name=search_term_string' },
+};
 ---
 
-<Layout title={home.data.title} description={home.data.description}>
+<Layout title={home.data.title} description={home.data.description} jsonLd={jsonLd}>
   <h1>{home.data.heading}</h1>
   <Content />
 

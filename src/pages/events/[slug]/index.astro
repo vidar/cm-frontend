@@ -86,16 +86,35 @@ const pct = (x: number) => Math.round((x / Math.max(1, stats.games)) * 100);
 const count = a.teams ? `${teamFinal.length} teams` : `${a.players.size} players`;
 const formatLabel = a.format === 'round-robin' && a.cycles === 2 ? 'Double round robin' : FORMAT_LABEL[a.format];
 const what = a.format === 'round-robin' ? 'crosstable' : a.format === 'knockout' ? 'bracket' : a.format === 'games' ? 'games' : 'standings';
-const jsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'SportsEvent',
-  name: event.name,
-  sport: 'Chess',
-  startDate: event.start_date,
-  endDate: event.end_date,
-  ...(event.site ? { location: { '@type': 'Place', name: event.site } } : {}),
-  url: new URL(base, Astro.site ?? 'https://chessmoments.com').href,
-};
+const abs = (p: string) => new URL(p, Astro.site ?? 'https://chessmoments.com').href;
+// Structured data: the event with its leading competitors (players, or teams in team events).
+const competitor = individual
+  ? final.slice(0, 20).map((l) => ({ '@type': 'Person', name: l.player.name, url: abs(`/players/${l.player.slug}/`) }))
+  : a.teams
+    ? teamFinal.slice(0, 20).map((l) => ({ '@type': 'SportsTeam', name: l.team }))
+    : podium.filter((p) => p.href?.startsWith('/players/')).map((p) => ({ '@type': 'Person', name: p.who, url: abs(p.href!) }));
+const jsonLd = [
+  {
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Games', item: abs('/games/') },
+      { '@type': 'ListItem', position: 2, name: 'Events', item: abs('/events/') },
+      { '@type': 'ListItem', position: 3, name: event.name },
+    ],
+  },
+  {
+    '@type': 'SportsEvent',
+    '@id': abs(base),
+    name: event.name,
+    sport: 'Chess',
+    ...(event.start_date ? { startDate: event.start_date } : {}),
+    ...(event.end_date ? { endDate: event.end_date } : {}),
+    ...(event.site ? { location: { '@type': 'Place', name: event.site } } : {}),
+    url: abs(base),
+    ...(competitor.length ? { competitor } : {}),
+    ...(R.length > 1 ? { subEvent: R.map((n) => ({ '@type': 'SportsEvent', name: `${event.name}: round ${n}`, url: abs(`${base}round-${n}/`) })) } : {}),
+  },
+];
 ---
 
 <Layout
@@ -103,8 +122,8 @@ const jsonLd = {
   title={`${event.name}${event.site ? `, ${event.site}` : ''}: ${what}, results and games`}
   description={`${event.name}${event.site ? ` (${event.site})` : ''}, ${dates}: ${formatLabel.toLowerCase()}, ${count}${R.length ? `, ${R.length} rounds` : ''}. ${what[0].toUpperCase()}${what.slice(1)}, round-by-round results and all ${event.games.toLocaleString('en')} games to replay.`}
   wide
+  jsonLd={jsonLd}
 >
-  <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
   <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a></nav>
   <h1>{event.name}</h1>
   <p class="ev-facts">

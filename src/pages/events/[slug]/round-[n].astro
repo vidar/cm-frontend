@@ -54,11 +54,33 @@ const boards = await finalPositions(featured(a, n));
 const matches = a.teams?.matches.filter((m) => m.round === n) ?? [];
 const title = `${event.name}, ${roundName.toLowerCase()}: results${individual || a.teams ? ' and standings' : ''}`;
 const winnerOf = (r: string, w: string, b: string) => (r === '1-0' ? w : r === '0-1' ? b : null);
+const abs = (p: string) => new URL(p, Astro.site ?? 'https://chessmoments.com').href;
+const jsonLd = [
+  {
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Games', item: abs('/games/') },
+      { '@type': 'ListItem', position: 2, name: 'Events', item: abs('/events/') },
+      { '@type': 'ListItem', position: 3, name: event.name, item: abs(base) },
+      { '@type': 'ListItem', position: 4, name: roundName },
+    ],
+  },
+  {
+    '@type': 'SportsEvent',
+    '@id': abs(`${base}round-${n}/`),
+    name: `${event.name}: ${roundName}`,
+    sport: 'Chess',
+    ...(round.first ? { startDate: round.first } : {}),
+    ...(round.last ? { endDate: round.last } : {}),
+    url: abs(`${base}round-${n}/`),
+    superEvent: { '@type': 'SportsEvent', '@id': abs(base), name: event.name, url: abs(base) },
+  },
+];
 ---
 
 <Layout
   og={{ fen: boards[0]?.fen ?? START_FEN, lastMove: boards[0]?.last, kicker: `${event.name} · ${roundName}`, title: story[story.length - 1] ?? `${event.name}: ${roundName}`, subtitle: story.length > 1 ? story[0] : dateRange(round.first, round.last), footer: dateRange(round.first, round.last) }}
-  title={title} description={`${event.name} ${roundName.toLowerCase()} (${dateRange(round.first, round.last)}): ${story.join(' ')}`} wide>
+  title={title} description={`${event.name} ${roundName.toLowerCase()} (${dateRange(round.first, round.last)}): ${story.join(' ')}`} wide jsonLd={jsonLd}>
   <nav class="crumbs"><a href="/games/">Games</a> › <a href="/events/">Events</a> › <a href={base}>{event.name}</a></nav>
   <h1>{event.name}: {roundName}</h1>
   <p class="ev-facts">
