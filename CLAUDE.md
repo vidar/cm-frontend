@@ -45,7 +45,15 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   be imported by on-demand routes; run queries through its `query()` helper (one connection per
   query, `$n` parameters). Use indexed lookups (`indexes.pg.sql`) and the `meta` table for totals;
   `ORDER BY date DESC` needs `NULLS LAST` to match the indexes. Database pages are listed in
-  `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`.
+  `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`; every URL there carries `<lastmod>`
+  (games: the publication Monday of their TWIC issue, `twicIssueDate()`).
+  **Database budget:** compute is what costs money (Neon bills awake time), so a page makes ONE
+  statement where it can: `getGamePage()`, `getPlayerPage()` and `getEventWithGames()` return the
+  whole page's data with JSON aggregation (round pages add one for board moves). Keep new pages to one
+  or two statements and check with `scratchpad measure.sh`-style counting (log_statement) before adding
+  a query. Edge cache lifetimes (`src/middleware.ts` honours `s-maxage`): game pages a month, player
+  pages and sitemaps a week, TWIC events a month once three weeks past (`eventCacheControl()`), a day
+  while running, uploaded events 5 minutes; purge the `games-db` tag after an import.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
   at `ENGINE_URL` (https://engine.chessmoments.com, API in its `/llm.txt`; Worker secret
   `STOCKFISH_TOKEN`). `src/lib/analysis.ts` submits a game as a job and polls it; results are stored in
@@ -74,6 +82,16 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   event pages are cached for 5 minutes. Players match existing ones by FIDE ID only, else by exact name among
   uploaded players. The TWIC importer resumes below `UPLOAD_ID_BASE` and `--patch` keeps uploaded events;
   after a `--reset` reload use "Republish all approved" on the admin page. PGN parsing: `src/lib/pgn.ts`.
+- **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
+  and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,
+  player pages Person (FIDE profile as `sameAs`), event pages SportsEvent with competitors and rounds
+  as `subEvent`, round pages the round with its `superEvent`, the homepage WebSite + SearchAction.
+- **Tests:** `npm test` (vitest, `tests/*.test.ts`; `cloudflare:workers` is stubbed by
+  `tests/stubs/cloudflare-workers.ts`). Pure modules are tested with hand-computed fixtures;
+  `*-db.test.ts` run against a local Postgres copy of the database (`TEST_DATABASE_URL`, default
+  `postgres://postgres:postgres@localhost:5432/cm_games`) and skip themselves without one. GitHub
+  Actions runs the suite on every push (`.github/workflows/test.yml`). Keep logic that needs testing
+  out of `.astro` frontmatter and in `src/lib`.
 - **Design:** warm, understated amber. Colours are tokens in `src/layouts/Layout.astro` (`--bg`,
   `--surface`, `--surface-2`, `--fg`, `--muted`, `--border`, `--accent` for text/active states,
   `--accent-fill` for filled controls with white text, `--accent-soft` tints, `--win`/`--loss`),
