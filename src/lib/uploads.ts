@@ -62,7 +62,7 @@ const COLS = 'id, name, site, format, contact, status, event_id, created_at::tex
 export async function createUpload(input: { name: string; site: string; format: string; contact: string }) {
   const name = input.name.replace(/\s+/g, ' ').trim().slice(0, 120);
   if (name.length < 3) return { error: 'Give the tournament a name.' };
-  if (!(input.format in FORMATS)) return { error: 'Choose the tournament format.' };
+  if (!Object.hasOwn(FORMATS, input.format)) return { error: 'Choose the tournament format.' }; // not 'in': that sees Object.prototype
   const [{ n }] = await query<{ n: string }>(`SELECT count(*) AS n FROM uploads WHERE status = 'pending'`);
   if (Number(n) >= LIMITS.pending) return { error: 'Too many tournaments are waiting for approval right now. Please try again in a few days.' };
   const token = newToken();
