@@ -210,12 +210,15 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 SQL
 
 say "5. schema updates and grants"
+migrated=0
 if [ "$(psql_su -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('games', 'uploads', 'game_analysis')")" = 3 ]; then
   # As cm_owner (root's peer map), which owns everything; root reads the files (the kit may be in a 0750 home).
+  # Without the "already exists, skipping" notices of a rerun.
+  migrated=1
   for f in analysis annotation uploads; do
-    psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/$f.pg.sql"
+    PGOPTIONS='-c client_min_messages=warning' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/$f.pg.sql"
   done
-  psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/db/grants.sql"
+  PGOPTIONS='-c client_min_messages=warning' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/db/grants.sql"
   echo "applied scripts/analysis.pg.sql, annotation.pg.sql, uploads.pg.sql and scripts/db/grants.sql"
 else
   echo "no tables yet: migrate-from-neon.sh applies them after the restore"
@@ -242,6 +245,8 @@ say "done"
 cat <<EOF
 PostgreSQL $PGVER listens on: $listen (port $PORT).
 Passwords (root only): $ETC/cm_owner.password, $ETC/cm_web.password. Show one with: sudo cat $ETC/cm_web.password
+EOF
+[ "$migrated" = 1 ] || cat <<EOF
 Next (README.md step 2): put the Neon connection string in $ETC/neon.env, then run
   sudo bash $HERE/migrate-from-neon.sh
 EOF
