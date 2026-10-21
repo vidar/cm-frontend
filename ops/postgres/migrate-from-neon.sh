@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy the chessmoments.com database from Neon into the local PostgreSQL (after install.sh), as root:
 #
-#   sudo bash ops/postgres/migrate-from-neon.sh            # dump, restore, grants, vacuum, verify
+#   sudo bash ops/postgres/migrate-from-neon.sh            # dump, restore, vacuum, verify, schema updates, grants
 #   sudo bash ops/postgres/migrate-from-neon.sh --verify   # only compare Neon with the local copy again
 #   sudo bash ops/postgres/migrate-from-neon.sh --reuse /var/lib/postgresql/migration/neon-....dump
 #                                                          # restore an earlier dump (after a failed restore)
@@ -10,8 +10,9 @@
 #
 # It reads the Neon owner connection string from /etc/cm-db/neon.env (root only; see README.md), turns
 # it into a libpq service file so the password never appears on a command line, dumps the public
-# schema with pg_dump (custom format, no owners or grants), restores it as cm_owner, applies
-# scripts/db/grants.sql, VACUUM ANALYZEs, and compares every table with Neon (compare.sh). Neon is only
+# schema with pg_dump (custom format, no owners or grants), restores it as cm_owner, VACUUM ANALYZEs, compares
+# every table with Neon (compare.sh), then applies the site's schema scripts (scripts/*.pg.sql) and
+# scripts/db/grants.sql, and takes the first backups. Neon is only
 # read. The dump is kept in /var/lib/postgresql/migration/ as the final copy of the Neon database.
 set -euo pipefail
 
@@ -33,7 +34,7 @@ say() { printf '\n== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
 [ -s "$ETC/neon.env" ] || die "put the Neon connection string in $ETC/neon.env first (README.md, step 2)"
-pg_isready -q || die "the local PostgreSQL is not running (install.sh first)"
+runuser -u postgres -- pg_isready -q || die "the local PostgreSQL is not running (install.sh first)"
 
 say "Neon connection"
 # A libpq service file (root only) from the URL; pg_dump needs the direct endpoint, not the -pooler one.
@@ -108,13 +109,21 @@ if [ "$VERIFY_ONLY" = 0 ]; then
   time env PGOPTIONS='-c maintenance_work_mem=512MB' \
     pg_restore -d "$LOCAL" --no-owner --no-privileges --exit-on-error -j 2 -L "$list" "$dump"
 
-  say "grants, VACUUM ANALYZE"
-  psql -X -q -v ON_ERROR_STOP=1 -d "$LOCAL" -f "$KIT/scripts/db/grants.sql"
+  say "VACUUM ANALYZE"
   time runuser -u postgres -- vacuumdb -q -j 2 --analyze -d "$DB"
 fi
 
 say "compare Neon with the local copy"
 bash "$HERE/compare.sh" "$NEON" "$LOCAL"
+
+if [ "$VERIFY_ONLY" = 0 ]; then
+  # After the comparison (which wants Neon's schema exactly): the site's own schema scripts (what they added
+  # since Neon) and the site role's rights.
+  say "schema updates and grants"
+  for f in analysis.pg.sql annotation.pg.sql uploads.pg.sql db/grants.sql; do
+    psql -X -q -v ON_ERROR_STOP=1 -d "$LOCAL" -f "$KIT/scripts/$f"
+  done
+fi
 
 if [ "$VERIFY_ONLY" = 0 ] && [ -x /usr/local/sbin/cm-db-backup ]; then
   say "first backups"   # the copy is safe from now on, not only after tonight's timer

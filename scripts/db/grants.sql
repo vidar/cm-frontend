@@ -13,8 +13,9 @@ GRANT INSERT, UPDATE, DELETE ON game_analysis, game_annotation TO cm_web;
 
 -- Tournament uploads (src/lib/uploads.ts): the organisers' tables, and publishing into the site's tables
 -- (games are only inserted and deleted; players and events are also updated).
-GRANT INSERT, UPDATE, DELETE ON uploads, upload_rounds TO cm_web;
+GRANT INSERT, UPDATE, DELETE ON uploads, upload_rounds, upload_published TO cm_web;
 GRANT USAGE ON SEQUENCE uploads_id_seq TO cm_web;
+GRANT SELECT, UPDATE ON SEQUENCE upload_ids_seq TO cm_web;   -- read and setval (nextId)
 GRANT INSERT, DELETE ON games TO cm_web;
 GRANT INSERT, UPDATE, DELETE ON players, events TO cm_web;
 

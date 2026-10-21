@@ -97,9 +97,9 @@ const viewRounds = view ? await getRounds(view.id) : [];
         </tbody>
       </table>
       {list.length === 0 && <p class="muted">No uploads yet.</p>}
-      <form method="post" class="republish" data-confirm="Publish all approved tournaments again? (Only needed after a full TWIC reload.)">
+      <form method="post" class="republish" data-confirm="Make the site match the approved tournaments? (After a full TWIC reload or a restore of the database.)">
         <button name="action" value="republish">Republish all approved</button>
-        <span class="muted">Only needed after a full TWIC <code>--reset</code> reload.</span>
+        <span class="muted">After a TWIC <code>--reset</code> reload or a restore: publishes again what changed and takes down what is no longer approved.</span>
       </form>
       {view && (
         <section class="view">

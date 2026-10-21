@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { getAnalysis } from '../../../lib/analysis';
 import { annotationEnabled, createAnnotation, getAnnotation, type AnnotationState } from '../../../lib/annotate';
 import { idParam, limiterKey, sameSite } from '../../../lib/client';
+import { isUploaded } from '../../../lib/uploads';
 
 // AI annotation of an analysed game: GET the state, POST to write it (takes 10-30 s; the response
 // carries the result).
@@ -16,7 +17,9 @@ export const GET: APIRoute = async ({ params, url }) => {
   if (!id) return json({ error: 'bad game id' }, 400);
   const state = await getAnnotation(id);
   // Finished notes never change; "no notes yet" is cached a few minutes except for a client's ?poll=1.
-  const cache = state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
+  // (Uploaded games, like their pages, only 5 minutes: an organiser can replace them.)
+  const done = isUploaded(id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=86400, s-maxage=2592000';
+  const cache = state.status === 'done' ? done : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
   return json(state, 200, cache);
 };
 

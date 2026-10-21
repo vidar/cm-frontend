@@ -31,17 +31,23 @@ sys.exit(0 if ok else 1)
 PY
 }
 
-# 1. cloudflared from Cloudflare's apt repository ("any" suite: all Debian-based releases), kept up to
-#    date by unattended-upgrades (Cloudflare supports releases from the last year). The unit runs
-#    /usr/bin/cloudflared from that package; another copy elsewhere on PATH doesn't count.
-if ! dpkg-query -W -f='${Status}' cloudflared 2>/dev/null | grep -q 'install ok installed'; then
-  # The repository may be set up already (an earlier cloudflared): a second entry with another key breaks apt.
-  if ! grep -rqs 'pkg.cloudflare.com/cloudflared' /etc/apt/sources.list /etc/apt/sources.list.d/; then
-    install -d -m 755 /usr/share/keyrings
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
-    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
-  fi
+# 1. cloudflared from Cloudflare's apt repository, kept up to date by unattended-upgrades (Cloudflare supports
+#    releases from the last year). The unit runs /usr/bin/cloudflared from that package; another copy elsewhere
+#    on PATH doesn't count. What counts is what apt actually uses (apt-cache policy), not a line in a file: an
+#    entry that is commented out or disabled, or a cloudflared installed with dpkg -i, would never be updated.
+cf_repo() { apt-cache policy cloudflared 2>/dev/null | grep -q 'pkg\.cloudflare\.com/cloudflared'; }
+apt-get update -q
+if ! cf_repo; then
+  # (Only when apt has no active entry for it: a second one with another key would break apt.)
+  install -d -m 755 /usr/share/keyrings
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
   apt-get update -q
+  cf_repo || die "apt still doesn't see Cloudflare's repository (apt-cache policy cloudflared)"
+fi
+if dpkg-query -W -f='${Status}' cloudflared 2>/dev/null | grep -q 'install ok installed'; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q --only-upgrade cloudflared   # a dpkg -i copy -> the repository's
+else
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q cloudflared
 fi
 [ -x /usr/bin/cloudflared ] || die "/usr/bin/cloudflared is missing although the cloudflared package is installed"
@@ -77,7 +83,7 @@ SH
 chmod 755 /usr/local/sbin/cm-db-tunnel-refresh
 cat > /etc/apt/apt.conf.d/52cloudflared-unattended <<'APT'
 // Written by ops/postgres/tunnel.sh: unattended-upgrades updates cloudflared; restart the tunnel after it.
-Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,codename=any"; };
+Unattended-Upgrade::Origins-Pattern { "origin=cloudflared,site=pkg.cloudflare.com"; };
 DPkg::Post-Invoke { "/usr/local/sbin/cm-db-tunnel-refresh || true"; };
 APT
 

@@ -14,7 +14,8 @@ DIR=${BACKUP_DIR:-/var/backups/cm-db}
 HC_URL=${HC_URL:-}
 problems=()
 
-if ! pg_isready -q -U postgres -d postgres; then problems+=("postgres is not accepting connections")
+# (As cm_owner, which root may be over the socket: another user would leave a FATAL line in the log every time.)
+if ! pg_isready -q -U cm_owner -d cm_games; then problems+=("postgres is not accepting connections")
 # Log in the way Hyperdrive does: cm_web, over TCP to 127.0.0.1, with TLS (the password from the file, via the
 # environment, never on a command line).
 elif [ -s /etc/cm-db/cm_web.password ] \
@@ -58,16 +59,25 @@ if [ -n "$oom" ]; then
   [ "$oom" -le "$last_oom" ] || problems+=("the kernel killed $((oom - last_oom)) process(es) for memory: journalctl -k | grep -i oom")
 fi
 # The whole way the site goes (Worker, Hyperdrive, tunnel, Postgres), once the site reads this database.
+# While the site is in maintenance on purpose (MAINTENANCE "1"), /health/db says so: not an alarm.
 SITE_CHECK_URL=${SITE_CHECK_URL:-}
-if [ -n "$SITE_CHECK_URL" ] && ! curl -fsS -m 30 -o /dev/null "$SITE_CHECK_URL" 2>/dev/null; then
-  problems+=("the site can't reach the database ($SITE_CHECK_URL)")
+if [ -n "$SITE_CHECK_URL" ]; then
+  case $(curl -sS -m 30 "$SITE_CHECK_URL" 2>/dev/null || true) in
+    *'"ok":true'*) ;;
+    *'"maintenance":true'*) echo "note: the site's database routes are closed for maintenance" ;;
+    *) problems+=("the site can't reach the database ($SITE_CHECK_URL)") ;;
+  esac
 fi
 # Time stalled on memory over 5 minutes (all tasks at once): above 10 % the box is short of RAM.
 psi=$(awk '$1 == "full" { sub("avg300=", "", $4); print int($4) }' /proc/pressure/memory 2>/dev/null || echo 0)
 [ "${psi:-0}" -lt 10 ] || problems+=("memory pressure ${psi}% (5 min)")
 
 # The ping URL is a secret of sorts: to curl through its config on stdin, not on the command line.
-ping() { printf 'url = "%s"\n' "$1" | curl -fsS -m 10 --retry 3 -o /dev/null -K - "${@:2}"; }
+ping() {
+  local url=${1//\\/\\\\}   # backslashes and quotes escaped for curl's config syntax
+  url=${url//\"/\\\"}
+  printf 'url = "%s"\n' "$url" | curl -fsS -m 10 --retry 3 -o /dev/null -K - "${@:2}"
+}
 if [ ${#problems[@]} -eq 0 ]; then
   [ -z "$HC_URL" ] || ping "$HC_URL"
   echo "ok"

@@ -217,8 +217,10 @@ the routes were closed), so the first hours bring crawler traffic to the box: `t
 **Rollback** (while Neon still exists): the old id `ff39804dfb964a2ca13a9e1d7ec27cbe` back in both `hyperdrive`
 blocks and `placement` back to `aws:eu-central-1`, then deploy. Whatever was written on hetz-stock in between
 (analyses, AI notes, uploads) would be missing on Neon, so approve no uploads until step 11. To move forward
-again after a rollback, migrate afresh (step 3's "start over"); don't merge hetz-stock's rows into Neon or back
-with `cm-db-restore --table`, since ids given out on each side can clash.
+again after a rollback: maintenance first (`MAINTENANCE` "1" in both `vars` blocks, deployed), so nothing writes to
+Neon; then `sudo -u postgres dropdb --force cm_games && sudo bash ~/cm-db-kit/ops/postgres/install.sh`, step 3, and
+steps 8–9 again. Don't merge hetz-stock's rows into Neon or back with `cm-db-restore --table`: ids given out on
+each side can clash.
 
 ### 10. Backups off the box, and an alarm
 
@@ -245,15 +247,26 @@ e.g. a password manager: a rebuilt box needs it):
   after a new dump is up.
 
 Alarm: a free check at https://healthchecks.io (period 15 min, grace 1 h) and its ping URL as `HC_URL=`, and
-`SITE_CHECK_URL=https://chessmoments.com/health/db` (the site's own way to the database), both in `backup.env`.
+`SITE_CHECK_URL=https://chessmoments.com/health/db` (the site's own way to the database; while the site is in
+maintenance on purpose it only notes that), both in `backup.env`.
 `sudo cm-db-check` shows at once what it would report. You get an e-mail when Postgres, the site's way to it, the
 backups and their off-site copy, the disk, memory, the drill or the tunnel have a problem.
 
 ### 11. Retire Neon (after a week or two)
 
 When the site has run on hetz-stock for a week, there are good nightly dumps, `sudo cm-db-restore --test`
-passed, and the off-box copy is proven: copy last night's full dump back from R2 or the Mac mini to the server
-(as in "Losing the box" below) and run `sudo cm-db-restore --test <that file>`. Then delete the Neon project (only
+passed, and the off-box copy is proven. Fetch last night's full dump back into a new, empty directory (never into
+`/var/backups/cm-db`, where a file of the same name already is: rclone would skip it and the test would read the
+local copy) and test that:
+
+```sh
+sudo install -d -m 700 /var/tmp/cm-offsite
+sudo rclone -v --config /etc/cm-db/rclone.conf copy r2:cm-db-backups/daily/<last night's file> /var/tmp/cm-offsite/   # must say "Copied (new)"
+sudo cm-db-restore --test /var/tmp/cm-offsite/<that file>; sudo rm -r /var/tmp/cm-offsite
+```
+
+(From the Mac mini instead: `scp` the file to your home directory on the server and test it there.) Then delete
+the Neon project (only
 this one), then **Billing → change plan → Free** (deleting projects alone
 doesn't stop the monthly plan), delete the old Hyperdrive config `cm-games` and the Neon credentials on the
 server: `sudo rm /etc/cm-db/neon.env /etc/cm-db/pg_service.conf`. Until then, keep Neon's compute set to scale to
@@ -267,44 +280,60 @@ zero, so the waiting week costs nothing.
   (needs `psql`, which the server has). Then purge the edge cache tag `games-db`.
 - **Restore** (`cm-db-restore`, with sudo; whatever comes out of a dump runs as `cm_owner`, never as a superuser):
   - `sudo cm-db-restore [file.dump]` restores a full backup (the newest by default) into a separate
-    `cm_games_restore`, shows row counts next to the live ones and prints the steps that make it live: pause the
-    backups, swap, the site's own tables from the newest hourly backup (it names the file), backups on again,
-    reopen and "Republish all approved".
+    `cm_games_restore`, brings its schema up to date, shows row counts next to the live ones and prints the steps
+    that make it live: maintenance, a fresh hourly backup of the live database while it still answers, pause the
+    backups, swap, the site's own tables from that backup, a TWIC re-import if issues came after the full backup,
+    backups on again, reopen and "Republish all approved".
   - `sudo cm-db-restore --table game_annotation [file.dump]` puts back rows of one of the site's own tables
     (`game_analysis`, `game_annotation`, `uploads`, `upload_rounds`) from the newest hourly backup: it only adds
     rows the live table lacks and deletes nothing. (Analyses and notes from before a TWIC `--reset` belong to other
     game ids; the script skips rows of games that no longer exist, not ones that were renumbered.)
     `sudo ls -t /var/backups/cm-db/small/ | head` lists the hourly backups.
-  - `sudo cm-db-restore --site-tables <file.dump>` replaces those four tables with an hourly backup's rows (in one
-    transaction), and drops analyses and notes of games the database doesn't have. Name the file: after a restore
-    the newest hourly backup may already be one of the restored, older data. Then, with the database routes open,
-    "Republish all approved" on `/upload/admin/`: it publishes again only the uploaded tournaments that changed
-    since the full backup (the others keep their game ids, analyses and notes) and takes down the ones rejected
-    since.
+  - `sudo cm-db-restore --site-tables <file.dump>` replaces those four tables (and the counter of uploaded ids)
+    with an hourly backup's, in one transaction, and drops analyses and notes of uploaded games the database
+    doesn't have. Name the file: after a restore the newest hourly backup may already be one of the restored, older
+    data. Then, with the database routes open, "Republish all approved" on `/upload/admin/`: it publishes again only
+    the rounds of uploaded tournaments whose files changed since the full backup (everything else keeps its game
+    ids, analyses and notes) and takes down tournaments rejected since.
   - `sudo cm-db-restore --test [file.dump]` is the drill the monthly timer runs (`journalctl -u cm-db-restore-test`);
     it fails when the restored copy is much smaller than the live database. After a failed drill is fixed,
     `sudo systemctl start cm-db-restore-test` runs it again and clears the alarm.
 - **Updates**: unattended-upgrades restarts Postgres for security releases (a few seconds; Hyperdrive and the
   edge cache cover it) and updates cloudflared, which then restarts (about 5 seconds). A new major version (19 or
-  later) is a deliberate `pg_upgradecluster`, not automatic; afterwards run `install.sh` with `PGMAJOR=19` in front
-  (after `sudo`), and change `postgresql@18-main` in this README.
+  later) is deliberate, in maintenance: `sudo pg_upgradecluster --no-start 18 main`, then
+  `sudo PGMAJOR=19 bash ~/cm-db-kit/ops/postgres/install.sh` (it starts 19 with the settings and the same
+  certificate, which lives outside the cluster), `sudo -u postgres psql -c 'SHOW ssl_cert_file'` (must name
+  `cm-origin.crt`), the site checks, then `sudo pg_dropcluster 18 main`; and `postgresql@18-main` in this README
+  becomes `19-main`.
+- **Kit updates** (a new version of these scripts, or of the site's tables, e.g. after a merge that changes
+  `scripts/*.pg.sql` or `scripts/db/grants.sql`): copy the kit again (step 0's command) and rerun
+  `sudo bash ~/cm-db-kit/ops/postgres/install.sh`. It applies the schema scripts (only what is new) and the grants,
+  and installs the backup, check and restore commands. Do it before the site code that needs the change goes live.
 - **Losing the box** (the site in maintenance meanwhile: `MAINTENANCE` "1"):
-  1. Cut the old box off, in case it comes back: dashboard → Networking → Tunnels → `cm-db` → **Rotate token**
-     (connectors with the old token can't connect again); SSL/TLS → Origin Server → **revoke** the old
-     certificate; R2 → API tokens → delete the old token (if R2 is used).
-  2. On the new server: steps 0 and 1, then pause the backups so none of them saves the empty database as the
-     newest: `sudo systemctl stop cm-db-backup.timer cm-db-backup-small.timer`.
+  1. Cut the old box off, in case it still runs or comes back: power it off or delete it in the Hetzner console
+     if you can. Tailscale admin console → Machines → `hetz-stock` → **Remove** (frees the name and its access to
+     the Mac mini). SSL/TLS → Origin Server → **revoke** the old certificate; R2 → API tokens → delete the old
+     token (if R2 is used). The tunnel: create a new one (Tunnels → Create, `cm-db-2`) for step 5 and, once the new
+     box is connected, delete `cm-db`; a token rotation alone would leave connections the old box still holds.
+  2. The new server: the login user with sudo; join the tailnet as `hetz-stock` (`sudo tailscale up --hostname
+     hetz-stock`; give it the old address 100.77.91.56 in the admin console if you use the Tailscale access). On
+     the Mac mini, `ssh-keygen -R hetz-stock` (and the old IP), then `ssh hetz-stock` once to accept the new host
+     key (step 0's command can't ask). Then steps 0 and 1, and pause the backups so none of them saves the empty
+     database as the newest: `sudo systemctl stop cm-db-backup.timer cm-db-backup-small.timer`.
   3. Get the newest full and hourly dumps back. From R2: a new R2 token, `sudo apt install rclone`,
      `/etc/cm-db/rclone.conf` as in step 10, then
      `sudo rclone --config /etc/cm-db/rclone.conf copy r2:cm-db-backups/daily/<file> /var/backups/cm-db/daily/`
      (and `small/<file>` into `/var/backups/cm-db/small/`). From the Mac mini: `scp` both files to the server's
      home directory; the restore reads them from there.
-  4. `sudo cm-db-restore <full dump>`, then the swap it prints, then `sudo cm-db-restore --site-tables <hourly dump>`,
-     then `sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer`.
-  5. Steps 4–7 with new secrets: a new certificate (`tls.sh`), the rotated tunnel token
-     (`sudo bash ~/cm-db-kit/ops/postgres/tunnel.sh --new-token`), and the new `cm_web` password in the Hyperdrive
-     config (dashboard → Hyperdrive → `cm-games-hetz` → Settings). Then step 10 again (`backup.env`: off-site copy,
-     `HC_URL`, `SITE_CHECK_URL`; the Mac mini accepts the new server's ssh host key).
+  4. `sudo cm-db-restore <full dump>`, then the swap it prints, then `sudo cm-db-restore --site-tables <hourly dump>`
+     (and a TWIC re-import if issues came after the full dump), then
+     `sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer`.
+  5. Steps 4–7 with new secrets: a new certificate (`tls.sh`), the new tunnel `cm-db-2`
+     (`sudo bash ~/cm-db-kit/ops/postgres/tunnel.sh --new-token`, then the VPC service pointed at it: dashboard VPC →
+     Services → `cm-db-postgres` → edit, or the full `wrangler vpc service update` of step 6 with its tunnel id), and
+     the new `cm_web` password in the Hyperdrive config (dashboard → Hyperdrive → `cm-games-hetz` → Settings). The
+     dashboard must list only the new box's connector. Then step 10 again (`backup.env`: off-site copy, `HC_URL`,
+     `SITE_CHECK_URL`).
   6. `MAINTENANCE` "0", "Republish all approved", purge the `games-db` cache tag.
   Only without any dumps: TWIC rebuilt from source (`scripts/twic/README.md`) into the empty database, with the
   site's tables created from `scripts/analysis.pg.sql`, `annotation.pg.sql` and `uploads.pg.sql`.
@@ -330,10 +359,17 @@ zero, so the waiting week costs nothing.
 - **cm-db-check fails**: `sudo cm-db-check` (or `journalctl -u cm-db-check -n 20`) says what (Postgres, the site's
   way to it, backup age, disk, tunnel, memory, drill).
 - **If Workers VPC doesn't work at all** (it is in open beta): the same tunnel can carry Hyperdrive's older route,
-  a published hostname plus a Cloudflare Access service token. Dashboard → Workers & Pages → VPC → Tunnels → `cm-db`
-  → **Published application routes** → `pg.chessmoments.com`, service TCP `localhost:5432` (this also creates the
-  proxied DNS record); then Hyperdrive → Create → Private database → tunnel `cm-db`, hostname `pg.chessmoments.com`
-  → service token and Access application "Create new (automatic)". On this route Hyperdrive checks the certificate
-  itself, and the Origin CA isn't publicly trusted: upload Cloudflare's Origin CA root first
-  (`npx wrangler cert upload certificate-authority --ca-cert origin_ca_rsa_root.pem --name cf-origin-ca`, the file from
-  the Origin CA docs) and create the config with `--ca-certificate-id <its id> --sslmode verify-full`.
+  a published hostname behind a Cloudflare Access service token. Here Hyperdrive checks the certificate itself and
+  the Origin CA isn't publicly trusted, so the config is made with wrangler, which can name a CA (the dashboard
+  can't):
+  1. Zero Trust → Access controls → Service credentials → **Service tokens** → create `cm-db-hyperdrive` (copy
+     its Client ID and Secret); Access → Applications → add a self-hosted application for `pg.chessmoments.com`
+     with a Service Auth policy that includes that token.
+  2. Tunnels → `cm-db` → **Published application routes** → `pg.chessmoments.com`, service TCP `localhost:5432`
+     (this also creates the proxied DNS record).
+  3. On your own machine with wrangler logged in, in a terminal whose history you clear afterwards (the cm_web
+     password and the token secret are on these command lines): `npx wrangler cert upload certificate-authority
+     --ca-cert origin_ca_rsa_root.pem --name cf-origin-ca` (the root file from Cloudflare's Origin CA docs), then
+     `npx wrangler hyperdrive create cm-games-hetz-access --host pg.chessmoments.com --database cm_games --user cm_web
+     --password <…> --access-client-id <…> --access-client-secret <…> --ca-certificate-id <its id> --sslmode verify-full`.
+     Its id goes into step 8.

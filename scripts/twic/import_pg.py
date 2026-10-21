@@ -271,11 +271,12 @@ def main():
             # The site's own tables come from Neon or a backup, never from here: without them this is the
             # wrong database (or a new one), and the grants would fail after hours of loading.
             have = {r['tablename'] for r in db("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")['rows']}
-            missing = sorted({'game_analysis', 'game_annotation', 'uploads', 'upload_rounds'} - have)
+            missing = sorted({'game_analysis', 'game_annotation', 'uploads', 'upload_rounds', 'upload_published'} - have)
             if missing:
-                sys.exit(f'this database has no {", ".join(missing)}: restore them from a backup (ops/postgres/README.md), '
-                         'or for a new, empty database create them first with psql -f scripts/analysis.pg.sql '
-                         '-f scripts/annotation.pg.sql -f scripts/uploads.pg.sql')
+                sys.exit(f'this database has no {", ".join(missing)}: on the server, rerun ops/postgres/install.sh (it applies '
+                         'the schema scripts); restore lost tables from a backup (ops/postgres/README.md); or, for a new, '
+                         'empty database, create them first with psql -f scripts/analysis.pg.sql -f scripts/annotation.pg.sql '
+                         '-f scripts/uploads.pg.sql')
         elif 'readonly' in roles:
             readonly = True  # Neon's site role (over HTTPS or psql)
         else:

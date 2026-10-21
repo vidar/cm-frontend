@@ -18,7 +18,8 @@
 #      priority over the engine and renders, no swap);
 #   4. creates the roles cm_owner (owns the database; imports) and cm_web (Hyperdrive), with random
 #      passwords kept in /etc/cm-db/<role>.password (root only), and the database cm_games with pg_trgm;
-#   5. applies scripts/db/grants.sql once the tables exist (after migrate-from-neon.sh);
+#   5. once the tables exist (after migrate-from-neon.sh): the site's own schema scripts (scripts/*.pg.sql,
+#      idempotent: a rerun applies their additions) and scripts/db/grants.sql;
 #   6. installs the backup, health-check and monthly restore-drill timers (cm-db-backup, cm-db-check,
 #      cm-db-restore-test) and the restore command cm-db-restore.
 # Postgres listens on localhost (and the Tailscale IP when given): there is no firewall on this box,
@@ -32,7 +33,7 @@ CLUSTER=${CLUSTER:-main}
 PGMAJOR=${PGMAJOR:-18}                               # Ubuntu 26.04's PostgreSQL
 ETC=/etc/cm-db
 BACKUP_DIR=${BACKUP_DIR:-/var/backups/cm-db}
-LIB=/usr/local/lib/cm-db                             # what the timers need from the kit (grants.sql)
+LIB=/usr/local/lib/cm-db                             # what cm-db-restore needs from the kit (schema, grants)
 # The Tailscale settings of an earlier run, unless given again.
 saved_ip='' saved_clients=''
 if [ -f "$ETC/install.env" ]; then
@@ -46,7 +47,9 @@ TAILNET_CLIENTS=${TAILNET_CLIENTS:-${saved_clients:-100.120.87.91}}   # tailnet 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
-[ -f "$KIT/scripts/db/grants.sql" ] || die "scripts/db/grants.sql not found next to the kit ($KIT)"
+for f in db/grants.sql analysis.pg.sql annotation.pg.sql uploads.pg.sql; do
+  [ -f "$KIT/scripts/$f" ] || die "scripts/$f not found next to the kit ($KIT)"
+done
 if [ -n "$TAILSCALE_IP" ]; then
   [[ $TAILSCALE_IP =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "TAILSCALE_IP must be a 100.64.0.0/10 address"
   for c in $TAILNET_CLIENTS; do
@@ -76,12 +79,15 @@ fi
 PORT=$(pg_conftool -s "$PGVER" "$CLUSTER" show port)
 echo "PostgreSQL $PGVER, cluster $CLUSTER, port $PORT"
 # The other scripts, the timers and the VPC service (README step 6) expect 5432 (PGPORT only for tests).
-[ "$PORT" = 5432 ] || [ -n "${PGPORT:-}" ] || die "PostgreSQL $PGVER/$CLUSTER listens on port $PORT, because another cluster has 5432 (pg_lsclusters).
-  Move that one to another port (pg_conftool <its version> <its name> set port 5433, then restart it) or remove it
-  (pg_dropcluster --stop <its version> <its name>), then: pg_conftool $PGVER $CLUSTER set port 5432, and run install.sh again"
+[ "$PORT" = 5432 ] || [ -n "${PGPORT:-}" ] || die "PostgreSQL $PGVER/$CLUSTER got port $PORT, because another cluster has 5432 (pg_lsclusters).
+  Remove that one (pg_dropcluster --stop <its version> <its name>), or swap the ports, $PGVER/$CLUSTER stopped first:
+    systemctl stop postgresql@$PGVER-$CLUSTER; pg_conftool $PGVER $CLUSTER set port 5432
+    pg_conftool <its version> <its name> set port $PORT; systemctl restart postgresql@<its version>-<its name>
+  (and point what uses it at port $PORT). Then run install.sh again."
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" "$@"; }
 wait_ready() {
-  for _ in $(seq 1 30); do pg_isready -q -p "$PORT" && return 0; sleep 1; done
+  # (as postgres, which may log in: any other user would leave a FATAL line in the log)
+  for _ in $(seq 1 30); do runuser -u postgres -- pg_isready -q -p "$PORT" && return 0; sleep 1; done
   die "PostgreSQL did not come up: journalctl -u postgresql@$PGVER-$CLUSTER"
 }
 
@@ -93,6 +99,9 @@ listen=localhost
 printf "# written by ops/postgres/install.sh\nlisten_addresses = '%s'\n" "$listen" > "$CONF/conf.d/60-listen.conf"
 # The conf.d files are the only configuration: no ALTER SYSTEM overrides (PostgreSQL 17+).
 if [ "${PGVER%%.*}" -ge 17 ]; then printf "# written by ops/postgres/install.sh\nallow_alter_system = off\n" > "$CONF/conf.d/55-no-alter-system.conf"; fi
+# The Origin CA certificate (README step 4), once there is one: kept outside the cluster, so it survives
+# a new major version.
+PGVER=$PGVER CLUSTER=$CLUSTER bash "$HERE/tls.sh" --conf
 chown postgres:postgres "$CONF"/conf.d/*.conf
 for f in pg_hba.conf pg_ident.conf; do
   [ -f "$CONF/$f.orig" ] || cp -p "$CONF/$f" "$CONF/$f.orig"
@@ -200,13 +209,16 @@ SET ROLE cm_owner;
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 SQL
 
-say "5. grants"
+say "5. schema updates and grants"
 if [ "$(psql_su -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('games', 'uploads', 'game_analysis')")" = 3 ]; then
-  # On stdin: the postgres user can't read the kit in a home directory (0750).
-  psql_su -d "$DB" -c "SET ROLE cm_owner" -f - < "$KIT/scripts/db/grants.sql"
-  echo "applied scripts/db/grants.sql"
+  # As cm_owner (root's peer map), which owns everything; root reads the files (the kit may be in a 0750 home).
+  for f in analysis annotation uploads; do
+    psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/$f.pg.sql"
+  done
+  psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/db/grants.sql"
+  echo "applied scripts/analysis.pg.sql, annotation.pg.sql, uploads.pg.sql and scripts/db/grants.sql"
 else
-  echo "no tables yet: migrate-from-neon.sh applies the grants after the restore"
+  echo "no tables yet: migrate-from-neon.sh applies them after the restore"
 fi
 
 say "6. backups, health checks, restore drill"
@@ -215,6 +227,7 @@ install -m 755 "$HERE/backup.sh" /usr/local/sbin/cm-db-backup
 install -m 755 "$HERE/check.sh" /usr/local/sbin/cm-db-check
 install -m 755 "$HERE/restore.sh" /usr/local/sbin/cm-db-restore
 install -D -m 644 "$KIT/scripts/db/grants.sql" "$LIB/grants.sql"
+for f in analysis annotation uploads; do install -m 644 "$KIT/scripts/$f.pg.sql" "$LIB/$f.pg.sql"; done
 [ -f "$ETC/backup.env" ] || install -m 600 "$HERE/backup.env.example" "$ETC/backup.env"
 if systemd; then
   for u in cm-db-backup.service cm-db-backup.timer cm-db-backup-small.service cm-db-backup-small.timer \

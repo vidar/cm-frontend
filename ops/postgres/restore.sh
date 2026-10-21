@@ -22,14 +22,17 @@
 # carry anything that takes over the server.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-GRANTS=$(cd "$HERE/../.." && pwd)/scripts/db/grants.sql        # in the kit
-[ -f "$GRANTS" ] || GRANTS=/usr/local/lib/cm-db/grants.sql       # installed (install.sh)
+# The site's schema scripts and the site role's rights, applied to a restored database (an older backup may
+# predate some of the schema): from the kit, or as install.sh installed them.
+SQL=$(cd "$HERE/../.." && pwd)/scripts
+if [ -f "$SQL/db/grants.sql" ]; then GRANTS=$SQL/db/grants.sql; else SQL=/usr/local/lib/cm-db GRANTS=/usr/local/lib/cm-db/grants.sql; fi
+SCHEMA=("$SQL/analysis.pg.sql" "$SQL/annotation.pg.sql" "$SQL/uploads.pg.sql")
 DIR=${BACKUP_DIR:-/var/backups/cm-db}
 DB=cm_games
 TARGET=cm_games_restore
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
-[ -f "$GRANTS" ] || die "grants.sql not found (run install.sh, or this script from the kit)"
+for f in "$GRANTS" "${SCHEMA[@]}"; do [ -f "$f" ] || die "$f not found (run install.sh, or this script from the kit)"; done
 
 TEST=0
 TABLE=
@@ -92,17 +95,17 @@ $(ls -1t "$DIR"/small/*.dump 2>/dev/null | head -5 | sed 's/^/  /')"
   out=$({
     echo "TRUNCATE game_analysis, game_annotation, upload_rounds, uploads;"
     pg_restore --data-only -L "$order" -f - "$dump"
-    # (pg_restore's output empties search_path: qualified names from here on.) Analyses and notes of games
-    # this database doesn't have (published after the full backup) go: a game given that id later must not
-    # show them.
-    echo "DELETE FROM public.game_analysis a WHERE NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
-    echo "DELETE FROM public.game_annotation a WHERE NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
+    # (pg_restore's output empties search_path: qualified names from here on.) Analyses and notes of uploaded
+    # games this database doesn't have (published after the full backup) go. Those of TWIC games stay: a TWIC
+    # import after the full backup comes back under the same ids when it is run again.
+    echo "DELETE FROM public.game_analysis a WHERE game_id >= 100000000 AND NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
+    echo "DELETE FROM public.game_annotation a WHERE game_id >= 100000000 AND NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
     echo "SELECT (SELECT count(*) FROM public.game_analysis) || ' analyses, ' || (SELECT count(*) FROM public.game_annotation) || ' notes, '"
     echo "  || (SELECT count(*) FROM public.uploads) || ' uploads, ' || (SELECT count(*) FROM public.upload_rounds) || ' upload rounds now';"
   } | as_owner "$DB" -At --single-transaction) || die "nothing was changed (the transaction rolled back)"
   grep -v '^[0-9]*$' <<< "$out" || true
   echo "Next, with the database routes open (MAINTENANCE \"0\"): \"Republish all approved\" on /upload/admin/. It publishes"
-  echo "again the uploaded tournaments that changed since the full backup and takes down the ones rejected since."
+  echo "again the rounds of uploaded tournaments that changed since the full backup and takes down tournaments rejected since."
   exit 0
 fi
 [ -n "$dump" ] || dump=$(ls -1t "$DIR"/daily/*.dump 2>/dev/null | head -1 || true)
@@ -148,7 +151,7 @@ pg_restore --list "$dump" | grep -vE '^[0-9]+; [0-9]+ [0-9]+ (SCHEMA - public|CO
 # As cm_owner (root reads the dump); two jobs for a real restore, one for the drill.
 jobs=(-j 2); [ "$TEST" = 0 ] || jobs=()
 pg_restore -d "dbname=$TARGET user=cm_owner" --no-owner --no-privileges --exit-on-error "${jobs[@]}" -L "$list" "$dump"
-as_owner "$TARGET" -f "$GRANTS"
+for f in "${SCHEMA[@]}" "$GRANTS"; do as_owner "$TARGET" -f "$f"; done
 runuser -u postgres -- vacuumdb -q --analyze -d "$TARGET"
 
 count() { # exact row counts per table, as cm_owner
@@ -174,9 +177,11 @@ small=$(newest_small)
 cat <<EOF
 
 $TARGET is ready. To make it the live database, in this order:
-1. Put the site in maintenance (MAINTENANCE "1" in both vars blocks of wrangler.jsonc, deployed), so visitors
-   see a notice instead of errors, and pause the backups, so none of them saves the restored (older) data as
-   the newest:
+1. Put the site in maintenance (MAINTENANCE "1" in both vars blocks of wrangler.jsonc, deployed), so nothing
+   writes any more and visitors see a notice instead of errors. If the live database still answers and its own
+   tables (analyses, notes, uploads) are not what went wrong, save them as they are now (it prints the file):
+     sudo cm-db-backup small
+   Then pause the backups, so none of them saves the restored (older) data as the newest:
      sudo systemctl stop cm-db-backup.timer cm-db-backup-small.timer
 2. Swap the databases (it stops new connections to the live one, ends the open ones and swaps the names; any
    error stops it):
@@ -186,10 +191,13 @@ $TARGET is ready. To make it the live database, in this order:
    If it stops with an error, undo what it did (skip the first command when there is no ${DB}_old yet):
      sudo -u postgres psql -c "ALTER DATABASE ${DB}_old RENAME TO $DB"
      sudo -u postgres psql -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS true"
-3. The site's own tables from the newest hourly backup (newer than the full one):
-     sudo cm-db-restore --site-tables ${small:-<the newest file in $DIR/small/>}
-4. Backups on again: sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer
-5. MAINTENANCE "0", then "Republish all approved" on /upload/admin/, then purge the games-db cache tag.
+3. The site's own tables, from the file step 1 printed (without one: the newest good hourly backup, now
+   ${small:-none in $DIR/small/}):
+     sudo cm-db-restore --site-tables <file>
+4. If TWIC issues were imported after this full backup, import them again now (scripts/twic/README.md): the
+   importer goes on where the restored database ends, with the same game ids, analyses and notes.
+5. Backups on again: sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer
+6. MAINTENANCE "0", then "Republish all approved" on /upload/admin/, then purge the games-db cache tag.
 Keep ${DB}_old until the site is checked, then: sudo -u postgres dropdb ${DB}_old
 To throw the restore away instead: sudo -u postgres dropdb $TARGET
 EOF

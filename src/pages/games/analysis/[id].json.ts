@@ -2,6 +2,7 @@ import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { analysisEnabled, engineBusy, getAnalysis, queueAnalysis, type AnalysisState } from '../../../lib/analysis';
 import { idParam, limiterKey, sameSite } from '../../../lib/client';
+import { isUploaded } from '../../../lib/uploads';
 
 // Stockfish analysis of a game: GET the state (polled while queued/running), POST to queue it.
 export const prerender = false;
@@ -16,7 +17,9 @@ export const GET: APIRoute = async ({ params, url }) => {
   // A finished analysis never changes: let the edge cache it. "Not analysed yet" is cached for a few
   // minutes too (most views of most games), except for the ?poll=1 requests of a client that has just
   // queued the game. Queued/running states are never cached.
-  const cache = state.status === 'done' ? 'public, max-age=86400, s-maxage=2592000' : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
+  // (Uploaded games, like their pages, only 5 minutes: an organiser can replace them.)
+  const done = isUploaded(id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=86400, s-maxage=2592000';
+  const cache = state.status === 'done' ? done : state.status === 'none' && !url.searchParams.has('poll') ? 'public, max-age=60, s-maxage=300' : 'no-store';
   return json(state, 200, cache);
 };
 

@@ -19,7 +19,8 @@ umask 077
 case $MODE in
   full) sub=daily; keep=7; tables=() ;;
   # --strict-names: a missing (renamed) table fails the dump instead of silently dropping out of it.
-  small) sub=small; keep=168; tables=(--strict-names -t game_analysis -t game_annotation -t uploads -t upload_rounds -t uploads_id_seq) ;;
+  # (upload_published stays out: it describes the games on the site, which only the full backup holds.)
+  small) sub=small; keep=168; tables=(--strict-names -t game_analysis -t game_annotation -t uploads -t upload_rounds -t uploads_id_seq -t upload_ids_seq) ;;
   *) echo "usage: $0 full|small" >&2; exit 2 ;;
 esac
 install -d -m 750 "$DIR" "$DIR/$sub" "$DIR/weekly"

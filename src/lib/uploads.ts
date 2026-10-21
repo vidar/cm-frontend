@@ -255,14 +255,16 @@ export async function reject(id: number) {
 }
 
 /**
- * Make the site match the uploads table, after a TWIC --reset or a restore (full backup, then the site's tables
- * from a newer hourly one). Each step is its own transaction:
+ * Make the site match the uploads table, after a TWIC --reset or a restore (a full backup, then the site's own
+ * tables from a newer hourly one). Each step is its own transaction:
  * 1. uploaded events that no approved upload of the same name points to come off (rejected after the full
- *    backup, or another tournament's event that a later one reused the id of);
- * 2. analyses and notes of uploaded game ids without a game go (left by the hourly backup), so a game that
- *    gets such an id next is not shown someone else's;
- * 3. approved tournaments whose published games differ from their rounds (or have no event) are published
- *    again; the others keep their game ids, URLs, analyses and notes.
+ *    backup, or another tournament's event);
+ * 2. analyses and notes of uploaded game ids without a game go (games published after the full backup), and
+ *    the publish records of uploads that are no longer approved;
+ * 3. approved tournaments without their event are published whole; the others only in the rounds whose file
+ *    changed since they were published (upload_published, which only the full backup holds, against the
+ *    hourly backup's upload_rounds), so unchanged rounds keep their game ids, URLs, analyses and notes.
+ *    Tournaments go in the order they were first published, so same-name ones keep their slugs.
  * The reads carry now(), so Hyperdrive never answers them from its cache.
  */
 export async function republishAll() {
@@ -280,23 +282,35 @@ export async function republishAll() {
     await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE');
     for (const t of ['game_analysis', 'game_annotation'])
       await q(`DELETE FROM ${t} a WHERE game_id >= $1 AND NOT EXISTS (SELECT FROM games g WHERE g.id = a.game_id)`, [UPLOAD_ID_BASE]);
+    await q(`DELETE FROM upload_published p WHERE NOT EXISTS (SELECT FROM uploads u WHERE u.id = p.upload_id AND u.status = 'approved')`);
   });
-  // In sync: the event exists under the upload's name, and every round has the same games (tag, result, moves).
-  const uploads = await query<{ id: number; in_sync: boolean }>(
-    `WITH pub AS (
-       SELECT event_id, md5(string_agg(concat_ws('|', round, result, moves), E'\n' ORDER BY round, result, moves)) AS h
-       FROM games WHERE event_id >= $1 GROUP BY event_id),
-     up AS (
-       SELECT r.upload_id, md5(string_agg(concat_ws('|', g->>'round', g->>'result', g->>'moves'), E'\n' ORDER BY g->>'round', g->>'result', g->>'moves')) AS h
-       FROM upload_rounds r CROSS JOIN json_array_elements(r.games::json) g GROUP BY r.upload_id)
-     SELECT u.id, (e.id IS NOT NULL AND e.name = u.name AND pub.h IS NOT DISTINCT FROM up.h) AS in_sync, now()
-     FROM uploads u LEFT JOIN events e ON e.id = u.event_id LEFT JOIN pub ON pub.event_id = u.event_id LEFT JOIN up ON up.upload_id = u.id
-     WHERE u.status = 'approved' ORDER BY u.id`,
-    [UPLOAD_ID_BASE],
+  const uploads = await query<{ id: number; published: boolean; changed: string }>(
+    `WITH d AS (
+       SELECT coalesce(r.upload_id, p.upload_id) AS upload_id, coalesce(r.round, p.round) AS round
+       FROM upload_rounds r FULL JOIN upload_published p ON p.upload_id = r.upload_id AND p.round = r.round
+       WHERE r.uploaded_at IS DISTINCT FROM p.uploaded_at)
+     SELECT u.id, (e.id IS NOT NULL AND e.name = u.name) AS published,
+            coalesce(json_agg(d.round ORDER BY d.round) FILTER (WHERE d.round IS NOT NULL), '[]')::text AS changed, now()
+     FROM uploads u LEFT JOIN events e ON e.id = u.event_id LEFT JOIN d ON d.upload_id = u.id
+     WHERE u.status = 'approved' GROUP BY u.id, u.event_id, u.name, e.id, e.name ORDER BY u.event_id NULLS LAST, u.id`,
   );
   let republished = 0;
-  for (const u of uploads) if (!u.in_sync && (await approve(u.id, true)) !== null) republished++;
-  return { republished, unchanged: uploads.filter((u) => u.in_sync).length, removed: orphans.length };
+  for (const u of uploads) {
+    const changed = JSON.parse(u.changed) as number[];
+    if (!u.published) {
+      if ((await approve(u.id, true)) !== null) republished++;
+    } else if (changed.length && (await republishRounds(u.id, changed)) !== null) republished++;
+  }
+  return { republished, unchanged: uploads.filter((u) => u.published && u.changed === '[]').length, removed: orphans.length };
+}
+
+/** Publish these rounds of an approved tournament again (gone ones come off); null if it isn't approved (any more). */
+async function republishRounds(id: number, rounds: number[]) {
+  return transaction(async (q) => {
+    const [u] = await q<Upload>(`SELECT ${COLS} FROM uploads WHERE id = $1 FOR UPDATE`, [id]);
+    if (!u || u.status !== 'approved') return null;
+    return publish(q, u, rounds);
+  });
 }
 
 // ---- publishing ------------------------------------------------------------------------------
@@ -305,18 +319,23 @@ export async function republishAll() {
 const arr = (xs: (string | number)[]) => `{${xs.map((x) => (typeof x === 'number' ? x : `"${x.replace(/["\\]/g, '\\$&')}"`)).join(',')}}`;
 
 /**
- * Next free uploaded id. Publishes run one at a time (the games table lock in publish), so MAX + 1 is safe.
- * Events also count the ids uploads still hold: a TWIC --reset reload empties events, and a new
- * tournament published before "Republish all" must not take an approved one's id.
+ * The first of `n` new uploaded ids. They come from a counter that never goes down (upload_ids_seq, shared
+ * by events, players and games), so an id once given out never names another event, player or game: an
+ * analysis, AI note or cached page of one can't turn up on another, also after a restore (the hourly backup
+ * carries the counter). Never below what the table holds; events also skip the ids uploads still hold (a TWIC
+ * --reset reload empties events). Publishes run one at a time (the games table lock in publish).
  */
-const nextId = async (q: Q, table: 'events' | 'players' | 'games') =>
+const nextId = async (q: Q, table: 'events' | 'players' | 'games', n = 1) =>
   Number(
     (
-      await q<{ m: number }>(
-        `SELECT GREATEST(COALESCE(MAX(id), 0) + 1, $1::int${table === 'events' ? ', (SELECT COALESCE(MAX(event_id), 0) + 1 FROM uploads)' : ''}) AS m FROM ${table} WHERE id >= $1`,
-        [UPLOAD_ID_BASE],
+      await q<{ first: string }>(
+        `SELECT setval('upload_ids_seq', GREATEST(
+           (SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END FROM upload_ids_seq),
+           (SELECT COALESCE(MAX(id), 0) + 1 FROM ${table} WHERE id >= $1),
+           $1::int${table === 'events' ? ', (SELECT COALESCE(MAX(event_id), 0) + 1 FROM uploads)' : ''}) + $2::int - 1) - $2::int + 1 AS first`,
+        [UPLOAD_ID_BASE, n],
       )
-    )[0].m,
+    )[0].first,
   );
 
 /**
@@ -401,6 +420,7 @@ async function refreshPlayers(q: Q, ids: number[]) {
 
 async function unpublish(q: Q, eventId: number) {
   const players = await dropRounds(q, eventId, 'all');
+  await q('DELETE FROM upload_published WHERE upload_id IN (SELECT id FROM uploads WHERE event_id = $1)', [eventId]);
   await q('DELETE FROM events WHERE id = $1', [eventId]);
   await refreshPlayers(q, players);
 }
@@ -473,7 +493,7 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
   }
   if (fresh.size) {
     const slugs = await freeSlugs(q, 'players', [...fresh.values()].map((s) => slugify(s.name)));
-    const first = await nextId(q, 'players');
+    const first = await nextId(q, 'players', fresh.size);
     const rows = [...fresh].map(([k, s], i) => {
       ids.set(k, first + i);
       return { id: first + i, fide_id: s.fide, name: s.name, slug: slugs[i], search: slugify(s.name).replace(/-/g, ' '), title: s.title, fed: s.fed };
@@ -487,7 +507,7 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
 
   // Games, in board order, in one statement.
   if (games.length) {
-    const first = await nextId(q, 'games');
+    const first = await nextId(q, 'games', games.length);
     const rows = games.map((g, i) => {
       const w = ids.get(keyOf(g.white, g.whiteFide))!;
       const b = ids.get(keyOf(g.black, g.blackFide))!;
@@ -506,6 +526,13 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
       [JSON.stringify(rows), eventId],
     );
   }
+
+  // What is now on the site, round by round: the upload time of each round's file. Only the full backup holds
+  // this table (not the hourly one), so after a restore republishAll() can tell which rounds changed since.
+  const which = all ? '' : 'AND round = ANY($2::int[])';
+  const args = all ? [upload.id] : [upload.id, arr(rounds)];
+  await q(`DELETE FROM upload_published WHERE upload_id = $1 ${which}`, args);
+  await q(`INSERT INTO upload_published (upload_id, round, uploaded_at) SELECT upload_id, round, uploaded_at FROM upload_rounds WHERE upload_id = $1 ${which}`, args);
 
   // Event totals and dates.
   await q(

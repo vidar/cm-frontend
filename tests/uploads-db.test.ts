@@ -719,24 +719,45 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       await expectConsistent();
     });
 
-    it('publishes again a tournament whose games differ from its rounds (an older restore), with the same content', async () => {
-      const before = await content(eventB);
-      const players0 = await players();
-      // As after restoring a full backup older than the hourly one: one of B's games is missing.
-      const [gone] = await eventGames(eventB);
-      await query('DELETE FROM games WHERE id = $1', [gone.id]);
+    it('after a restore, publishes again only the rounds whose file is newer than what was published', async () => {
+      // As restored: the full backup's games of A's round 2 came from an older upload of that round than the hourly
+      // backup's upload_rounds (the organiser uploaded it again in between). Rounds 1 and 3 are unchanged.
+      const before = await eventGames(eventA);
+      const round = (g: GameRow) => Number(String(g.round).split('.')[0]);
+      const kept = before.filter((g) => round(g) !== 2);
+      const redone = before.filter((g) => round(g) === 2);
+      expect(kept.length).toBeGreaterThan(0);
+      expect(redone.length).toBeGreaterThan(0);
+      await query(`INSERT INTO game_analysis (game_id, status, depth, evals) VALUES ($1, 'done', 18, '[]'), ($2, 'done', 18, '[]') ON CONFLICT DO NOTHING`, [kept[0].id, redone[0].id]);
+      await query(`UPDATE upload_rounds SET uploaded_at = uploaded_at + interval '1 hour' WHERE upload_id = $1 AND round = 2`, [uploadA.id]);
 
       const r = await republishAll();
       expect(r).toMatchObject({ republished: 1, removed: 0 });
-      const fresh = await getUpload(uploadB.id);
-      expectUpload(fresh);
-      expect(fresh).toMatchObject({ status: 'approved', event_id: eventB }); // the event keeps its id and slug
-      expect(await content(eventB)).toEqual(before);
+      const after = await eventGames(eventA);
+      // Rounds 1 and 3 keep their ids and their analysis; round 2 comes back under new ids, without the old one's.
+      expect(after.filter((g) => round(g) !== 2).map((g) => g.id)).toEqual(kept.map((g) => g.id));
+      const fresh = after.filter((g) => round(g) === 2);
+      expect(fresh.map((g) => [g.round, g.white_id, g.black_id, g.result, g.moves])).toEqual(redone.map((g) => [g.round, g.white_id, g.black_id, g.result, g.moves]));
+      for (const g of fresh) expect(redone.map((x) => x.id)).not.toContain(g.id);
+      expect(await count('game_analysis WHERE game_id = $1', [kept[0].id])).toBe(1);
+      expect(await count('game_analysis WHERE game_id = $1', [redone[0].id])).toBe(0);
       expect(await eventById(eventA)).toMatchObject({ slug: `vitest-open-${YEAR}`, games: 5, rounds: 3 });
-      expect(await eventById(eventB)).toMatchObject({ slug: `vitest-open-${YEAR}-2`, games: 1 });
-      expect(await eventById(eventC)).toMatchObject({ slug: 'vitest-classic-2004', games: 1 });
-      // Players are reused (matched by name among uploaded players), with the same counts.
-      expect(await players()).toEqual(players0);
+      // A second run finds nothing to do.
+      expect(await republishAll()).toMatchObject({ republished: 0, removed: 0 });
+      await query('DELETE FROM game_analysis WHERE game_id = $1', [kept[0].id]);
+      await expectConsistent();
+    });
+
+    it('never hands out an uploaded id twice, even when the highest ones are freed', async () => {
+      const top = (await one<{ m: number }>('SELECT max(id) AS m FROM games WHERE id >= $1', [UPLOAD_ID_BASE])).m;
+      const owner = await one<{ event_id: number }>('SELECT event_id FROM games WHERE id = $1', [top]);
+      const u = await one<{ id: number }>('SELECT id FROM uploads WHERE event_id = $1', [owner.event_id]);
+      // Publishing the tournament that holds the highest game id again frees those ids first.
+      await query(`UPDATE upload_rounds SET uploaded_at = uploaded_at + interval '1 hour' WHERE upload_id = $1`, [u.id]);
+      await republishAll();
+      const games = await eventGames(owner.event_id);
+      expect(games.length).toBeGreaterThan(0);
+      for (const g of games) expect(g.id).toBeGreaterThan(top);
       await expectConsistent();
     });
 

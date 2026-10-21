@@ -41,7 +41,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   set up by `ops/postgres/` (its README is the runbook: roles, tunnel, backups, restore), reached only via
   Hyperdrive (binding `HYPERDRIVE`, also declared under `previews`) over a Cloudflare Tunnel (Workers VPC);
   it listens on localhost only. The site's role `cm_web` has exactly the rights in `scripts/db/grants.sql`
-  (add a line there when code starts writing a table); `cm_owner` owns everything. The Hyperdrive config is
+  (add a line there when code starts writing a table); `cm_owner` owns everything. Schema changes go into the
+  idempotent `scripts/*.pg.sql` and reach the server by rerunning `ops/postgres/install.sh` there (runbook "Kit
+  updates") before the code that needs them is merged. The Hyperdrive config is
   `cm-games-hetz` (`2a7346a0…`; Neon's old one, `ff39804d…`, stays only for a rollback until Neon is retired,
   runbook step 11). Hyperdrive has no advisory locks or session state: serialise with `LOCK TABLE` inside a transaction. Loaded offline by
   `scripts/twic/` (see its README) from The Week in Chess, used with Mark Crowther's permission for
@@ -71,7 +73,8 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   path decoded as Astro routes it, `src/lib/maintenance.ts`) and makes `query()` refuse to connect; the
   rest of the site stays up. A 500 from a database route (the database failing) becomes a 503 with
   `Retry-After: 120` in `src/worker.ts`, so search engines retry instead of dropping URLs. `/health/db` (one
-  `SELECT now()`, 200 or 503, never cached, robots Disallow) is what the server's health check fetches.
+  `SELECT now()`, 200 or 503, never cached, robots Disallow; in maintenance a 503 saying so, without a query) is
+  what the server's health check fetches.
   POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
   by /64, `idParam` for int4 ids). Hosting decisions and the Hyperdrive settings
   that matter are in `docs/database-costs.md`.
@@ -99,7 +102,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   and `upload_rounds` (`scripts/uploads.pg.sql`) until the site owner approves them at `/upload/admin/` (Worker
   secret `ADMIN_KEY`, entered once by POST; the page keeps an HttpOnly cookie holding a digest of it, never the key
   in a URL); approval publishes them into `events`/`players`/`games` with ids from
-  `UPLOAD_ID_BASE` (100000000, `src/lib/uploads.ts`), and later rounds publish at once. `games.twic = 0` and
+  `UPLOAD_ID_BASE` (100000000, `src/lib/uploads.ts`), and later rounds publish at once. Those ids come from the
+  sequence `upload_ids_seq`, which never goes down, so an id never names a second game (analyses, notes and cached
+  pages stay with their game); every publish records each round's file time in `upload_published`. `games.twic = 0` and
   ids ≥ `UPLOAD_ID_BASE` mark uploaded data: those pages credit the organiser instead of TWIC, and uploaded
   pages are cached for 5 minutes. Players match existing ones by FIDE ID when the names agree (`sameName`; a
   FIDE ID under another name is dropped, and the preview lists how IDs resolve), else by exact name among
@@ -110,8 +115,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below
   `UPLOAD_ID_BASE`, `--patch` keeps uploaded events, and an uploaded slug TWIC now uses is renamed `<slug>-u<n>`;
   after a `--reset` reload or a restore use "Republish all approved" on the admin page (it publishes again only
-  tournaments whose published games differ from their rounds, so the others keep game ids, analyses and notes,
-  and takes uploaded events off the site that no approved upload of that name points to). PGN parsing: `src/lib/pgn.ts`.
+  the rounds whose file differs from what `upload_published` recorded, which only the full backup holds, so
+  everything else keeps its game ids, analyses and notes, and takes uploaded events off the site that no approved
+  upload of that name points to). PGN parsing: `src/lib/pgn.ts`.
 - **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
   and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,
   player pages Person (FIDE profile as `sameAs`), event pages SportsEvent with competitors and rounds
