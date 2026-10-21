@@ -2,7 +2,7 @@
 // Knockout round (or a match): pairings with each game's result and who went through.
 import Name from './Name.astro';
 import { gamePath } from '../../lib/games';
-import { pts, whiteScore, type KoRound } from '../../lib/event';
+import { pts, whiteScore, type EventGame, type KoRound } from '../../lib/event';
 import { chip } from '../../lib/event-view';
 
 interface Props {
@@ -11,6 +11,11 @@ interface Props {
   running?: boolean;
 }
 const { round, running = false } = Astro.props;
+// From player a's side; an unfinished game ('*') shows as such.
+const scoreChip = (g: EventGame, a: number) => {
+  const ws = whiteScore(g.result);
+  return ws === null ? { cls: '', text: '*' } : chip(g.white_id === a ? ws : 1 - ws);
+};
 ---
 
 <div class="ev-scroll">
@@ -23,8 +28,7 @@ const { round, running = false } = Astro.props;
           <td class="name">{m.winner === m.b.id ? <strong><Name p={m.b} /></strong> : <Name p={m.b} />} <span class="muted">{m.b.elo ?? ''}</span></td>
           <td>
             {m.games.map((g, i) => {
-              const s = g.white_id === m.a.id ? whiteScore(g.result) : 1 - whiteScore(g.result);
-              const c = chip(s);
+              const c = scoreChip(g, m.a.id);
               return (
                 <a class={`ev-r ${c.cls}`} href={gamePath(g)} title={`Game ${i + 1}: ${g.white_name}–${g.black_name} ${g.result}`}>
                   <span class={`ev-col ${g.white_id === m.a.id ? 'w' : 'b'}`}></span>{c.text}
@@ -47,9 +51,9 @@ const { round, running = false } = Astro.props;
         <thead><tr><th>Game</th><th>White</th><th>Black</th><th class="c">Result</th><th class="num">{m.a.name.split(' ').at(-1)}</th><th class="num">{m.b.name.split(' ').at(-1)}</th><th>Date</th></tr></thead>
         <tbody>
           {m.games.map((g, i) => {
-            const s = g.white_id === m.a.id ? whiteScore(g.result) : 1 - whiteScore(g.result);
-            a += s;
-            b += 1 - s;
+            const ws = whiteScore(g.result);
+            const s = ws === null ? null : g.white_id === m.a.id ? ws : 1 - ws;
+            if (s !== null) (a += s), (b += 1 - s);
             return (
               <tr>
                 <td class="num muted">{i + 1}</td><td>{g.white_name}</td><td>{g.black_name}</td>

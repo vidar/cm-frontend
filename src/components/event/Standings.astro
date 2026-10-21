@@ -19,6 +19,8 @@ interface Props {
 }
 const { lines, rounds = [], rankOf, moves, tiebreak = 'buchholz', limit = 100, scoreLabel = 'Pts' } = Astro.props;
 const shown = lines.slice(0, limit);
+// Sonneborn-Berger exactly (quarters are common), as in the crosstable.
+const sbText = (x: number) => x.toFixed(2).replace(/\.?0+$/, '');
 ---
 
 <div class="ev-scroll">
@@ -58,7 +60,7 @@ const shown = lines.slice(0, limit);
             })}
             <td class="pts">{pts(l.points)}</td>
             <td class="num muted">{l.games}</td>
-            <td class="num muted">{pts(tiebreak === 'sb' ? Math.round(l.sb * 2) / 2 : l.buchholz)}</td>
+            <td class="num muted">{tiebreak === 'sb' ? sbText(l.sb) : pts(l.buchholz)}</td>
             <td class="num muted">{l.perf ?? ''}</td>
           </tr>
         );

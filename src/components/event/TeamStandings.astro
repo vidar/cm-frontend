@@ -14,6 +14,10 @@ interface Props {
 }
 const { lines, rounds = [], rankOf, moves, base, limit = 200 } = Astro.props;
 const shown = lines.slice(0, limit);
+// Matches with boards missing from the database (in TWIC usually forfeits) are scored from the games there are.
+const counted = [...new Set(lines.flatMap((l) => l.matches.map((m) => m.match)))];
+const partial = counted.filter((m) => !m.complete).length;
+const undecided = counted.filter((m) => !m.decided).length;
 ---
 
 <div class="ev-scroll">
@@ -54,3 +58,8 @@ const shown = lines.slice(0, limit);
     </tbody>
   </table>
 </div>
+{partial > 0 && (
+  <p class="ev-muted">
+    {partial} of {counted.length} matches are missing boards in the database: game points count the games there are{undecided > 0 && `, and the ${undecided} that the missing boards could still turn get no match points`}.
+  </p>
+)}

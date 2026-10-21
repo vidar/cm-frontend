@@ -198,8 +198,9 @@ describe('whiteScore', () => {
     expect(whiteScore('0-1')).toBe(0);
     expect(whiteScore('1/2-1/2')).toBe(0.5);
   });
-  it('treats an unknown result as a half', () => {
-    expect(whiteScore('*')).toBe(0.5);
+  it('gives an unfinished or unknown result no score', () => {
+    expect(whiteScore('*')).toBeNull();
+    expect(whiteScore('')).toBeNull();
   });
 });
 
@@ -231,6 +232,12 @@ describe('performance', () => {
   it('adds ±800 for 100% and 0%', () => {
     expect(perfRating([2000, 2000, 2000], 3)).toBe(2800);
     expect(perfRating([2000, 2000, 2000], 0)).toBe(1200);
+  });
+  it('rounds the percentage half up before the table lookup, on both sides of 50%', () => {
+    // 17/40 = 42.5% -> 43% -> dp -50 (rounding |p - 50%| instead would give 8 and -57).
+    expect(perfRating(Array(40).fill(2000), 17)).toBe(1950);
+    // 23/40 = 57.5% -> 58% -> dp +57.
+    expect(perfRating(Array(40).fill(2000), 23)).toBe(2057);
   });
   it('uses the FIDE table in between', () => {
     // p = 0.75 -> +193; p = 0.25 -> -193; p = 0.60 -> +72; p = 0.57 -> +50.
@@ -300,12 +307,38 @@ describe('analyseEvent format detection', () => {
   it('match: two players, several games', () => {
     expect(analyseEvent(match(), null).format).toBe('match');
     expect(analyseEvent(match(false), null).format).toBe('match');
-    expect(analyseEvent([game(1, 1, 2, '1-0', '1')], null).format).toBe('match');
+    expect(analyseEvent(match(), 'match').format).toBe('match');
+  });
+  it('a single game is not a match (unless the event says so)', () => {
+    const one = analyseEvent([game(1, 1, 2, '1-0', '1')], null);
+    expect(one.format).toBe('games');
+    expect(winners(one)).toEqual([]);
+    expect(analyseEvent([game(1, 1, 2, '1-0', '1')], 'match').format).toBe('match');
+    // Playoffs and tiebreak matches are often typed like the tournament they belong to.
+    expect(analyseEvent(match(), 'swiss').format).toBe('match');
   });
   it('team event from team tags on most games', () => {
     expect(analyseEvent(teamEvent(), null).format).toBe('team');
     const oneUntagged = teamEvent().map((g) => (g.id === 12 ? { ...g, white_team: null, black_team: null } : g));
     expect(analyseEvent(oneUntagged, null).format).toBe('team');
+  });
+  it('team tags alone don’t make a team event: an individual Swiss with countries as teams', () => {
+    // Germany meets Turkey and Belgium in round 1, on one board each: player pairings, not team matches.
+    const t = (id: number, w: number, b: number, result: string, round: string, wt: string, bt: string) => game(id, w, b, result, round, { white_team: wt, black_team: bt });
+    const swissByCountry = [
+      t(1, 1, 3, '1-0', '1.1', 'Germany', 'Turkey'),
+      t(2, 4, 2, '0-1', '1.2', 'Belgium', 'Germany'),
+      t(3, 5, 7, '1/2-1/2', '1.3', 'Belgium', 'Netherlands'),
+      t(4, 6, 8, '1-0', '1.4', 'Turkey', 'Netherlands'),
+      t(5, 1, 2, '1/2-1/2', '2.1', 'Germany', 'Germany'),
+      t(6, 6, 4, '1-0', '2.2', 'Turkey', 'Belgium'),
+      t(7, 3, 5, '0-1', '2.3', 'Turkey', 'Belgium'),
+      t(8, 8, 7, '1/2-1/2', '2.4', 'Netherlands', 'Netherlands'),
+    ];
+    const a = analyseEvent(swissByCountry, 'swiss');
+    expect(a.format).toBe('swiss');
+    expect(a.teams).toBeUndefined();
+    expect(a.standingsAfter(Infinity)[0].player.name).toBe('Frank');
   });
   it('games: no usable Round tags and more than two players', () => {
     const a = analyseEvent(loose(), null);
@@ -539,6 +572,53 @@ describe('team analysis', () => {
     expect(b.matches.at(-1)).toMatchObject({ home: 'Bravo', away: 'Charlie', homePts: 1, awayPts: 0, complete: false });
     expect(b.matches.filter((m) => !m.complete)).toHaveLength(1);
   });
+  it('a match the missing board could still turn gets game points but no match points', () => {
+    const b = analyseEvent(teamEvent().slice(0, 11), null);
+    expect(b.complete).toBe(false);
+    expect(b.teams!.matches.at(-1)).toMatchObject({ complete: false, decided: false });
+    const row = (l: ReturnType<typeof t.standingsAfter>[number]) => [l.team, l.rank, l.mp, l.gp, l.played, l.w, l.d, l.l];
+    expect(b.teams!.standingsAfter(3).map(row)).toEqual([
+      ['Alpha', 1, 5, 4, 3, 2, 1, 0],
+      ['Delta', 2, 4, 4.5, 3, 2, 0, 1],
+      ['Charlie', 3, 1, 1, 3, 0, 1, 1],
+      ['Bravo', 4, 0, 1.5, 3, 0, 0, 2],
+    ]);
+  });
+  it('a partial match whose winner is settled still counts', () => {
+    // Three boards; round 2 has two, both won by Alpha: 2–0 with one board open is a win whatever it was.
+    const games = [
+      teamGame(1, 1, 4, '1-0', '1.1', 'Alpha', 'Bravo'),
+      teamGame(2, 5, 2, '0-1', '1.1', 'Bravo', 'Alpha'),
+      teamGame(3, 3, 6, '0-1', '1.1', 'Alpha', 'Bravo'),
+      teamGame(4, 4, 1, '0-1', '2.1', 'Bravo', 'Alpha'),
+      teamGame(5, 2, 5, '1-0', '2.1', 'Alpha', 'Bravo'),
+    ];
+    const c = analyseEvent(games, null);
+    expect(c.format).toBe('team');
+    expect(c.teams!.boards).toBe(3);
+    expect(c.teams!.matches.map((m) => [m.round, m.homePts, m.awayPts, m.complete, m.decided])).toEqual([
+      [1, 2, 1, true, true],
+      [2, 0, 2, false, true],
+    ]);
+    expect(c.teams!.standingsAfter(2).map((l) => [l.team, l.mp, l.gp, l.w, l.l])).toEqual([
+      ['Alpha', 4, 4, 2, 0],
+      ['Bravo', 0, 1, 0, 2],
+    ]);
+  });
+  it('an unfinished board leaves the match open and scores for nobody', () => {
+    const games = teamEvent().map((g) => (g.id === 2 ? { ...g, result: '*' } : g));
+    const m = analyseEvent(games, null).teams!.matches[0];
+    expect([m.homePts, m.awayPts, m.complete, m.decided]).toEqual([1, 0, false, false]);
+  });
+  it('a round without any match between two teams has no story (and no crash)', () => {
+    // Round 1 only has club-internal games; rounds 2 and 3 are team matches.
+    const games = teamEvent().map((g) => (g.id <= 4 ? { ...g, black_team: g.white_team } : g));
+    const c = analyseEvent(games, null);
+    expect(c.format).toBe('team');
+    expect(c.teams!.standingsAfter(1)).toEqual([]);
+    expect(roundStory(c, 1)).toEqual([]);
+    expect(roundStory(c, 2)).toHaveLength(2);
+  });
   it('standings after each round: match points, game points, ranking', () => {
     const row = (l: ReturnType<typeof t.standingsAfter>[number]) => [l.team, l.rank, l.mp, l.gp, l.played, l.w, l.d, l.l];
     expect(t.standingsAfter(1).map(row)).toEqual([
@@ -622,9 +702,29 @@ describe('knockout analysis', () => {
     expect(winners(a)).toEqual([]);
     expect(roundStory(a, 2)).toEqual(['Alice and Dave are level 1–1 in the games in the database.']);
   });
-  it('an unfinished single game is level', () => {
-    const a = analyseEvent([game(1, 1, 2, '*', '1')], null);
-    expect(a.knockout![0].matches[0]).toMatchObject({ aPts: 0.5, bPts: 0.5, winner: null });
+  it('an unfinished game scores for nobody', () => {
+    const a = analyseEvent([...match(), game(5, 1, 2, '*', '5')], null);
+    expect(a.knockout![0].matches[0]).toMatchObject({ aPts: 3, bPts: 1, winner: 1 });
+  });
+  it('a level match goes to the player seen in the next round', () => {
+    // Semi-final Alice–Bob 1–1, and Alice plays the final.
+    const a = analyseEvent(knockout().map((g) => (g.id === 4 ? { ...g, result: '1-0' } : g)), 'k.o');
+    expect(a.knockout![0].matches[0]).toMatchObject({ aPts: 1, bPts: 1, winner: 1 });
+  });
+  it('an odd number of games ending in a draw is won by Black of the last game (armageddon)', () => {
+    const games = [...knockout(['1-0', '1-0']), game(7, 1, 4, '1/2-1/2', '2.1.3')];
+    const a = analyseEvent(withElos(games, RR_ELO), 'k.o');
+    expect(a.knockout![1].matches[0]).toMatchObject({ aPts: 1.5, bPts: 1.5, winner: 4 });
+    expect(winners(a)).toEqual(['Dave']);
+    expect(roundStory(a, 2)).toEqual(['Dave beat Alice in the final on tiebreak after 1½–1½.']);
+  });
+  it('a last round of several matches is not a final: no winner', () => {
+    const games = [game(1, 1, 8, '1-0', '1.1.1'), game(2, 2, 7, '1-0', '1.2.1'), game(3, 3, 6, '1-0', '1.3.1'), game(4, 4, 5, '1-0', '1.4.1')];
+    const a = analyseEvent(games, 'k.o');
+    expect(a.format).toBe('knockout');
+    expect(a.knockout!.map((r) => [r.name, r.matches.length])).toEqual([['Round 1', 4]]);
+    expect(winners(a)).toEqual([]);
+    expect(roundStory(a, 1)).toEqual(['4 matches.']);
   });
   it('names quarter-finals, semi-finals and final', () => {
     const games = [
@@ -678,8 +778,16 @@ describe('match analysis', () => {
     expect(analyseEvent(match(), null).rounds.map((r) => r.n)).toEqual([1, 2, 3, 4]);
     expect(analyseEvent(match(false), null).rounds).toEqual([]);
   });
-  it('story gives the match score', () => {
-    expect(roundStory(analyseEvent(match(), null), 1)).toEqual(['Alice beat Bob 3–1.']);
+  it('story: each game and the running score, the result after the last game', () => {
+    const a = analyseEvent(match(), null);
+    expect(roundStory(a, 1)).toEqual(['Alice won game 1 with White.', 'Alice leads 1–0.']);
+    expect(roundStory(a, 2)).toEqual(['Game 2 was drawn.', 'Alice leads 1½–½.']);
+    expect(roundStory(a, 4)).toEqual(['Alice won game 4 with Black.', 'Alice wins the match 3–1.']);
+    const level = analyseEvent(match().map((g) => (g.id === 1 ? { ...g, result: '0-1' } : g)), null);
+    expect(roundStory(level, 1)).toEqual(['Bob won game 1 with Black.', 'Bob leads 1–0.']);
+    expect(roundStory(level, 4)).toEqual(['Alice won game 4 with Black.', 'The match ends level, 2–2.']);
+    const unfinished = analyseEvent([...match(), game(5, 1, 2, '*', '5')], null);
+    expect(roundStory(unfinished, 5)).toEqual(['Game 5 has no result yet.', 'Alice wins the match 3–1.']);
   });
 });
 
@@ -714,6 +822,14 @@ describe('highlights', () => {
     const at = (plies: number) => highlights([game(1, 1, 2, '1/2-1/2', '1', { plies })]).map((h) => [h.label, h.note]);
     expect(at(120)).toEqual([['Longest game', '60 moves']]);
     expect(at(119)).toEqual([]);
+  });
+  it('unfinished games are never a quickest win, an upset or the longest game', () => {
+    const h = highlights([
+      game(1, 1, 2, '*', '1', { plies: 20, white_elo: 2000, black_elo: 2500 }),
+      game(2, 3, 4, '*', '1', { plies: 200 }),
+      game(3, 5, 6, '1-0', '1', { plies: 50 }),
+    ]);
+    expect(h.map((x) => [x.label, x.game.id])).toEqual([['Quickest win', 3]]);
   });
   it('the quickest win is between 10 and 60 plies', () => {
     const at = (plies: number) => highlights([game(1, 1, 2, '1-0', '1', { plies })]).map((h) => [h.label, h.note]);
@@ -770,6 +886,22 @@ describe('roundStory (round robin)', () => {
     expect(roundStory(analyseEvent(drawn, null), 1)).toEqual(['On board 1, Alice and Dave drew.', 'All 2 games were drawn.', 'Everyone is level on ½/1.']);
     const decisive = roundRobin().map((g) => ({ ...g, result: '1-0' }));
     expect(roundStory(analyseEvent(decisive, null), 1)).toEqual(['On board 1, Alice beat Dave with the white pieces.', 'All 2 games were decisive.', 'Alice and Bob share the lead on 1/1.']);
+  });
+  it('unfinished games: no result on board 1, and not counted as decisive or drawn', () => {
+    const games = roundRobin().map((g) => (g.id === 1 ? { ...g, result: '*' } : g));
+    const a = analyseEvent(games, null);
+    expect(roundStory(a, 1)[0]).toBe('On board 1, the game between Alice and Dave has no result yet.');
+    expect(roundStory(a, 1)).toHaveLength(2); // one finished game: no decisive count
+    const after1 = a.standingsAfter(1).map((l) => [l.player.name, l.points, l.games, l.draws]);
+    expect(after1).toEqual([
+      ['Bob', 0.5, 1, 1],
+      ['Carol', 0.5, 1, 1],
+    ]);
+    expect(a.stats).toMatchObject({ games: 6, white: 0, black: 2, draws: 3 });
+  });
+  it('a round with no finished game says nothing about the lead', () => {
+    const a = analyseEvent(roundRobin().map((g) => (g.round === '1' ? { ...g, result: '*' } : g)), null);
+    expect(roundStory(a, 1)).toEqual(['On board 1, the game between Alice and Dave has no result yet.']);
   });
   it('incomplete events only describe the top board', () => {
     const a = analyseEvent(doubleRoundRobin().slice(0, 10), null);
