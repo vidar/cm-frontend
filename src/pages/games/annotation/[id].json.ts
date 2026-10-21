@@ -1,7 +1,8 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getAnalysis } from '../../../lib/analysis';
-import { annotationEnabled, createAnnotation, getAnnotation, overDailyLimit, type AnnotationState } from '../../../lib/annotate';
+import { annotationEnabled, createAnnotation, getAnnotation, type AnnotationState } from '../../../lib/annotate';
+import { idParam, limiterKey, sameSite } from '../../../lib/client';
 
 // AI annotation of an analysed game: GET the state, POST to write it (takes 10-30 s; the response
 // carries the result).
@@ -10,13 +11,8 @@ export const prerender = false;
 const json = (body: AnnotationState | { error: string }, status = 200, cache = 'no-store') =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': cache } });
 
-const gameId = (s: string | undefined) => {
-  const n = Number.parseInt(s ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-
 export const GET: APIRoute = async ({ params, url }) => {
-  const id = gameId(params.id);
+  const id = idParam(params.id);
   if (!id) return json({ error: 'bad game id' }, 400);
   const state = await getAnnotation(id);
   // Finished notes never change; "no notes yet" is cached a few minutes except for a client's ?poll=1.
@@ -25,17 +21,16 @@ export const GET: APIRoute = async ({ params, url }) => {
 };
 
 export const POST: APIRoute = async ({ params, request, url, clientAddress }) => {
-  const id = gameId(params.id);
+  const id = idParam(params.id);
   if (!id) return json({ error: 'bad game id' }, 400);
   if (!annotationEnabled()) return json({ status: 'unavailable' });
   // Same-site requests only (the button on the game page).
-  const origin = request.headers.get('Origin');
-  if (origin && new URL(origin).host !== url.host) return json({ error: 'forbidden' }, 403);
+  if (!sameSite(request, url)) return json({ error: 'forbidden' }, 403);
   const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
-  if (limiter && !(await limiter.limit({ key: `ai:${clientAddress ?? 'anon'}` })).success) return json({ error: 'Too many requests, try again in a minute.' }, 429);
+  if (limiter && !(await limiter.limit({ key: `ai:${limiterKey(clientAddress)}` })).success) return json({ error: 'Too many requests, try again in a minute.' }, 429);
   const current = await getAnnotation(id);
   if (current.status !== 'none' && current.status !== 'failed') return json(current);
   if ((await getAnalysis(id)).status !== 'done') return json({ error: 'Analyse the game with Stockfish first.' }, 409);
-  if (await overDailyLimit()) return json({ error: 'The daily limit for AI notes is reached. Please try again tomorrow.' }, 503);
-  return json(await createAnnotation(id));
+  const r = await createAnnotation(id);
+  return 'refused' in r ? json({ error: r.refused }, r.code) : json(r);
 };
