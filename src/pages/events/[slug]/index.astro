@@ -11,7 +11,7 @@ import RaceChart from '../../../components/event/RaceChart.astro';
 import Name from '../../../components/event/Name.astro';
 import '../../../styles/event.css';
 import { loadEvent } from '../../../lib/event-page';
-import { FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
+import { finalMatch, FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
 import { dateRange, matchScore, resultText } from '../../../lib/event-view';
 import { isUploaded } from '../../../lib/uploads';
 import { eventCacheControl } from '../../../lib/event-view';
@@ -54,12 +54,13 @@ let podium: Place[] = [];
 if (individual && a.complete) podium = final.slice(0, 3).map((l) => ({ who: l.player.name, href: `/players/${l.player.slug}/`, detail: `${pts(l.points)}/${l.games}${l.perf ? ` · perf ${l.perf}` : ''}` }));
 else if (a.teams) podium = teamFinal.slice(0, 3).map((l) => ({ who: l.team, href: `#team-${encodeURIComponent(l.team)}`, detail: `${l.mp} match points · ${pts(l.gp)} game points` }));
 else if (a.knockout?.length) {
-  const f = a.knockout.at(-1)!.matches[0];
+  // Only a real final (or the match itself) names a winner: a last round of several matches is not one.
+  const f = finalMatch(a);
   if (f?.winner) {
     const [w, l] = f.winner === f.a.id ? [f.a, f.b] : [f.b, f.a];
     const [ws, ls] = f.winner === f.a.id ? [f.aPts, f.bPts] : [f.bPts, f.aPts];
     podium = [
-      { who: w.name, href: `/players/${w.slug}/`, detail: `${a.format === 'match' ? 'won the match' : 'won the final'} ${matchScore(ws, ls)}` },
+      { who: w.name, href: `/players/${w.slug}/`, detail: `${a.format === 'match' ? 'won the match' : 'won the final'} ${ws === ls ? `on tiebreak (${matchScore(ws, ls)})` : matchScore(ws, ls)}` },
       { who: l.name, href: `/players/${l.slug}/`, detail: a.format === 'match' ? 'runner-up' : 'finalist' },
     ];
   }
