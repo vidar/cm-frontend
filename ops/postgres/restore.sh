@@ -10,10 +10,14 @@
 #                                          # put back rows of one of the site's own tables (game_analysis,
 #                                          # game_annotation, uploads, upload_rounds) from the newest hourly
 #                                          # backup (or the given one) into the LIVE database
+#   sudo cm-db-restore --site-tables [file.dump]
+#                                          # REPLACE all four with the newest hourly backup's (after a full
+#                                          # restore, which is older: the hourly backup is the newer truth)
 #
 # A full restore never touches the live database: the script prints row counts next to the live ones and
 # the commands that would swap the two (a deliberate, manual step). --table only adds the rows the live
-# table lacks (a row that exists, perhaps newer, stays as it is) and deletes nothing, in one transaction.
+# table lacks (a row that exists, perhaps newer, stays as it is) and deletes nothing; --site-tables empties
+# the four tables and loads the backup's rows. Both run in one transaction: on any error nothing changes.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 GRANTS=$(cd "$HERE/../.." && pwd)/scripts/db/grants.sql        # in the kit
@@ -27,17 +31,20 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 TEST=0
 TABLE=
+SITE=0
 dump=
 case ${1:-} in
   --test) TEST=1; TARGET=cm_games_drill ;;   # never in the way of a real restore
   --table) TABLE=${2:?--table needs a table name}; dump=${3:-} ;;
+  --site-tables) SITE=1; dump=${2:-} ;;
   '') ;;
   *) dump=$1 ;;
 esac
+newest_small() { ls -1t "$DIR"/small/*.dump 2>/dev/null | head -1 || true; }
 
 if [ -n "$TABLE" ]; then
   case $TABLE in game_analysis|game_annotation|uploads|upload_rounds) ;; *) die "--table: one of game_analysis, game_annotation, uploads, upload_rounds" ;; esac
-  [ -n "$dump" ] || dump=$(ls -1t "$DIR"/small/*.dump 2>/dev/null | head -1 || true)
+  [ -n "$dump" ] || dump=$(newest_small)
   [ -s "$dump" ] || die "no backup found (looked in $DIR/small)"
   pg_restore -f /dev/null "$dump" || die "$dump is not a readable pg_dump archive"
   echo "adding the rows of $TABLE that the live database lacks, from $dump"
@@ -62,12 +69,48 @@ if [ -n "$TABLE" ]; then
   grep -v '^[0-9]*$' <<< "$out" || true
   exit 0
 fi
+
+if [ "$SITE" = 1 ]; then
+  [ -n "$dump" ] || dump=$(newest_small)
+  [ -s "$dump" ] || die "no backup found (looked in $DIR/small)"
+  pg_restore -f /dev/null "$dump" || die "$dump is not a readable pg_dump archive"
+  toc=$(pg_restore --list "$dump")
+  ! grep -qE ' TABLE DATA public games ' <<< "$toc" || die "$dump is a full backup: --site-tables takes an hourly one ($DIR/small)"
+  for t in game_analysis game_annotation uploads upload_rounds; do
+    grep -qE " TABLE DATA public $t " <<< "$toc" || die "$dump has no $t"
+  done
+  echo "replacing game_analysis, game_annotation, uploads and upload_rounds with the rows in $dump"
+  # The data and the sequence value, uploads first (upload_rounds refers to it): -L restores in the list's order.
+  order=$(mktemp)
+  trap 'rm -f "$order"' EXIT
+  { grep -E ' TABLE DATA public uploads ' <<< "$toc"
+    grep -E ' (TABLE DATA|SEQUENCE SET) public ' <<< "$toc" | grep -vE ' TABLE DATA public uploads ' || true; } > "$order"
+  out=$({
+    echo "SET ROLE cm_owner;"
+    echo "TRUNCATE game_analysis, game_annotation, upload_rounds, uploads;"
+    pg_restore --data-only -L "$order" -f - "$dump"
+    # (pg_restore's output empties search_path: qualified names from here on)
+    echo "SELECT (SELECT count(*) FROM public.game_analysis) || ' analyses, ' || (SELECT count(*) FROM public.game_annotation) || ' notes, '"
+    echo "  || (SELECT count(*) FROM public.uploads) || ' uploads, ' || (SELECT count(*) FROM public.upload_rounds) || ' upload rounds now';"
+  } | runuser -u postgres -- psql -X -q -At -v ON_ERROR_STOP=1 --single-transaction -d "$DB") \
+    || die "nothing was changed (the transaction rolled back)"
+  grep -v '^[0-9]*$' <<< "$out" || true
+  echo "Next, with the database routes open (MAINTENANCE \"0\"): \"Republish all approved\" on /upload/admin/ makes the"
+  echo "uploaded tournaments on the site match (it also takes down ones rejected since the full backup)."
+  exit 0
+fi
 [ -n "$dump" ] || dump=$(ls -1t "$DIR"/daily/*.dump 2>/dev/null | head -1 || true)
 [ -s "$dump" ] || die "no backup found (looked in $DIR/daily)"
 pg_restore --list "$dump" > /dev/null || die "$dump is not a readable pg_dump archive"
 echo "restoring $dump into $TARGET"
 
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }
+if [ "$TEST" = 1 ]; then
+  # The drill runs gently (no parallel index builds or scans next to the site's queries), and a copy an
+  # interrupted drill left behind goes first.
+  export PGOPTIONS='-c max_parallel_maintenance_workers=0 -c max_parallel_workers_per_gather=0'
+  psql_su -d postgres -c "DROP DATABASE IF EXISTS $TARGET WITH (FORCE)" 2>&1 | grep -v 'does not exist, skipping' || true
+fi
 [ "$(psql_su -d postgres -Atc "SELECT count(*) FROM pg_database WHERE datname = '$TARGET'")" = 0 ] \
   || die "$TARGET exists already: look at it, then drop it with: sudo -u postgres dropdb $TARGET"
 # Room for a second copy: the live database's size (or five times the dump), plus 20 %.
@@ -81,7 +124,8 @@ created=0
 cleanup() {
   rm -f "$list"
   # The drill never leaves its copy behind, even when it fails (else every later drill would refuse to run).
-  if [ "$TEST" = 1 ] && [ "$created" = 1 ]; then psql_su -d postgres -c "DROP DATABASE IF EXISTS $TARGET" || true; fi
+  # FORCE: a stopped drill's backend may still be busy in it.
+  if [ "$TEST" = 1 ] && [ "$created" = 1 ]; then psql_su -d postgres -c "DROP DATABASE IF EXISTS $TARGET WITH (FORCE)" || true; fi
 }
 trap cleanup EXIT
 provider=$(psql_su -d postgres -Atc "SELECT CASE WHEN current_setting('server_version_num')::int >= 170000 THEN 'LOCALE_PROVIDER builtin BUILTIN_LOCALE ''C.UTF-8''' END")
@@ -101,14 +145,22 @@ runuser -u postgres -- vacuumdb -q --analyze -d "$TARGET"
 count() { # exact row counts per table
   psql_su -d "$1" -At -c "SELECT format('SELECT %L || '' '' || count(*) FROM public.%I;', tablename, tablename) FROM pg_tables WHERE schemaname = 'public' ORDER BY 1" | psql_su -d "$1" -At
 }
+estimate() { # the planner's row estimates (no scan of the live tables; -1 = never analysed)
+  psql_su -d "$1" -At -F ' ' -c "SELECT relname, reltuples::bigint FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'"
+}
 echo
-echo "rows (restored | live):"
-join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(count "$DB" 2>/dev/null | sort) | awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }'
-
 if [ "$TEST" = 1 ]; then
+  echo "rows (restored | live, estimated):"
+  rows=$(join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(estimate "$DB" 2>/dev/null | sort))
+  awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }' <<< "$rows"
+  # A restore that is much smaller than the live database means a bad or half-written dump.
+  short=$(awk '$3 ~ /^[0-9]+$/ && $3 >= 1000 && ($2 !~ /^[0-9]+$/ || $2 < 0.9 * $3) { printf "%s ", $1 }' <<< "$rows")
+  [ -z "$short" ] || die "the restored copy has far fewer rows than the live database in: $short"
   echo "restore test OK ($dump); $TARGET is dropped again."
   exit 0
 fi
+echo "rows (restored | live):"
+join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(count "$DB" 2>/dev/null | sort) | awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }'
 cat <<EOF
 
 $TARGET is ready. To make it the live database: first put the site in maintenance (MAINTENANCE "1" in both

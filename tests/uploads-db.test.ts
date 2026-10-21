@@ -2,7 +2,8 @@
 // createUpload/findUpload/getUpload, saveRounds (forced round, split by Round tags, N.board tags, PGN
 // problems, LIMITS), getRounds/deleteRound, listUploads, isAdmin, approve (publishing into events/players/
 // games with ids from UPLOAD_ID_BASE, slugs, FIDE-ID matching), publishing straight away once approved
-// (new rounds, replaced rounds and their engine analyses), reject, approving again and republishAll.
+// (new rounds, replaced rounds and their engine analyses), reject, approving again and republishAll (which also
+// takes down uploaded events no approved upload points to, as after a restore from an older backup).
 // Needs the local Postgres copy of the games database (tests/db.ts; the suite skips itself without it).
 // Everything written is marked "Vitest" (names, slugs) and removed in afterAll; real rows (ids below
 // UPLOAD_ID_BASE) are never touched: players are matched by a fake FIDE ID or by names no TWIC player has.
@@ -707,7 +708,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       const players = await query<PlayerRow>(`SELECT id, name, games FROM players WHERE slug LIKE 'vitest-%' ORDER BY id`);
       const maxGame = (await one<{ m: number }>('SELECT max(id) AS m FROM games WHERE id >= $1', [UPLOAD_ID_BASE])).m;
 
-      expect(await republishAll()).toBe(approved);
+      expect(await republishAll()).toEqual({ republished: approved, removed: 0 });
 
       for (const u of [uploadA, uploadB, uploadC]) {
         const fresh = await getUpload(u.id);
@@ -750,6 +751,20 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       return u;
     };
     const roundsOf = async (eventId: number) => (await eventGames(eventId)).map((g) => g.round);
+
+    it('republishAll takes down an uploaded event that no approved upload points to (a restore from before a rejection)', async () => {
+      const u = await newUpload('Vitest Review Orphan');
+      await saveRounds(u, 1, pgn({ white: P.eta, black: P.theta, moves: M4, result: '1-0' }));
+      await approve(u.id);
+      const eventId = (await fresh(u.id)).event_id!;
+      expect(await eventGames(eventId)).toHaveLength(1);
+      // As restored: the hourly backup's uploads table says rejected; the full backup's events and games still hold it.
+      await query(`UPDATE uploads SET status = 'rejected', event_id = NULL WHERE id = $1`, [u.id]);
+      expect((await republishAll()).removed).toBe(1);
+      expect(await eventById(eventId)).toBeUndefined();
+      expect(await eventGames(eventId)).toHaveLength(0);
+      await expectConsistent();
+    });
 
     it('rebuilds Round tags from the numbers, so padded tags are replaced and removed like any other', async () => {
       let u = await newUpload('Vitest Review Padded');

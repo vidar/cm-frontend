@@ -19,9 +19,9 @@ let ok = await isAdminSession(Astro.cookies.get(COOKIE)?.value);
 let message = '';
 let error = '';
 if (Astro.request.method === 'POST') {
+  const form = await Astro.request.formData();
+  const action = form.get('action');
   try {
-    const form = await Astro.request.formData();
-    const action = form.get('action');
     if (action === 'login') {
       const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
       if (limiter && !(await limiter.limit({ key: `admin:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many attempts, please wait a minute.';
@@ -38,11 +38,15 @@ if (Astro.request.method === 'POST') {
       else if (action === 'reject' && id) {
         await reject(id);
         message = `Rejected #${id}: removed from the site if it was published. Cached copies of its pages expire within 5 minutes (existing players it was linked to: within a week).`;
-      } else if (action === 'republish') message = `Republished ${await republishAll()} approved tournaments.`;
+      } else if (action === 'republish') {
+        const r = await republishAll();
+        message = `Republished ${r.republished} approved tournaments${r.removed ? `; took ${r.removed} no longer approved off the site` : ''}.`;
+      }
     }
   } catch (e) {
     if (!isBusy(e)) throw e;
-    error = BUSY;
+    // Republishing is one transaction per tournament: the ones before the timeout are done.
+    error = action === 'republish' ? 'The database is busy with an update, so not every tournament was republished. Please try again in a minute.' : BUSY;
   }
 }
 const list = ok ? await listUploads() : [];

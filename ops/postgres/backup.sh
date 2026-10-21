@@ -42,17 +42,6 @@ if [ "$MODE" = full ] && [ "$(date -u +%u)" = 7 ]; then
   ls -1t "$DIR/weekly"/*.dump | tail -n +6 | xargs -r rm -f
 fi
 
-if [ -n "$RCLONE_REMOTE" ]; then
-  # The same retention off-site, pruned only after this dump is up (a dead box never empties the bucket).
-  rc=(rclone --config /etc/cm-db/rclone.conf --s3-no-check-bucket)
-  "${rc[@]}" copy "$out" "$RCLONE_REMOTE/$sub/"
-  "${rc[@]}" delete --min-age 180h "$RCLONE_REMOTE/$sub/"            # 7.5 days: 7 daily or a week of hourly
-  if [ "$MODE" = full ] && [ "$(date -u +%u)" = 7 ]; then
-    "${rc[@]}" copyto "$RCLONE_REMOTE/$sub/$(basename "$out")" "$RCLONE_REMOTE/weekly/$(basename "$out")"   # server-side
-    "${rc[@]}" delete --min-age 864h "$RCLONE_REMOTE/weekly/"       # 36 days: 5 weekly
-  fi
-fi
-
 size=$(stat -c %s "$out")
 printf '%s %s %s\n' "$(date -u +%s)" "$size" "$out" > "$DIR/last-$MODE"
 # BACKUP_GROUP reads every finished file (also dumps made before it was set); partial .part files stay root's.
@@ -62,3 +51,18 @@ if [ -n "$BACKUP_GROUP" ]; then
   find "$DIR" -type f ! -name '*.part' -exec chmod 640 {} +
 fi
 echo "backup $MODE ok: $out ($((size / 1024 / 1024)) MB)"
+
+if [ -n "$RCLONE_REMOTE" ]; then
+  # The same retention off-site, pruned only after this dump is up (a dead box never empties the bucket).
+  # last-offsite-<mode> is watched separately, so a failed upload doesn't look like a failed backup.
+  rc=(rclone --config /etc/cm-db/rclone.conf --s3-no-check-bucket)
+  "${rc[@]}" copy "$out" "$RCLONE_REMOTE/$sub/"
+  "${rc[@]}" delete --min-age 180h "$RCLONE_REMOTE/$sub/"            # 7.5 days: 7 daily or a week of hourly
+  if [ "$MODE" = full ] && [ "$(date -u +%u)" = 7 ]; then
+    "${rc[@]}" copyto "$RCLONE_REMOTE/$sub/$(basename "$out")" "$RCLONE_REMOTE/weekly/$(basename "$out")"   # server-side
+    "${rc[@]}" delete --min-age 864h "$RCLONE_REMOTE/weekly/"       # 36 days: 5 weekly
+  fi
+  printf '%s %s %s\n' "$(date -u +%s)" "$size" "$RCLONE_REMOTE/$sub/$(basename "$out")" > "$DIR/last-offsite-$MODE"
+  [ -z "$BACKUP_GROUP" ] || { chgrp "$BACKUP_GROUP" "$DIR/last-offsite-$MODE"; chmod 640 "$DIR/last-offsite-$MODE"; }
+  echo "copied to $RCLONE_REMOTE/$sub/"
+fi

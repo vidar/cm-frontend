@@ -8,8 +8,10 @@ Type=notify
 DynamicUser=yes
 # The token reaches the service as a read-only credential file, never on the command line.
 LoadCredential=tunnel-token:/etc/cloudflared/cm-db.token
-# QUIC is required by Workers VPC; apt updates cloudflared, so no self-update.
-ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol quic --metrics 127.0.0.1:20241 --loglevel info run --token-file %d/tunnel-token
+# QUIC is required by Workers VPC; apt updates cloudflared, so no self-update. Metrics (and /ready) on a port
+# outside cloudflared's default range 20241-20245, which another tunnel on this box may hold. A short grace
+# period: on a restart Hyperdrive's long-lived pool connections would otherwise hold it for the default 30 s.
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol quic --metrics 127.0.0.1:20299 --grace-period 5s --loglevel info run --token-file %d/tunnel-token
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=0

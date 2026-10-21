@@ -83,9 +83,9 @@ sudo bash ~/cm-db-kit/ops/postgres/install.sh
 sudo ss -ltnp | grep 5432        # must show only 127.0.0.1:5432 and [::1]:5432
 ```
 
-It ends with "done" and where the passwords are. (`TAILSCALE_IP=100.77.91.56` in front also lets `cm_owner` in
-from the Mac mini over Tailscale; not needed, imports can run on the server. It is remembered for later runs;
-`TAILSCALE_IP=off` removes it.)
+It ends with "done" and where the passwords are. (`sudo TAILSCALE_IP=100.77.91.56 bash …/install.sh` also lets
+`cm_owner` in from the Mac mini over Tailscale; not needed, imports can run on the server. It is remembered for
+later runs; `TAILSCALE_IP=off` removes it.)
 
 ### 2. The Neon connection string
 
@@ -139,7 +139,9 @@ sudo bash ~/cm-db-kit/ops/postgres/tls.sh --install      # paste, Enter, Ctrl-D
 ### 5. Tunnel
 
 Dashboard: **Workers & Pages → VPC → Tunnels → Create** → name `cm-db` → copy the token (the long `eyJ…` value in
-the install command it shows; pasting the whole command works too). On the server:
+the install command it shows; pasting the whole command works too; don't run that command). If the box already
+runs a cloudflared for something else (`systemctl list-units 'cloudflared*'`, e.g. for the engine), leave it:
+this tunnel is separate, with its own service `cloudflared-cm-db` and metrics port 20299. On the server:
 
 ```sh
 sudo bash ~/cm-db-kit/ops/postgres/tunnel.sh             # paste the token, Enter, Ctrl-D
@@ -248,10 +250,23 @@ zero, so the waiting week costs nothing.
     rows the live table lacks and deletes nothing. (Analyses and notes from before a TWIC `--reset` belong to other
     game ids; the script skips rows of games that no longer exist, not ones that were renumbered.)
     `sudo ls -t /var/backups/cm-db/small/ | head` lists the hourly backups.
-  - `sudo cm-db-restore --test` is the drill the monthly timer runs (`journalctl -u cm-db-restore-test`).
+  - `sudo cm-db-restore --site-tables [file.dump]` replaces those four tables with an hourly backup's rows (in one
+    transaction). After a full restore, which is older, run this with the newest hourly backup, then with the
+    database routes open "Republish all approved" on `/upload/admin/`: it publishes every approved tournament
+    again and takes down the ones rejected since the full backup.
+  - `sudo cm-db-restore --test` is the drill the monthly timer runs (`journalctl -u cm-db-restore-test`); it fails
+    when the restored copy is much smaller than the live database.
 - **Updates**: unattended-upgrades restarts Postgres for security releases (a few seconds; Hyperdrive and the
-  edge cache cover it) and updates cloudflared, which then restarts itself. A new major version (19 or later) is
-  a deliberate `pg_upgradecluster`, not automatic.
+  edge cache cover it) and updates cloudflared, which then restarts (about 5 seconds). A new major version (19 or
+  later) is a deliberate `pg_upgradecluster`, not automatic.
+- **Losing the box**: on the new server, steps 0 and 1, then copy the newest full and hourly dumps back (from R2:
+  `rclone copy r2:cm-db-backups/daily/<file> /var/backups/cm-db/daily/`, and `small/`; or from the Mac mini with
+  `scp`), `sudo cm-db-restore`, the swap it prints, `sudo cm-db-restore --site-tables`. The secrets are new, so
+  steps 4–7 again: a new certificate (`tls.sh`), the tunnel token (the same tunnel: its token is in the
+  dashboard), and the new `cm_web` password in the Hyperdrive config (dashboard → Hyperdrive → `cm-games-hetz` →
+  Settings), or a new config and step 8. Then, with the routes open, "Republish all approved". Only without any
+  dumps: TWIC rebuilt from source (`scripts/twic/README.md`) into the empty database, with the site's tables
+  created from `scripts/analysis.pg.sql`, `annotation.pg.sql` and `uploads.pg.sql`.
 - **Settings**: edit the files here and run `install.sh` again: it reloads, restarts Postgres only when a setting
   needs it (and says so), never changes passwords and keeps the Tailscale access. `ALTER SYSTEM` is off. Role
   settings (cm_web's timeouts) apply to new sessions only, and Hyperdrive keeps its sessions open: afterwards end

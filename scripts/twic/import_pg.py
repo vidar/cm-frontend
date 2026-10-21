@@ -14,8 +14,8 @@ Use the owner role either way.
 Resumable: each table is copied in id order and a rerun continues after the highest id already
 in Postgres. --reset drops the tables first (do this for a full rebuild). Afterwards it creates
 the indexes (indexes.pg.sql), ANALYZEs and applies the grants: on a server set up by ops/postgres
-(role cm_web exists) scripts/db/grants.sql, the site role's rights; on Neon the read grant to its
-role `readonly`; on a database without either (local development) none. --grants FILE or '' overrides.
+(role cm_web exists) scripts/db/grants.sql, the site role's rights; on Neon (role readonly) the read grant
+to it; on a database with neither (local development) none. --grants FILE or '' overrides.
 Standard library only.
 
 Uploaded tournaments (/upload/, ids from 100000000) are left alone, except by --reset, which drops
@@ -263,9 +263,10 @@ def main():
     else:
         sys.exit('set DATABASE_URL (PostgreSQL, through psql) or NEON_DATABASE_URL (Neon over HTTPS)')
     src = sqlite3.connect(a.db)
-    grants = a.grants
-    if grants is None and isinstance(db, Psql):
-        if db("SELECT 1 FROM pg_roles WHERE rolname = 'cm_web'")['rows']:
+    grants, readonly = a.grants, False
+    if grants is None:
+        roles = {r['rolname'] for r in db("SELECT rolname FROM pg_roles WHERE rolname IN ('cm_web', 'readonly')")['rows']}
+        if 'cm_web' in roles:
             grants = str(HERE.parent / 'db' / 'grants.sql')
             # The site's own tables come from Neon or a backup, never from here: without them this is the
             # wrong database (or a new one), and the grants would fail after hours of loading.
@@ -275,8 +276,10 @@ def main():
                 sys.exit(f'this database has no {", ".join(missing)}: restore them from a backup (ops/postgres/README.md), '
                          'or for a new, empty database create them first with psql -f scripts/analysis.pg.sql '
                          '-f scripts/annotation.pg.sql -f scripts/uploads.pg.sql')
+        elif 'readonly' in roles:
+            readonly = True  # Neon's site role (over HTTPS or psql)
         else:
-            print('no role cm_web here: skipping the grants (a local database)')
+            print('no role cm_web or readonly here: skipping the grants (a local database)')
     if a.reset:
         db('DROP TABLE IF EXISTS games, players, events, openings, meta')
     db.script(HERE / 'schema.pg.sql')
@@ -291,8 +294,8 @@ def main():
     db('ANALYZE')
     if grants:
         db.script(Path(grants))
-    elif grants is None and isinstance(db, Neon):
-        # Neon's site role; recreated tables (--reset) lose its rights otherwise. Nothing is revoked.
+    elif readonly:
+        # Recreated tables (--reset) would lose its rights otherwise. Nothing is revoked.
         db('GRANT USAGE ON SCHEMA public TO readonly')
         db('GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly')
     print('done')

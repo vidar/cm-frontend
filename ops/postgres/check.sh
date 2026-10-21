@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Health check for the chessmoments.com database (installed as /usr/local/sbin/cm-db-check; timer every
-# 15 minutes). Fails (non-zero, logged to the journal) when Postgres is down, the last full backup is
-# older than 30 hours (small: 3 hours), the disk is more than 85% full or has less than 5 GB free, the
-# tunnel has no connection to Cloudflare, the monthly restore drill failed, the kernel killed a process
-# for memory since the last check, or memory pressure stays high.
-# With HC_URL set in /etc/cm-db/backup.env it also pings a dead-man's switch (healthchecks.io etc.), so
-# a silent failure becomes an e-mail: success pings HC_URL, failure HC_URL/fail with the reasons.
+# 15 minutes). Fails (non-zero, logged to the journal) when Postgres is down; the last full backup is older
+# than 30 hours or the last small one older than 3 (the same for the off-site copy when RCLONE_REMOTE is set);
+# the disk is more than 85% full or has less than 5 GB free; the tunnel has no connection to Cloudflare; the
+# monthly restore drill failed; the kernel killed a process for memory since the last check; or memory
+# pressure stays high. With HC_URL set in /etc/cm-db/backup.env it also pings a dead-man's switch
+# (healthchecks.io etc.), so a silent failure becomes an e-mail: success pings HC_URL, failure HC_URL/fail
+# with the reasons.
 set -uo pipefail
 DIR=${BACKUP_DIR:-/var/backups/cm-db}
 [ -f /etc/cm-db/backup.env ] && . /etc/cm-db/backup.env
@@ -14,10 +15,19 @@ problems=()
 
 pg_isready -q || problems+=("postgres is not accepting connections")
 now=$(date -u +%s)
+RCLONE_REMOTE=${RCLONE_REMOTE:-}
 for mode in full:108000 small:10800; do
   m=${mode%%:*} max=${mode##*:}
   last=$(cut -d' ' -f1 "$DIR/last-$m" 2>/dev/null || echo 0)
   [ $((now - last)) -le "$max" ] || problems+=("last $m backup is $(((now - last) / 3600)) h old")
+  if [ -n "$RCLONE_REMOTE" ]; then
+    unit=cm-db-backup; [ "$m" = full ] || unit=cm-db-backup-small
+    if [ ! -s "$DIR/last-offsite-$m" ]; then problems+=("no off-site copy of a $m backup yet: journalctl -u $unit")
+    else
+      last=$(cut -d' ' -f1 "$DIR/last-offsite-$m")
+      [ $((now - last)) -le "$max" ] || problems+=("last off-site copy of a $m backup is $(((now - last) / 3600)) h old: journalctl -u $unit")
+    fi
+  fi
 done
 read -r used avail_kb < <(df -P -k /var/lib/postgresql | awk 'NR == 2 { sub("%", "", $5); print $5, $4 }')
 [ "$used" -le 85 ] || problems+=("disk ${used}% full")
@@ -26,7 +36,7 @@ if [ -d /run/systemd/system ]; then
   if systemctl list-unit-files cloudflared-cm-db.service >/dev/null 2>&1; then
     if ! systemctl is-active -q cloudflared-cm-db.service; then problems+=("cloudflared-cm-db is not running")
     # /ready answers 200 only while at least one connection to Cloudflare is up.
-    elif ! curl -fsS -m 5 -o /dev/null http://127.0.0.1:20241/ready; then problems+=("the tunnel has no connection to Cloudflare")
+    elif ! curl -fsS -m 5 -o /dev/null http://127.0.0.1:20299/ready; then problems+=("the tunnel has no connection to Cloudflare")
     fi
   fi
   ! systemctl is-failed -q cm-db-restore-test.service || problems+=("the restore drill failed: journalctl -u cm-db-restore-test")

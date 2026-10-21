@@ -252,10 +252,24 @@ export async function reject(id: number) {
 }
 
 /** Publish every approved tournament again (after a TWIC --reset reload dropped them). */
+/**
+ * Make the site match the uploads table: uploaded events that no approved upload points to come off (after a
+ * restore from a backup older than a rejection), then every approved tournament is published again (after a
+ * TWIC --reset or a restore). Each step is its own transaction.
+ */
 export async function republishAll() {
+  const orphans = await query<{ id: number }>(
+    `SELECT id FROM events e WHERE id >= $1 AND NOT EXISTS (SELECT FROM uploads u WHERE u.event_id = e.id AND u.status = 'approved') ORDER BY id`,
+    [UPLOAD_ID_BASE],
+  );
+  for (const { id } of orphans)
+    await transaction(async (q) => {
+      await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE'); // as in publish(): one writer at a time
+      await unpublish(q, id);
+    });
   const ids = (await query<{ id: number }>(`SELECT id FROM uploads WHERE status = 'approved' ORDER BY id`)).map((r) => r.id);
   for (const id of ids) await approve(id);
-  return ids.length;
+  return { republished: ids.length, removed: orphans.length };
 }
 
 // ---- publishing ------------------------------------------------------------------------------

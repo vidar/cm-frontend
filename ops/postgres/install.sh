@@ -60,20 +60,24 @@ printf 'TAILSCALE_IP=%s\nTAILNET_CLIENTS=%s\n' "$TAILSCALE_IP" "$TAILNET_CLIENTS
 say "1. packages"
 # The cluster the package creates gets this locale (else the shell's, which may be anything).
 install -d -m 755 /etc/postgresql-common/createcluster.d
+# Exactly this version, whatever else may be installed (an older one would not know the builtin locale).
+PGVER=${PGVER:-$PGMAJOR}
 initdb="--locale=C.UTF-8 --encoding=UTF8"
-[ "$PGMAJOR" -ge 17 ] && initdb="--locale-provider=builtin --builtin-locale=C.UTF-8 $initdb"
+[ "${PGVER%%.*}" -ge 17 ] && initdb="--locale-provider=builtin --builtin-locale=C.UTF-8 $initdb"
 printf "# written by ops/postgres/install.sh\ninitdb_options = '%s'\n" "$initdb" > /etc/postgresql-common/createcluster.d/50-chessmoments.conf
-if ! ls /usr/lib/postgresql/*/bin/postgres >/dev/null 2>&1; then
+if [ ! -x "/usr/lib/postgresql/$PGVER/bin/postgres" ]; then
   apt-get update -q
-  LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive apt-get install -y -q "postgresql-$PGMAJOR"
+  LC_ALL=C.UTF-8 DEBIAN_FRONTEND=noninteractive apt-get install -y -q "postgresql-$PGVER"
 fi
-PGVER=${PGVER:-$(ls /usr/lib/postgresql | sort -V | tail -1)}
 CONF=/etc/postgresql/$PGVER/$CLUSTER
 if ! pg_lsclusters -h "$PGVER" "$CLUSTER" >/dev/null 2>&1; then
   LC_ALL=C.UTF-8 pg_createcluster "$PGVER" "$CLUSTER" ${PGPORT:+--port "$PGPORT"}
 fi
 PORT=$(pg_conftool -s "$PGVER" "$CLUSTER" show port)
 echo "PostgreSQL $PGVER, cluster $CLUSTER, port $PORT"
+# The other scripts, the timers and the VPC service (README step 6) expect 5432 (PGPORT only for tests).
+[ "$PORT" = 5432 ] || [ -n "${PGPORT:-}" ] || die "PostgreSQL $PGVER/$CLUSTER listens on port $PORT, because another cluster has 5432 (pg_lsclusters).
+  Stop or move that one, then: pg_conftool $PGVER $CLUSTER set port 5432, and run install.sh again"
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" "$@"; }
 wait_ready() {
   for _ in $(seq 1 30); do pg_isready -q -p "$PORT" && return 0; sleep 1; done

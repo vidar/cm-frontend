@@ -22,10 +22,10 @@ CU-hour), more when crawls push it above the smallest size. Neon's $5 spending a
   `CPUWeight=500` against the engine's 50 and the renders' 20, and the renders are capped so the box can't run out
   of memory); no point-in-time restore (nightly full dumps plus hourly dumps of the tables that can't be rebuilt,
   an off-site copy, and a restore drill every month); security updates are automatic, major upgrades are ours. If
-  the box is lost: a new box with `install.sh`, then `cm-db-restore` of the newest full dump and
-  `cm-db-restore --table` for each of the site's own tables from the newest hourly one (both from the off-site
-  copy). Only if every dump is gone are the TWIC tables rebuilt from source (hours), on an empty database with
-  the site's tables created from `scripts/*.pg.sql`.
+  the box is lost: a new box restored from the off-site copy (newest full dump, then the site's own tables from
+  the newest hourly one, then "Republish all approved"), with new secrets (certificate, Hyperdrive password);
+  the runbook's "Losing the box" has the steps. Only if every dump is gone are the TWIC tables rebuilt from
+  source (hours).
 - **No open port:** Postgres listens on localhost; Hyperdrive comes in through a Cloudflare Tunnel (Workers VPC),
   with TLS and a role that can only do what the site does (`scripts/db/grants.sql`).
 

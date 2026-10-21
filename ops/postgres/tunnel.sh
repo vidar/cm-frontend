@@ -80,13 +80,15 @@ systemctl daemon-reload
 systemctl enable -q cloudflared-cm-db.service
 systemctl restart --no-block cloudflared-cm-db.service
 echo "waiting for the tunnel to connect (up to 60 s)..."
-for _ in $(seq 1 60); do curl -fs -m 2 -o /dev/null http://127.0.0.1:20241/ready && break; sleep 1; done
-if ! curl -fs -m 2 -o /dev/null http://127.0.0.1:20241/ready; then
+for _ in $(seq 1 60); do curl -fs -m 2 -o /dev/null http://127.0.0.1:20299/ready && break; sleep 1; done
+if ! curl -fs -m 2 -o /dev/null http://127.0.0.1:20299/ready; then
   journalctl -u cloudflared-cm-db -n 30 --no-pager || true
   die "the tunnel has no connection yet (its log is above; it keeps trying in the background).
   'Unauthorized' or 'invalid token': run this again with --new-token.
   QUIC or 'timeout' errors: allow outbound UDP 7844 (README.md step 5)."
 fi
-if ps -o args= -C cloudflared | grep -q 'eyJ'; then die "the token is visible in ps: check the unit file"; fi
+# This tunnel's process only (another cloudflared on the box, e.g. for the engine, is not ours to judge).
+pid=$(systemctl show -p MainPID --value cloudflared-cm-db.service)
+if ps -o args= -p "$pid" | grep -q 'eyJ'; then die "the token is visible in ps: check the unit file"; fi
 journalctl -u cloudflared-cm-db -n 20 --no-pager | grep -iE 'registered tunnel connection' || true
 echo "Tunnel connected. The dashboard (VPC > Tunnels > cm-db) should show it Healthy; connections should say protocol=quic."

@@ -107,7 +107,8 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below
   `UPLOAD_ID_BASE`, `--patch` keeps uploaded events, and an uploaded slug TWIC now uses is renamed `<slug>-u<n>`;
-  after a `--reset` reload use "Republish all approved" on the admin page. PGN parsing: `src/lib/pgn.ts`.
+  after a `--reset` reload or a restore use "Republish all approved" on the admin page (it also takes uploaded
+  events no approved upload points to off the site). PGN parsing: `src/lib/pgn.ts`.
 - **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
   and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,
   player pages Person (FIDE profile as `sameAs`), event pages SportsEvent with competitors and rounds
