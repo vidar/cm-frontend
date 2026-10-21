@@ -70,7 +70,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   blocks; deploys overwrite dashboard vars) closes only the database routes with 503 (`src/worker.ts`,
   path decoded as Astro routes it, `src/lib/maintenance.ts`) and makes `query()` refuse to connect; the
   rest of the site stays up. A 500 from a database route (the database failing) becomes a 503 with
-  `Retry-After: 120` in `src/worker.ts`, so search engines retry instead of dropping URLs. POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
+  `Retry-After: 120` in `src/worker.ts`, so search engines retry instead of dropping URLs. `/health/db` (one
+  `SELECT now()`, 200 or 503, never cached, robots Disallow) is what the server's health check fetches.
+  POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
   by /64, `idParam` for int4 ids). Hosting decisions and the Hyperdrive settings
   that matter are in `docs/database-costs.md`.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
@@ -107,8 +109,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below
   `UPLOAD_ID_BASE`, `--patch` keeps uploaded events, and an uploaded slug TWIC now uses is renamed `<slug>-u<n>`;
-  after a `--reset` reload or a restore use "Republish all approved" on the admin page (it also takes uploaded
-  events no approved upload points to off the site). PGN parsing: `src/lib/pgn.ts`.
+  after a `--reset` reload or a restore use "Republish all approved" on the admin page (it publishes again only
+  tournaments whose published games differ from their rounds, so the others keep game ids, analyses and notes,
+  and takes uploaded events off the site that no approved upload of that name points to). PGN parsing: `src/lib/pgn.ts`.
 - **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
   and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,
   player pages Person (FIDE profile as `sameAs`), event pages SportsEvent with competitors and rounds

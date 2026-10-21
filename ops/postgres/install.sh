@@ -77,7 +77,8 @@ PORT=$(pg_conftool -s "$PGVER" "$CLUSTER" show port)
 echo "PostgreSQL $PGVER, cluster $CLUSTER, port $PORT"
 # The other scripts, the timers and the VPC service (README step 6) expect 5432 (PGPORT only for tests).
 [ "$PORT" = 5432 ] || [ -n "${PGPORT:-}" ] || die "PostgreSQL $PGVER/$CLUSTER listens on port $PORT, because another cluster has 5432 (pg_lsclusters).
-  Stop or move that one, then: pg_conftool $PGVER $CLUSTER set port 5432, and run install.sh again"
+  Move that one to another port (pg_conftool <its version> <its name> set port 5433, then restart it) or remove it
+  (pg_dropcluster --stop <its version> <its name>), then: pg_conftool $PGVER $CLUSTER set port 5432, and run install.sh again"
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" "$@"; }
 wait_ready() {
   for _ in $(seq 1 30); do pg_isready -q -p "$PORT" && return 0; sleep 1; done
@@ -182,6 +183,8 @@ done
   # (adm-readable; TWIC data must not end up in bulk anywhere but the database and the private backups).
   echo "ALTER ROLE cm_owner SET log_min_duration_statement = -1;"
   echo "ALTER ROLE cm_owner SET log_min_error_statement = panic;"
+  # (restores run as cm_owner too: a failing COPY's error would quote the row, e-mail addresses and all)
+  echo "ALTER ROLE cm_owner SET log_min_messages = fatal;"
   # Explicit encoding and locale (C.UTF-8 from the builtin provider, as on Neon), whatever the cluster default is.
   provider=; [ "${PGVER%%.*}" -ge 17 ] && provider="LOCALE_PROVIDER builtin BUILTIN_LOCALE ''C.UTF-8'' "
   echo "SELECT 'CREATE DATABASE $DB OWNER cm_owner TEMPLATE template0 ENCODING ''UTF8'' ${provider}LOCALE ''C.UTF-8''' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$DB') \\gexec"
@@ -207,7 +210,7 @@ else
 fi
 
 say "6. backups, health checks, restore drill"
-install -d -m 700 "$BACKUP_DIR"
+[ -d "$BACKUP_DIR" ] || install -d -m 700 "$BACKUP_DIR"   # (a rerun keeps BACKUP_GROUP's access)
 install -m 755 "$HERE/backup.sh" /usr/local/sbin/cm-db-backup
 install -m 755 "$HERE/check.sh" /usr/local/sbin/cm-db-check
 install -m 755 "$HERE/restore.sh" /usr/local/sbin/cm-db-restore

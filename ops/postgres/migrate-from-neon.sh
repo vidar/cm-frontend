@@ -101,21 +101,26 @@ if [ "$VERIFY_ONLY" = 0 ]; then
 
   say "restore as cm_owner"
   # Everything in the dump except the public schema itself (and its comment), which the database has already.
+  # Root reads the dump and connects as cm_owner (peer map): nothing from the dump runs as a superuser.
   list=$dump.list
   pg_restore --list "$dump" | grep -vE '^[0-9]+; [0-9]+ [0-9]+ (SCHEMA - public|COMMENT - SCHEMA public) ' > "$list"
-  chown postgres:postgres "$list"
   # More memory for the index builds while nothing else uses the database; two jobs keep the box responsive.
-  time runuser -u postgres -- env PGOPTIONS='-c maintenance_work_mem=512MB' \
-    pg_restore -d "$DB" --role=cm_owner --no-owner --no-privileges --exit-on-error -j 2 -L "$list" "$dump"
+  time env PGOPTIONS='-c maintenance_work_mem=512MB' \
+    pg_restore -d "$LOCAL" --no-owner --no-privileges --exit-on-error -j 2 -L "$list" "$dump"
 
   say "grants, VACUUM ANALYZE"
-  # On stdin: the postgres user can't read the kit in a home directory (0750).
-  runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -d "$DB" -c "SET ROLE cm_owner" -f - < "$KIT/scripts/db/grants.sql"
+  psql -X -q -v ON_ERROR_STOP=1 -d "$LOCAL" -f "$KIT/scripts/db/grants.sql"
   time runuser -u postgres -- vacuumdb -q -j 2 --analyze -d "$DB"
 fi
 
 say "compare Neon with the local copy"
 bash "$HERE/compare.sh" "$NEON" "$LOCAL"
+
+if [ "$VERIFY_ONLY" = 0 ] && [ -x /usr/local/sbin/cm-db-backup ]; then
+  say "first backups"   # the copy is safe from now on, not only after tonight's timer
+  /usr/local/sbin/cm-db-backup full
+  /usr/local/sbin/cm-db-backup small
+fi
 
 say "next"
 cat <<EOF

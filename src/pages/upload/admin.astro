@@ -40,7 +40,7 @@ if (Astro.request.method === 'POST') {
         message = `Rejected #${id}: removed from the site if it was published. Cached copies of its pages expire within 5 minutes (existing players it was linked to: within a week).`;
       } else if (action === 'republish') {
         const r = await republishAll();
-        message = `Republished ${r.republished} approved tournaments${r.removed ? `; took ${r.removed} no longer approved off the site` : ''}.`;
+        message = `Republished ${r.republished} approved tournaments (${r.unchanged} were up to date)${r.removed ? `; took ${r.removed} no longer approved off the site` : ''}.`;
       }
     }
   } catch (e) {

@@ -28,6 +28,10 @@ out=$DIR/$sub/$DB-$MODE-$stamp.dump
 # A failed dump leaves nothing behind (and leftovers of a killed run go after half a day).
 trap 'rm -f "$out.part"' EXIT
 find "$DIR" -name '*.part' -mmin +720 -delete
+# Never fill the disk Postgres writes to: room for twice the last dump of this kind, plus 2 GB.
+last_size=$(cut -d' ' -f2 "$DIR/last-$MODE" 2>/dev/null || echo 0)
+avail_kb=$(df -P -k "$DIR" | awk 'NR == 2 { print $4 }')
+[ "$avail_kb" -gt $(( last_size * 2 / 1024 + 2097152 )) ] || { echo "not enough disk for a $MODE backup: $((avail_kb / 1024)) MB free" >&2; exit 1; }
 
 # pg_dump runs as postgres (peer authentication); the file is written by root.
 # Behind a long lock (a TWIC --reset), fail after 5 minutes rather than queue the site's reads behind us.
@@ -45,10 +49,13 @@ fi
 size=$(stat -c %s "$out")
 printf '%s %s %s\n' "$(date -u +%s)" "$size" "$out" > "$DIR/last-$MODE"
 # BACKUP_GROUP reads every finished file (also dumps made before it was set); partial .part files stay root's.
+# Emptied again, it reads nothing any more.
 if [ -n "$BACKUP_GROUP" ]; then
   chgrp -R "$BACKUP_GROUP" "$DIR"
   find "$DIR" -type d -exec chmod 750 {} +
   find "$DIR" -type f ! -name '*.part' -exec chmod 640 {} +
+else
+  chgrp -R root "$DIR"
 fi
 echo "backup $MODE ok: $out ($((size / 1024 / 1024)) MB)"
 

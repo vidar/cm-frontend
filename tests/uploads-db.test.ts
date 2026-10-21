@@ -699,32 +699,54 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
   });
 
   describe('republishAll', () => {
-    it('publishes every approved upload again and returns how many', async () => {
+    const content = async (eventId: number) => (await eventGames(eventId)).map((g) => [g.round, g.white_id, g.black_id, g.result, g.date, g.moves]);
+    const players = () => query<PlayerRow>(`SELECT id, name, games FROM players WHERE slug LIKE 'vitest-%' ORDER BY id`);
+
+    it('leaves tournaments that are in sync alone: game ids, analyses and notes stay', async () => {
       const approved = await count(`uploads WHERE status = 'approved'`);
       expect(approved).toBeGreaterThanOrEqual(3);
-      // Game ids may change (the old games are dropped before new ids are picked); their content must not.
-      const content = async (eventId: number) => (await eventGames(eventId)).map((g) => [g.round, g.white_id, g.black_id, g.result, g.date, g.moves]);
-      const before = Object.fromEntries(await Promise.all([uploadA, uploadB, uploadC].map(async (u) => [u.id, await content(u.event_id!)] as const)));
-      const players = await query<PlayerRow>(`SELECT id, name, games FROM players WHERE slug LIKE 'vitest-%' ORDER BY id`);
-      const maxGame = (await one<{ m: number }>('SELECT max(id) AS m FROM games WHERE id >= $1', [UPLOAD_ID_BASE])).m;
+      const ids = Object.fromEntries(await Promise.all([eventA, eventB, eventC].map(async (e) => [e, (await eventGames(e)).map((g) => g.id)] as const)));
+      const analysed = ids[eventA][0];
+      await query(`INSERT INTO game_analysis (game_id, status, depth, evals) VALUES ($1, 'done', 18, '[]') ON CONFLICT DO NOTHING`, [analysed]);
+      const before = await players();
 
-      expect(await republishAll()).toEqual({ republished: approved, removed: 0 });
+      expect(await republishAll()).toEqual({ republished: 0, unchanged: approved, removed: 0 });
 
-      for (const u of [uploadA, uploadB, uploadC]) {
-        const fresh = await getUpload(u.id);
-        expectUpload(fresh);
-        expect(fresh).toMatchObject({ status: 'approved', event_id: u.event_id }); // the event keeps its id and slug
-        expect(await content(u.event_id!)).toEqual(before[u.id]);
-      }
-      // B's and C's games did not hold the highest ids, so after their event's games are dropped they get new ones.
-      expect((await eventGames(eventB))[0].id).toBeGreaterThan(maxGame);
-      expect((await eventGames(eventC))[0].id).toBeGreaterThan(maxGame);
+      for (const e of [eventA, eventB, eventC]) expect((await eventGames(e)).map((g) => g.id)).toEqual(ids[e]);
+      expect(await count('game_analysis WHERE game_id = $1', [analysed])).toBe(1);
+      expect(await players()).toEqual(before);
+      await query('DELETE FROM game_analysis WHERE game_id = $1', [analysed]);
+      await expectConsistent();
+    });
+
+    it('publishes again a tournament whose games differ from its rounds (an older restore), with the same content', async () => {
+      const before = await content(eventB);
+      const players0 = await players();
+      // As after restoring a full backup older than the hourly one: one of B's games is missing.
+      const [gone] = await eventGames(eventB);
+      await query('DELETE FROM games WHERE id = $1', [gone.id]);
+
+      const r = await republishAll();
+      expect(r).toMatchObject({ republished: 1, removed: 0 });
+      const fresh = await getUpload(uploadB.id);
+      expectUpload(fresh);
+      expect(fresh).toMatchObject({ status: 'approved', event_id: eventB }); // the event keeps its id and slug
+      expect(await content(eventB)).toEqual(before);
       expect(await eventById(eventA)).toMatchObject({ slug: `vitest-open-${YEAR}`, games: 5, rounds: 3 });
       expect(await eventById(eventB)).toMatchObject({ slug: `vitest-open-${YEAR}-2`, games: 1 });
       expect(await eventById(eventC)).toMatchObject({ slug: 'vitest-classic-2004', games: 1 });
       // Players are reused (matched by name among uploaded players), with the same counts.
-      expect(await query<PlayerRow>(`SELECT id, name, games FROM players WHERE slug LIKE 'vitest-%' ORDER BY id`)).toEqual(players);
+      expect(await players()).toEqual(players0);
       await expectConsistent();
+    });
+
+    it('drops analyses and notes of uploaded game ids that have no game, so a new game never shows them', async () => {
+      const id = (await one<{ m: number }>('SELECT max(id) + 1000 AS m FROM games WHERE id >= $1', [UPLOAD_ID_BASE])).m;
+      await query(`INSERT INTO game_analysis (game_id, status, depth, evals) VALUES ($1, 'done', 18, '[]')`, [id]);
+      await query(`INSERT INTO game_annotation (game_id, status, summary) VALUES ($1, 'done', 'about another game')`, [id]);
+      await republishAll();
+      expect(await count('game_analysis WHERE game_id = $1', [id])).toBe(0);
+      expect(await count('game_annotation WHERE game_id = $1', [id])).toBe(0);
     });
   });
 

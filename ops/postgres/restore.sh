@@ -4,20 +4,22 @@
 #
 #   sudo cm-db-restore                     # the newest full backup
 #   sudo cm-db-restore <file.dump>         # a given one (full backup or Neon dump)
-#   sudo cm-db-restore --test              # the drill (monthly timer cm-db-restore-test): restore the newest
-#                                          # into cm_games_drill, count, drop it again
+#   sudo cm-db-restore --test [file.dump]  # the drill (monthly timer cm-db-restore-test): restore the newest
+#                                          # (or the given one) into cm_games_drill, count, drop it again
 #   sudo cm-db-restore --table game_annotation [file.dump]
 #                                          # put back rows of one of the site's own tables (game_analysis,
 #                                          # game_annotation, uploads, upload_rounds) from the newest hourly
 #                                          # backup (or the given one) into the LIVE database
-#   sudo cm-db-restore --site-tables [file.dump]
-#                                          # REPLACE all four with the newest hourly backup's (after a full
+#   sudo cm-db-restore --site-tables <file.dump>
+#                                          # REPLACE all four with an hourly backup's rows (after a full
 #                                          # restore, which is older: the hourly backup is the newer truth)
 #
 # A full restore never touches the live database: the script prints row counts next to the live ones and
 # the commands that would swap the two (a deliberate, manual step). --table only adds the rows the live
 # table lacks (a row that exists, perhaps newer, stays as it is) and deletes nothing; --site-tables empties
 # the four tables and loads the backup's rows. Both run in one transaction: on any error nothing changes.
+# Everything that comes out of a dump runs as cm_owner (root's peer map), never as a superuser: a dump can't
+# carry anything that takes over the server.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 GRANTS=$(cd "$HERE/../.." && pwd)/scripts/db/grants.sql        # in the kit
@@ -34,13 +36,15 @@ TABLE=
 SITE=0
 dump=
 case ${1:-} in
-  --test) TEST=1; TARGET=cm_games_drill ;;   # never in the way of a real restore
+  --test) TEST=1; TARGET=cm_games_drill; dump=${2:-} ;;   # never in the way of a real restore
   --table) TABLE=${2:?--table needs a table name}; dump=${3:-} ;;
   --site-tables) SITE=1; dump=${2:-} ;;
   '') ;;
   *) dump=$1 ;;
 esac
 newest_small() { ls -1t "$DIR"/small/*.dump 2>/dev/null | head -1 || true; }
+# psql as cm_owner: root over the socket, peer map "cm" (pg_hba.conf: cm_games, cm_games_restore, cm_games_drill).
+as_owner() { local db=$1; shift; psql -X -q -v ON_ERROR_STOP=1 -d "dbname=$db user=cm_owner" "$@"; }
 
 if [ -n "$TABLE" ]; then
   case $TABLE in game_analysis|game_annotation|uploads|upload_rounds) ;; *) die "--table: one of game_analysis, game_annotation, uploads, upload_rounds" ;; esac
@@ -57,22 +61,22 @@ if [ -n "$TABLE" ]; then
   esac
   # Root reads the dump; its rows go into a temporary copy of the table, then only the missing ones in.
   out=$({
-    echo "SET ROLE cm_owner;"
     echo "CREATE TEMP TABLE restore_rows (LIKE public.$TABLE);"
     pg_restore --data-only -t "$TABLE" -f - "$dump" \
       | awk -v t="COPY public.$TABLE " '!done && index($0, t) == 1 { $0 = "COPY pg_temp.restore_rows " substr($0, length(t) + 1); done = 1 } { print }'
     echo "WITH added AS (INSERT INTO public.$TABLE SELECT r.* FROM pg_temp.restore_rows r $where ON CONFLICT DO NOTHING RETURNING 1)"
     echo "SELECT (SELECT count(*) FROM added) || ' rows added, ' || (SELECT count(*) FROM pg_temp.restore_rows) || ' in the backup';"
     [ "$TABLE" != uploads ] || echo "SELECT setval('public.uploads_id_seq', greatest((SELECT max(id) FROM public.uploads), (SELECT last_value FROM public.uploads_id_seq)));"
-  } | runuser -u postgres -- psql -X -q -At -v ON_ERROR_STOP=1 --single-transaction -d "$DB") \
-    || die "nothing was changed (the transaction rolled back)"
+  } | as_owner "$DB" -At --single-transaction) || die "nothing was changed (the transaction rolled back)"
   grep -v '^[0-9]*$' <<< "$out" || true
   exit 0
 fi
 
 if [ "$SITE" = 1 ]; then
-  [ -n "$dump" ] || dump=$(newest_small)
-  [ -s "$dump" ] || die "no backup found (looked in $DIR/small)"
+  # No default: after a restore the newest hourly backup may already be one of the restored (older) data.
+  [ -n "$dump" ] || die "name the hourly backup (the newest one from before the restore), e.g.:
+$(ls -1t "$DIR"/small/*.dump 2>/dev/null | head -5 | sed 's/^/  /')"
+  [ -s "$dump" ] || die "no backup at $dump"
   pg_restore -f /dev/null "$dump" || die "$dump is not a readable pg_dump archive"
   toc=$(pg_restore --list "$dump")
   ! grep -qE ' TABLE DATA public games ' <<< "$toc" || die "$dump is a full backup: --site-tables takes an hourly one ($DIR/small)"
@@ -86,17 +90,19 @@ if [ "$SITE" = 1 ]; then
   { grep -E ' TABLE DATA public uploads ' <<< "$toc"
     grep -E ' (TABLE DATA|SEQUENCE SET) public ' <<< "$toc" | grep -vE ' TABLE DATA public uploads ' || true; } > "$order"
   out=$({
-    echo "SET ROLE cm_owner;"
     echo "TRUNCATE game_analysis, game_annotation, upload_rounds, uploads;"
     pg_restore --data-only -L "$order" -f - "$dump"
-    # (pg_restore's output empties search_path: qualified names from here on)
+    # (pg_restore's output empties search_path: qualified names from here on.) Analyses and notes of games
+    # this database doesn't have (published after the full backup) go: a game given that id later must not
+    # show them.
+    echo "DELETE FROM public.game_analysis a WHERE NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
+    echo "DELETE FROM public.game_annotation a WHERE NOT EXISTS (SELECT FROM public.games g WHERE g.id = a.game_id);"
     echo "SELECT (SELECT count(*) FROM public.game_analysis) || ' analyses, ' || (SELECT count(*) FROM public.game_annotation) || ' notes, '"
     echo "  || (SELECT count(*) FROM public.uploads) || ' uploads, ' || (SELECT count(*) FROM public.upload_rounds) || ' upload rounds now';"
-  } | runuser -u postgres -- psql -X -q -At -v ON_ERROR_STOP=1 --single-transaction -d "$DB") \
-    || die "nothing was changed (the transaction rolled back)"
+  } | as_owner "$DB" -At --single-transaction) || die "nothing was changed (the transaction rolled back)"
   grep -v '^[0-9]*$' <<< "$out" || true
-  echo "Next, with the database routes open (MAINTENANCE \"0\"): \"Republish all approved\" on /upload/admin/ makes the"
-  echo "uploaded tournaments on the site match (it also takes down ones rejected since the full backup)."
+  echo "Next, with the database routes open (MAINTENANCE \"0\"): \"Republish all approved\" on /upload/admin/. It publishes"
+  echo "again the uploaded tournaments that changed since the full backup and takes down the ones rejected since."
   exit 0
 fi
 [ -n "$dump" ] || dump=$(ls -1t "$DIR"/daily/*.dump 2>/dev/null | head -1 || true)
@@ -106,6 +112,9 @@ echo "restoring $dump into $TARGET"
 
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 "$@"; }
 if [ "$TEST" = 1 ]; then
+  # One drill at a time (the timer and a hand-started one would drop each other's copy).
+  exec 9> /run/cm-db-restore-test.lock
+  flock -n 9 || die "a restore drill is running already"
   # The drill runs gently (no parallel index builds or scans next to the site's queries), and a copy an
   # interrupted drill left behind goes first.
   export PGOPTIONS='-c max_parallel_maintenance_workers=0 -c max_parallel_workers_per_gather=0'
@@ -136,14 +145,14 @@ psql_su -d "$TARGET" -c "REVOKE ALL ON DATABASE $TARGET FROM PUBLIC" -c "ALTER S
 
 # Everything except the public schema itself (a Neon dump made with -n public creates it; it exists).
 pg_restore --list "$dump" | grep -vE '^[0-9]+; [0-9]+ [0-9]+ (SCHEMA - public|COMMENT - SCHEMA public) ' > "$list"
-chmod 644 "$list"
-# pg_restore runs as postgres; root opens the private dump and hands it over on stdin (no -j with stdin).
-runuser -u postgres -- pg_restore -d "$TARGET" --role=cm_owner --no-owner --no-privileges --exit-on-error -L "$list" < "$dump"
-psql_su -d "$TARGET" -c "SET ROLE cm_owner" -f - < "$GRANTS"   # on stdin: postgres may not read the kit
+# As cm_owner (root reads the dump); two jobs for a real restore, one for the drill.
+jobs=(-j 2); [ "$TEST" = 0 ] || jobs=()
+pg_restore -d "dbname=$TARGET user=cm_owner" --no-owner --no-privileges --exit-on-error "${jobs[@]}" -L "$list" "$dump"
+as_owner "$TARGET" -f "$GRANTS"
 runuser -u postgres -- vacuumdb -q --analyze -d "$TARGET"
 
-count() { # exact row counts per table
-  psql_su -d "$1" -At -c "SELECT format('SELECT %L || '' '' || count(*) FROM public.%I;', tablename, tablename) FROM pg_tables WHERE schemaname = 'public' ORDER BY 1" | psql_su -d "$1" -At
+count() { # exact row counts per table, as cm_owner
+  as_owner "$1" -At -c "SELECT format('SELECT %L || '' '' || count(*) FROM public.%I;', tablename, tablename) FROM pg_tables WHERE schemaname = 'public' ORDER BY 1" | as_owner "$1" -At
 }
 estimate() { # the planner's row estimates (no scan of the live tables; -1 = never analysed)
   psql_su -d "$1" -At -F ' ' -c "SELECT relname, reltuples::bigint FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relkind = 'r'"
@@ -161,18 +170,26 @@ if [ "$TEST" = 1 ]; then
 fi
 echo "rows (restored | live):"
 join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(count "$DB" 2>/dev/null | sort) | awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }'
+small=$(newest_small)
 cat <<EOF
 
-$TARGET is ready. To make it the live database: first put the site in maintenance (MAINTENANCE "1" in both
-vars blocks of wrangler.jsonc, deployed), so visitors see a notice instead of errors. Then, as root (it stops
-new connections to the live database, ends the open ones and swaps the names; any error stops it):
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS false" \\
-    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('$DB', '$TARGET') AND pid <> pg_backend_pid()" \\
-    -c "ALTER DATABASE $DB RENAME TO ${DB}_old" -c "ALTER DATABASE $TARGET RENAME TO $DB" -c "GRANT CONNECT ON DATABASE $DB TO cm_web, cm_owner"
-If it stops with an error, undo what it did (skip the first command when there is no ${DB}_old yet):
-  sudo -u postgres psql -c "ALTER DATABASE ${DB}_old RENAME TO $DB"
-  sudo -u postgres psql -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS true"
-Then MAINTENANCE "0" again. Keep ${DB}_old until the site is checked, then:
-  sudo -u postgres dropdb ${DB}_old
+$TARGET is ready. To make it the live database, in this order:
+1. Put the site in maintenance (MAINTENANCE "1" in both vars blocks of wrangler.jsonc, deployed), so visitors
+   see a notice instead of errors, and pause the backups, so none of them saves the restored (older) data as
+   the newest:
+     sudo systemctl stop cm-db-backup.timer cm-db-backup-small.timer
+2. Swap the databases (it stops new connections to the live one, ends the open ones and swaps the names; any
+   error stops it):
+     sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS false" \\
+       -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('$DB', '$TARGET') AND pid <> pg_backend_pid()" \\
+       -c "ALTER DATABASE $DB RENAME TO ${DB}_old" -c "ALTER DATABASE $TARGET RENAME TO $DB" -c "GRANT CONNECT ON DATABASE $DB TO cm_web, cm_owner"
+   If it stops with an error, undo what it did (skip the first command when there is no ${DB}_old yet):
+     sudo -u postgres psql -c "ALTER DATABASE ${DB}_old RENAME TO $DB"
+     sudo -u postgres psql -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS true"
+3. The site's own tables from the newest hourly backup (newer than the full one):
+     sudo cm-db-restore --site-tables ${small:-<the newest file in $DIR/small/>}
+4. Backups on again: sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer
+5. MAINTENANCE "0", then "Republish all approved" on /upload/admin/, then purge the games-db cache tag.
+Keep ${DB}_old until the site is checked, then: sudo -u postgres dropdb ${DB}_old
 To throw the restore away instead: sudo -u postgres dropdb $TARGET
 EOF

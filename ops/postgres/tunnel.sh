@@ -15,6 +15,7 @@ TOKEN=/etc/cloudflared/cm-db.token
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
 NEW=0
+CHANGED=0   # the token or the unit: restart (else a rerun leaves a running tunnel alone)
 case ${1:-} in --new-token) NEW=1 ;; '') ;; *) echo "usage: $0 [--new-token]" >&2; exit 2 ;; esac
 # A tunnel token is base64 of JSON with the account (a), tunnel (t) and secret (s). Read from the file,
 # never from a command line.
@@ -31,15 +32,20 @@ PY
 }
 
 # 1. cloudflared from Cloudflare's apt repository ("any" suite: all Debian-based releases), kept up to
-#    date by unattended-upgrades (Cloudflare supports releases from the last year).
-if ! command -v cloudflared >/dev/null; then
-  install -d -m 755 /usr/share/keyrings
-  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
-  echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+#    date by unattended-upgrades (Cloudflare supports releases from the last year). The unit runs
+#    /usr/bin/cloudflared from that package; another copy elsewhere on PATH doesn't count.
+if ! dpkg-query -W -f='${Status}' cloudflared 2>/dev/null | grep -q 'install ok installed'; then
+  # The repository may be set up already (an earlier cloudflared): a second entry with another key breaks apt.
+  if ! grep -rqs 'pkg.cloudflare.com/cloudflared' /etc/apt/sources.list /etc/apt/sources.list.d/; then
+    install -d -m 755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+  fi
   apt-get update -q
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q cloudflared
 fi
-ver=$(cloudflared --version | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1)
+[ -x /usr/bin/cloudflared ] || die "/usr/bin/cloudflared is missing although the cloudflared package is installed"
+ver=$(/usr/bin/cloudflared --version | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1)
 [ "$(printf '%s\n2025.7.0\n' "$ver" | sort -V | head -1)" = 2025.7.0 ] || die "cloudflared $ver is too old (Workers VPC needs 2025.7.0 or later)"
 echo "cloudflared $ver"
 
@@ -52,6 +58,7 @@ if [ "$NEW" = 1 ] || [ ! -s "$TOKEN" ]; then
   # Keep only the eyJ... word, wherever it is in what was pasted.
   (umask 077; tr -s '[:space:]' '\n' | grep -m1 -E '^eyJ[A-Za-z0-9+/=_-]+$' > "$TOKEN.new" || true)
   if ! valid_token "$TOKEN.new"; then rm -f "$TOKEN.new"; die "that is not a tunnel token (the eyJ... value in the dashboard's install command); run this again"; fi
+  cmp -s "$TOKEN.new" "$TOKEN" || CHANGED=1
   mv "$TOKEN.new" "$TOKEN"
 fi
 chmod 600 "$TOKEN"
@@ -63,7 +70,8 @@ cat > /usr/local/sbin/cm-db-tunnel-refresh <<'SH'
 # Installed by ops/postgres/tunnel.sh; run by apt (/etc/apt/apt.conf.d/52cloudflared-unattended).
 pid=$(systemctl show -p MainPID --value cloudflared-cm-db.service 2>/dev/null)
 [ -n "$pid" ] && [ "$pid" != 0 ] || exit 0
-case $(readlink "/proc/$pid/exe") in *"(deleted)") systemctl try-restart cloudflared-cm-db.service ;; esac
+# --no-block: the unit counts as started once it has a connection, and apt must not wait for that.
+case $(readlink "/proc/$pid/exe") in *"(deleted)") systemctl try-restart --no-block cloudflared-cm-db.service ;; esac
 exit 0
 SH
 chmod 755 /usr/local/sbin/cm-db-tunnel-refresh
@@ -75,10 +83,19 @@ APT
 
 # 4. The service. It counts as started once it has a connection; don't wait for that (if QUIC is blocked
 #    it would wait for ever): poll the readiness endpoint instead.
+cmp -s "$HERE/systemd/cloudflared-cm-db.service" /etc/systemd/system/cloudflared-cm-db.service || CHANGED=1
 install -m 644 "$HERE/systemd/cloudflared-cm-db.service" /etc/systemd/system/cloudflared-cm-db.service
 systemctl daemon-reload
 systemctl enable -q cloudflared-cm-db.service
-systemctl restart --no-block cloudflared-cm-db.service
+old=$(systemctl show -p MainPID --value cloudflared-cm-db.service)
+if [ "$CHANGED" = 1 ] || ! systemctl is-active -q cloudflared-cm-db.service; then
+  systemctl restart --no-block cloudflared-cm-db.service
+  # Until the old process is gone, /ready below would still be its answer.
+  for _ in $(seq 1 30); do
+    [ "$old" = 0 ] || [ "$(systemctl show -p MainPID --value cloudflared-cm-db.service)" != "$old" ] && break
+    sleep 1
+  done
+fi
 echo "waiting for the tunnel to connect (up to 60 s)..."
 for _ in $(seq 1 60); do curl -fs -m 2 -o /dev/null http://127.0.0.1:20299/ready && break; sleep 1; done
 if ! curl -fs -m 2 -o /dev/null http://127.0.0.1:20299/ready; then
@@ -89,6 +106,7 @@ if ! curl -fs -m 2 -o /dev/null http://127.0.0.1:20299/ready; then
 fi
 # This tunnel's process only (another cloudflared on the box, e.g. for the engine, is not ours to judge).
 pid=$(systemctl show -p MainPID --value cloudflared-cm-db.service)
+[ "${pid:-0}" -gt 0 ] || die "cloudflared-cm-db has no running process: journalctl -u cloudflared-cm-db -n 50"
 if ps -o args= -p "$pid" | grep -q 'eyJ'; then die "the token is visible in ps: check the unit file"; fi
 journalctl -u cloudflared-cm-db -n 20 --no-pager | grep -iE 'registered tunnel connection' || true
 echo "Tunnel connected. The dashboard (VPC > Tunnels > cm-db) should show it Healthy; connections should say protocol=quic."

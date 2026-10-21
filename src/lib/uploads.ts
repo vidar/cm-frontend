@@ -231,10 +231,10 @@ export async function listUploads() {
   );
 }
 
-export async function approve(id: number) {
+export async function approve(id: number, onlyIfApproved = false) {
   return transaction(async (q) => {
     const [u] = await q<Upload>(`SELECT ${COLS} FROM uploads WHERE id = $1 FOR UPDATE`, [id]);
-    if (!u) return null;
+    if (!u || (onlyIfApproved && u.status !== 'approved')) return null; // republishAll: rejected meanwhile
     const rows = await q<{ round: number }>('SELECT round FROM upload_rounds WHERE upload_id = $1', [id]);
     await q(`UPDATE uploads SET status = 'approved', updated_at = now() WHERE id = $1`, [id]);
     return publish(q, { ...u, status: 'approved' }, rows.map((r) => r.round), true);
@@ -246,20 +246,29 @@ export async function reject(id: number) {
   await transaction(async (q) => {
     const [u] = await q<Upload>(`SELECT ${COLS} FROM uploads WHERE id = $1 FOR UPDATE`, [id]);
     if (!u) return;
-    if (u.event_id) await unpublish(q, u.event_id);
+    if (u.event_id) {
+      await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE'); // one writer at a time, as in publish()
+      await unpublish(q, u.event_id);
+    }
     await q(`UPDATE uploads SET status = 'rejected', event_id = NULL, updated_at = now() WHERE id = $1`, [id]);
   });
 }
 
-/** Publish every approved tournament again (after a TWIC --reset reload dropped them). */
 /**
- * Make the site match the uploads table: uploaded events that no approved upload points to come off (after a
- * restore from a backup older than a rejection), then every approved tournament is published again (after a
- * TWIC --reset or a restore). Each step is its own transaction.
+ * Make the site match the uploads table, after a TWIC --reset or a restore (full backup, then the site's tables
+ * from a newer hourly one). Each step is its own transaction:
+ * 1. uploaded events that no approved upload of the same name points to come off (rejected after the full
+ *    backup, or another tournament's event that a later one reused the id of);
+ * 2. analyses and notes of uploaded game ids without a game go (left by the hourly backup), so a game that
+ *    gets such an id next is not shown someone else's;
+ * 3. approved tournaments whose published games differ from their rounds (or have no event) are published
+ *    again; the others keep their game ids, URLs, analyses and notes.
+ * The reads carry now(), so Hyperdrive never answers them from its cache.
  */
 export async function republishAll() {
   const orphans = await query<{ id: number }>(
-    `SELECT id FROM events e WHERE id >= $1 AND NOT EXISTS (SELECT FROM uploads u WHERE u.event_id = e.id AND u.status = 'approved') ORDER BY id`,
+    `SELECT id, now() FROM events e WHERE id >= $1
+       AND NOT EXISTS (SELECT FROM uploads u WHERE u.event_id = e.id AND u.status = 'approved' AND u.name = e.name) ORDER BY id`,
     [UPLOAD_ID_BASE],
   );
   for (const { id } of orphans)
@@ -267,9 +276,27 @@ export async function republishAll() {
       await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE'); // as in publish(): one writer at a time
       await unpublish(q, id);
     });
-  const ids = (await query<{ id: number }>(`SELECT id FROM uploads WHERE status = 'approved' ORDER BY id`)).map((r) => r.id);
-  for (const id of ids) await approve(id);
-  return { republished: ids.length, removed: orphans.length };
+  await transaction(async (q) => {
+    await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE');
+    for (const t of ['game_analysis', 'game_annotation'])
+      await q(`DELETE FROM ${t} a WHERE game_id >= $1 AND NOT EXISTS (SELECT FROM games g WHERE g.id = a.game_id)`, [UPLOAD_ID_BASE]);
+  });
+  // In sync: the event exists under the upload's name, and every round has the same games (tag, result, moves).
+  const uploads = await query<{ id: number; in_sync: boolean }>(
+    `WITH pub AS (
+       SELECT event_id, md5(string_agg(concat_ws('|', round, result, moves), E'\n' ORDER BY round, result, moves)) AS h
+       FROM games WHERE event_id >= $1 GROUP BY event_id),
+     up AS (
+       SELECT r.upload_id, md5(string_agg(concat_ws('|', g->>'round', g->>'result', g->>'moves'), E'\n' ORDER BY g->>'round', g->>'result', g->>'moves')) AS h
+       FROM upload_rounds r CROSS JOIN json_array_elements(r.games::json) g GROUP BY r.upload_id)
+     SELECT u.id, (e.id IS NOT NULL AND e.name = u.name AND pub.h IS NOT DISTINCT FROM up.h) AS in_sync, now()
+     FROM uploads u LEFT JOIN events e ON e.id = u.event_id LEFT JOIN pub ON pub.event_id = u.event_id LEFT JOIN up ON up.upload_id = u.id
+     WHERE u.status = 'approved' ORDER BY u.id`,
+    [UPLOAD_ID_BASE],
+  );
+  let republished = 0;
+  for (const u of uploads) if (!u.in_sync && (await approve(u.id, true)) !== null) republished++;
+  return { republished, unchanged: uploads.filter((u) => u.in_sync).length, removed: orphans.length };
 }
 
 // ---- publishing ------------------------------------------------------------------------------

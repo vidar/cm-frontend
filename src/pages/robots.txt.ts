@@ -20,6 +20,7 @@ export const GET: APIRoute = ({ site }) => {
     'Disallow: /games/analysis/',
     'Disallow: /games/annotation/',
     'Disallow: /upload/',
+    'Disallow: /health/',
     '# Variants that only repeat what the sitemaps list (each costs a database query).',
     'Disallow: /players/*?',
     'Disallow: /games/search/?',

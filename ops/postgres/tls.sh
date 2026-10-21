@@ -16,7 +16,7 @@ NAME=${TLS_NAME:-pg.chessmoments.com}
 CLUSTER=${CLUSTER:-main}
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
-PGVER=${PGVER:-$(ls /usr/lib/postgresql | sort -V | tail -1)}
+PGVER=${PGVER:-${PGMAJOR:-18}}   # the version install.sh set up
 CONF=/etc/postgresql/$PGVER/$CLUSTER
 [ -d "$CONF" ] || die "no cluster at $CONF (run install.sh first)"
 KEY=$CONF/cm-origin.key CRT=$CONF/cm-origin.crt CSR=$CONF/cm-origin.csr

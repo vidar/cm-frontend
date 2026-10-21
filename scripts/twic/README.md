@@ -46,8 +46,8 @@ local database none.
   `wrangler.jsonc`; only the database routes close). A reset is only needed when game ids shift, so afterwards
   empty the analyses and notes, which belong to the old ids
   (`sudo -u postgres psql -d cm_games -c 'SET ROLE cm_owner' -c 'TRUNCATE game_analysis, game_annotation'`),
-  set `MAINTENANCE` back to "0" (the upload pages are database routes too), then use "Republish all approved"
-  on `/upload/admin/` and purge the `games-db` tag.
+  purge the `games-db` cache tag (pages of the old ids must not come back), set `MAINTENANCE` back to "0" (the
+  upload pages are database routes too), then use "Republish all approved" on `/upload/admin/`.
 - **Not during the nightly backup** (03:20 to about 03:40 UTC): a `--reset` or `--patch` waits for the dump's
   locks, and the site's reads would queue behind it.
 - **`--patch`** swaps in one transaction; while it runs, publishing an uploaded round waits for it and gives
