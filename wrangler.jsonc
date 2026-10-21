@@ -11,13 +11,14 @@
 		"directory": "./dist",
 		"binding": "ASSETS"
 	},
-	// TWIC games database through Hyperdrive (ops/postgres/README.md; until the move from Neon is done, this
-	// id is the Neon config "cm-games"). `localConnectionString` is only used by `astro dev` / `wrangler dev`.
-	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
+	// TWIC games database through Hyperdrive: config "cm-games-hetz", PostgreSQL on hetz-stock over Workers VPC
+	// (ops/postgres/README.md; Neon's old config "cm-games" was ff39804dfb964a2ca13a9e1d7ec27cbe, for a rollback).
+	// `localConnectionString` is only used by `astro dev` / `wrangler dev`.
+	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2a7346a0636a4048877e14ab01118c79", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
 	// Engine analysis (src/lib/analysis.ts): Stockfish service on the VPS; STOCKFISH_TOKEN is a secret.
 	// MAINTENANCE "1" closes the database routes (src/worker.ts). Change it here (and in previews), not in
 	// the dashboard: every deploy, including each CMS commit, replaces dashboard vars with these.
-	"vars": { "ENGINE_URL": "https://engine.chessmoments.com", "MAINTENANCE": "1" },
+	"vars": { "ENGINE_URL": "https://engine.chessmoments.com", "MAINTENANCE": "0" },
 	// Rate limits: analysis/AI-note requests per visitor, and crawler pacing on database pages
 	// (src/middleware.ts): uncached pages a minute per search engine, per AI assistant, per other bot.
 	"ratelimits": [
@@ -28,8 +29,8 @@
 	],
 	"previews": {
 		// Bindings aren't inherited by previews; they read the same games database.
-		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
-		"vars": { "ENGINE_URL": "https://engine.chessmoments.com", "MAINTENANCE": "1" },
+		"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "2a7346a0636a4048877e14ab01118c79", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
+		"vars": { "ENGINE_URL": "https://engine.chessmoments.com", "MAINTENANCE": "0" },
 		"ratelimits": [
 			{ "name": "ANALYSIS_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
 			{ "name": "CRAWL_SEARCH", "namespace_id": "1002", "simple": { "limit": 600, "period": 60 } },
@@ -37,9 +38,10 @@
 			{ "name": "CRAWL_BOT", "namespace_id": "1004", "simple": { "limit": 20, "period": 60 } }
 		]
 	},
-	// Run the Worker next to Neon (Frankfurt): database pages make several sequential queries, so one
-	// long hop from the visitor beats several long hops to the database. Static assets are unaffected.
-	"placement": { "region": "aws:eu-central-1" },
+	// Run the Worker next to the database (hetz-stock is in Helsinki; Finland is the nearest region): a
+	// database page's queries then make short hops, and only the answer travels to the visitor. Static assets
+	// are unaffected. (It was aws:eu-central-1, Frankfurt, next to Neon.)
+	"placement": { "region": "gcp:europe-north1" },
 	"observability": {
 		"enabled": true
 	}

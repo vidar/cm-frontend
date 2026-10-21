@@ -41,9 +41,9 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   set up by `ops/postgres/` (its README is the runbook: roles, tunnel, backups, restore), reached only via
   Hyperdrive (binding `HYPERDRIVE`, also declared under `previews`) over a Cloudflare Tunnel (Workers VPC);
   it listens on localhost only. The site's role `cm_web` has exactly the rights in `scripts/db/grants.sql`
-  (add a line there when code starts writing a table); `cm_owner` owns everything. Until the move from Neon
-  is finished (`wrangler.jsonc` still names the Neon config `ff39804d…`), production reads Neon. Hyperdrive
-  has no advisory locks or session state: serialise with `LOCK TABLE` inside a transaction. Loaded offline by
+  (add a line there when code starts writing a table); `cm_owner` owns everything. The Hyperdrive config is
+  `cm-games-hetz` (`2a7346a0…`; Neon's old one, `ff39804d…`, stays only for a rollback until Neon is retired,
+  runbook step 11). Hyperdrive has no advisory locks or session state: serialise with `LOCK TABLE` inside a transaction. Loaded offline by
   `scripts/twic/` (see its README) from The Week in Chess, used with Mark Crowther's permission for
   non-commercial use: keep the TWIC credit + issue link on game pages, offer no bulk export/API of
   games, and tell the user if the site becomes commercial (paid tier). `src/lib/games.ts` must only

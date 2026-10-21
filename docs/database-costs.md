@@ -1,8 +1,8 @@
 # Hosting the games database
 
-**Status (2026-10-21):** moving from Neon to PostgreSQL on the Hetzner server hetz-stock. The runbook and every
-script are in [`ops/postgres/`](../ops/postgres/README.md). Until `wrangler.jsonc` names the new Hyperdrive
-config, production still reads Neon (and is in maintenance mode, so it reads nothing).
+**Status (2026-10-21):** the site reads PostgreSQL on the Hetzner server hetz-stock (Hyperdrive config
+`cm-games-hetz`), set up and migrated from Neon with [`ops/postgres/`](../ops/postgres/README.md). Neon stays,
+untouched, for a rollback until it is retired (runbook steps 9–11).
 
 ## Why not Neon
 
