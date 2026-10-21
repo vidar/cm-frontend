@@ -779,6 +779,24 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       expect(list.find((u) => u.id === uploadC.id)).toMatchObject({ status: 'approved', event_id: eventC, rounds: 1, games: 1 });
     });
   });
+
+  // Uploaded ids come from one counter for events, players and games, so each table's are sparse.
+  describe('sitemaps', () => {
+    it('list exactly the files that hold uploaded rows, and each of them answers', async () => {
+      const { GET } = await import('../src/pages/sitemaps/[name].xml');
+      const get = (name: string) => (GET as unknown as (c: { params: { name: string } }) => Promise<Response>)({ params: { name } });
+      const SIZE = { events: 2500, players: 50_000, games: 50_000 } as const;
+      const index = await (await get('index')).text();
+      for (const kind of ['events', 'players', 'games'] as const) {
+        const first = Math.floor((UPLOAD_ID_BASE - 1) / SIZE[kind]) + 1; // the file of UPLOAD_ID_BASE
+        const listed = [...index.matchAll(new RegExp(`/sitemaps/${kind}-(\\d+)\\.xml`, 'g'))].map((m) => Number(m[1])).filter((n) => n >= first);
+        const held = (await query<{ n: number }>(`SELECT DISTINCT (id - 1) / ${SIZE[kind]} + 1 AS n FROM ${kind} WHERE id >= $1 ORDER BY 1`, [UPLOAD_ID_BASE])).map((r) => Number(r.n));
+        expect(held.length).toBeGreaterThan(0);
+        expect(listed).toEqual(held);
+        for (const n of listed) expect((await get(`${kind}-${n}`)).status).toBe(200);
+      }
+    });
+  });
   // Fixes from the security/correctness review (docs in src/lib/uploads.ts).
   describe('review fixes', () => {
     const newUpload = async (name: string, format = 'swiss') => {

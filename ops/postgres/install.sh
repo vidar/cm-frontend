@@ -79,11 +79,23 @@ fi
 PORT=$(pg_conftool -s "$PGVER" "$CLUSTER" show port)
 echo "PostgreSQL $PGVER, cluster $CLUSTER, port $PORT"
 # The other scripts, the timers and the VPC service (README step 6) expect 5432 (PGPORT only for tests).
-[ "$PORT" = 5432 ] || [ -n "${PGPORT:-}" ] || die "PostgreSQL $PGVER/$CLUSTER got port $PORT, because another cluster has 5432 (pg_lsclusters).
-  Remove that one (pg_dropcluster --stop <its version> <its name>), or swap the ports, $PGVER/$CLUSTER stopped first:
+if [ "$PORT" != 5432 ] && [ -z "${PGPORT:-}" ]; then
+  other=$(pg_lsclusters -h | awk '$3 == 5432 { print $1 " " $2; exit }')
+  # A new major version next to the live one: the package made an empty cluster (README "Updates").
+  if [ -n "$other" ] && runuser -u postgres -- psql -X -At -p 5432 -d postgres -c "SELECT 1 FROM pg_database WHERE datname = '$DB'" 2>/dev/null | grep -qx 1; then
+    die "PostgreSQL $PGVER/$CLUSTER got port $PORT: the live database is in ${other/ //} on 5432. To move it to $PGVER
+  (README \"Updates\", in maintenance), remove the cluster the postgresql-$PGVER package made, if it is empty (it has no $DB):
+    sudo pg_dropcluster --stop $PGVER $CLUSTER
+    sudo pg_upgradecluster --no-start ${other}
+  then run install.sh again (sudo PGMAJOR=$PGVER bash $HERE/install.sh). Never drop ${other/ //}: it holds $DB."
+  fi
+  die "PostgreSQL $PGVER/$CLUSTER got port $PORT, because ${other:+${other/ //}, }another cluster, has 5432 (pg_lsclusters).
+  If that one holds nothing you need, remove it (pg_dropcluster --stop <its version> <its name>); or swap the ports,
+  $PGVER/$CLUSTER stopped first:
     systemctl stop postgresql@$PGVER-$CLUSTER; pg_conftool $PGVER $CLUSTER set port 5432
     pg_conftool <its version> <its name> set port $PORT; systemctl restart postgresql@<its version>-<its name>
   (and point what uses it at port $PORT). Then run install.sh again."
+fi
 psql_su() { runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" "$@"; }
 wait_ready() {
   # (as postgres, which may log in: any other user would leave a FATAL line in the log)
@@ -213,12 +225,13 @@ say "5. schema updates and grants"
 migrated=0
 if [ "$(psql_su -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('games', 'uploads', 'game_analysis')")" = 3 ]; then
   # As cm_owner (root's peer map), which owns everything; root reads the files (the kit may be in a 0750 home).
-  # Without the "already exists, skipping" notices of a rerun.
+  # Without the "already exists, skipping" notices of a rerun. A table someone holds (the nightly dump, an
+  # import) is not waited for: a queued schema change would hold up the site's queries behind it.
   migrated=1
-  for f in analysis annotation uploads; do
-    PGOPTIONS='-c client_min_messages=warning' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/$f.pg.sql"
+  for f in scripts/analysis.pg.sql scripts/annotation.pg.sql scripts/uploads.pg.sql scripts/db/grants.sql; do
+    PGOPTIONS='-c client_min_messages=warning -c lock_timeout=10s' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/$f" \
+      || die "$f: a table is busy (the nightly backup from 03:20 UTC, an import or a restore holds it). Run install.sh again in a few minutes."
   done
-  PGOPTIONS='-c client_min_messages=warning' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/scripts/db/grants.sql"
   echo "applied scripts/analysis.pg.sql, annotation.pg.sql, uploads.pg.sql and scripts/db/grants.sql"
 else
   echo "no tables yet: migrate-from-neon.sh applies them after the restore"

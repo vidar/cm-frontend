@@ -7,7 +7,8 @@ import { UPLOAD_ID_BASE } from '../../lib/uploads';
 //   /sitemaps/events-N.xml    events and their round pages, by id, 2,500 events per file
 //   /sitemaps/players-N.xml   players, by id, 50,000 per file
 //   /sitemaps/games-N.xml     games, by id, 50,000 per file
-// TWIC ids start at 1 and uploaded ids at UPLOAD_ID_BASE, so the index lists the files of both ranges.
+// TWIC ids start at 1 and are dense; uploaded ids (from UPLOAD_ID_BASE) come from one counter shared by
+// events, players and games, so each table's are sparse and the index lists only the files that hold some.
 export const prerender = false;
 
 const CHUNK = 50_000;
@@ -31,10 +32,10 @@ const w3cDate = (d: string | null) => (d && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(d) 
 // Empty or unknown files are cached too (crawlers retry them, and each costs a query).
 const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=3600, s-maxage=86400' } });
 
-/** The files covering ids lo..hi (inclusive) in chunks of `size`. */
-const chunks = (kind: string, size: number, lo: number, hi: number | null) => {
+/** The files covering ids 1..max in chunks of `size`. */
+const chunks = (kind: string, size: number, max: number | null) => {
   const out: string[] = [];
-  if (hi) for (let i = Math.ceil(lo / size); i <= Math.ceil(hi / size); i++) out.push(`${kind}-${i}.xml`);
+  if (max) for (let i = 1; i <= Math.ceil(max / size); i++) out.push(`${kind}-${i}.xml`);
   return out;
 };
 
@@ -42,20 +43,18 @@ export const GET: APIRoute = async ({ params }) => {
   const name = params.name ?? '';
 
   if (name === 'index') {
-    // Highest TWIC and highest uploaded id per table, in one statement (backward scans of the primary keys).
-    const max = (t: string) => `(SELECT max(id) FROM ${t} WHERE id < $1) AS ${t}, (SELECT max(id) FROM ${t} WHERE id >= $1) AS ${t}_up`;
-    const [r] = await query<Record<'events' | 'events_up' | 'players' | 'players_up' | 'games' | 'games_up', number | null>>(
-      `SELECT ${['events', 'players', 'games'].map(max).join(', ')}`,
-      [UPLOAD_ID_BASE],
-    );
-    const files = [
-      ...chunks('events', EVENT_CHUNK, 1, r.events),
-      ...chunks('events', EVENT_CHUNK, UPLOAD_ID_BASE, r.events_up),
-      ...chunks('players', CHUNK, 1, r.players),
-      ...chunks('players', CHUNK, UPLOAD_ID_BASE, r.players_up),
-      ...chunks('games', CHUNK, 1, r.games),
-      ...chunks('games', CHUNK, UPLOAD_ID_BASE, r.games_up),
-    ];
+    // Per table, in one statement: the highest TWIC id (a backward scan of the primary key) and the files that
+    // hold uploaded rows (few: a range scan above UPLOAD_ID_BASE).
+    const SIZES = { events: EVENT_CHUNK, players: CHUNK, games: CHUNK } as const;
+    const kinds = Object.keys(SIZES) as (keyof typeof SIZES)[];
+    const cols = (t: keyof typeof SIZES) =>
+      `(SELECT max(id) FROM ${t} WHERE id < $1) AS ${t}, ` +
+      `(SELECT string_agg(n::text, ',' ORDER BY n) FROM (SELECT DISTINCT (id - 1) / ${SIZES[t]} + 1 AS n FROM ${t} WHERE id >= $1) f) AS ${t}_up`;
+    const [r] = await query<Record<string, number | string | null>>(`SELECT ${kinds.map(cols).join(', ')}`, [UPLOAD_ID_BASE]);
+    const files = kinds.flatMap((t) => [
+      ...chunks(t, SIZES[t], r[t] as number | null),
+      ...String(r[`${t}_up`] ?? '').split(',').filter(Boolean).map((n) => `${t}-${n}.xml`),
+    ]);
     return xml(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${files.map((f) => `<sitemap><loc>${SITE}/sitemaps/${f}</loc></sitemap>`).join('')}</sitemapindex>`);
   }
   const m = /^(players|games|events)-(\d{1,6})$/.exec(name);

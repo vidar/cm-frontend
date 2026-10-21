@@ -10,9 +10,10 @@
 #                                          # put back rows of one of the site's own tables (game_analysis,
 #                                          # game_annotation, uploads, upload_rounds) from the newest hourly
 #                                          # backup (or the given one) into the LIVE database
-#   sudo cm-db-restore --site-tables <file.dump>
+#   sudo cm-db-restore --site-tables <file.dump> [--force]
 #                                          # REPLACE all four with an hourly backup's rows (after a full
-#                                          # restore, which is older: the hourly backup is the newer truth)
+#                                          # restore, from an hourly backup made after that full one: it
+#                                          # refuses an older one unless --force)
 #
 # A full restore never touches the live database: the script prints row counts next to the live ones and
 # the commands that would swap the two (a deliberate, manual step). --table only adds the rows the live
@@ -37,15 +38,21 @@ for f in "$GRANTS" "${SCHEMA[@]}"; do [ -f "$f" ] || die "$f not found (run inst
 TEST=0
 TABLE=
 SITE=0
+FORCE=0
 dump=
 case ${1:-} in
   --test) TEST=1; TARGET=cm_games_drill; dump=${2:-} ;;   # never in the way of a real restore
   --table) TABLE=${2:?--table needs a table name}; dump=${3:-} ;;
-  --site-tables) SITE=1; dump=${2:-} ;;
+  --site-tables) SITE=1; dump=${2:-}; [ "${3:-}" != --force ] || FORCE=1 ;;
   '') ;;
   *) dump=$1 ;;
 esac
 newest_small() { ls -1t "$DIR"/small/*.dump 2>/dev/null | head -1 || true; }
+# When a dump was made (pg_dump writes it into the archive), in seconds since 1970; empty if unknown.
+made_at() { local t; t=$(pg_restore --list "$1" 2>/dev/null | sed -n 's/^; Archive created at //p' | head -1); [ -z "$t" ] || date -d "$t" +%s 2>/dev/null || true; }
+utc() { date -u -d "@$1" '+%Y-%m-%d %H:%M UTC'; }
+# A full restore notes on its database when its backup was made (the note stays through the swap).
+NOTE='cm-db-restore: full backup made at '
 # psql as cm_owner: root over the socket, peer map "cm" (pg_hba.conf: cm_games, cm_games_restore, cm_games_drill).
 as_owner() { local db=$1; shift; psql -X -q -v ON_ERROR_STOP=1 -d "dbname=$db user=cm_owner" "$@"; }
 
@@ -86,6 +93,15 @@ $(ls -1t "$DIR"/small/*.dump 2>/dev/null | head -5 | sed 's/^/  /')"
   for t in game_analysis game_annotation uploads upload_rounds; do
     grep -qE " TABLE DATA public $t " <<< "$toc" || die "$dump has no $t"
   done
+  # An hourly backup older than the full backup this database came from would take back what the full one
+  # has (analyses, notes, rounds and approvals of the time between); the full backup's own tables are newer.
+  full=$(runuser -u postgres -- psql -X -At -d postgres -c "SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = '$DB'" | sed -n "s/^$NOTE\([0-9]*\).*/\1/p")
+  hourly=$(made_at "$dump")
+  if [ "$FORCE" = 0 ] && [ -n "$full" ] && [ -n "$hourly" ] && [ "$hourly" -lt "$full" ]; then
+    die "$dump was made $(utc "$hourly"), before the full backup this database was restored from ($(utc "$full")).
+Its rows are older than the ones the database has: skip this step (the full backup's own tables fit its games),
+or add --force to load it anyway."
+  fi
   echo "replacing game_analysis, game_annotation, uploads and upload_rounds with the rows in $dump"
   # The data and the sequence value, uploads first (upload_rounds refers to it): -L restores in the list's order.
   order=$(mktemp)
@@ -94,7 +110,11 @@ $(ls -1t "$DIR"/small/*.dump 2>/dev/null | head -5 | sed 's/^/  /')"
     grep -E ' (TABLE DATA|SEQUENCE SET) public ' <<< "$toc" | grep -vE ' TABLE DATA public uploads ' || true; } > "$order"
   out=$({
     echo "TRUNCATE game_analysis, game_annotation, upload_rounds, uploads;"
+    # The counter of uploaded ids never goes down (src/lib/uploads.ts nextId): the higher of the database's and
+    # the backup's. (Read after the TRUNCATE, whose locks keep a publish from moving it in between.)
+    echo "SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END AS keep_next FROM public.upload_ids_seq \\gset"
     pg_restore --data-only -L "$order" -f - "$dump"
+    echo "SELECT setval('public.upload_ids_seq', greatest(:keep_next, (SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END FROM public.upload_ids_seq)), false);"
     # (pg_restore's output empties search_path: qualified names from here on.) Analyses and notes of uploaded
     # games this database doesn't have (published after the full backup) go. Those of TWIC games stay: a TWIC
     # import after the full backup comes back under the same ids when it is run again.
@@ -153,6 +173,8 @@ jobs=(-j 2); [ "$TEST" = 0 ] || jobs=()
 pg_restore -d "dbname=$TARGET user=cm_owner" --no-owner --no-privileges --exit-on-error "${jobs[@]}" -L "$list" "$dump"
 for f in "${SCHEMA[@]}" "$GRANTS"; do as_owner "$TARGET" -f "$f"; done
 runuser -u postgres -- vacuumdb -q --analyze -d "$TARGET"
+made=$(made_at "$dump")
+[ "$TEST" = 1 ] || [ -z "$made" ] || psql_su -d postgres -c "COMMENT ON DATABASE $TARGET IS '$NOTE$made ($(utc "$made"))'"
 
 count() { # exact row counts per table, as cm_owner
   as_owner "$1" -At -c "SELECT format('SELECT %L || '' '' || count(*) FROM public.%I;', tablename, tablename) FROM pg_tables WHERE schemaname = 'public' ORDER BY 1" | as_owner "$1" -At
@@ -173,7 +195,12 @@ if [ "$TEST" = 1 ]; then
 fi
 echo "rows (restored | live):"
 join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(count "$DB" 2>/dev/null | sort) | awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }'
+# Step 3 without a fresh hourly backup: the newest one, if it was made after this full backup.
 small=$(newest_small)
+if [ -n "$small" ] && [ -n "$made" ]; then
+  s_made=$(made_at "$small")
+  [ -n "$s_made" ] && [ "$s_made" -gt "$made" ] || small=
+fi
 cat <<EOF
 
 $TARGET is ready. To make it the live database, in this order:
@@ -191,8 +218,8 @@ $TARGET is ready. To make it the live database, in this order:
    If it stops with an error, undo what it did (skip the first command when there is no ${DB}_old yet):
      sudo -u postgres psql -c "ALTER DATABASE ${DB}_old RENAME TO $DB"
      sudo -u postgres psql -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS true"
-3. The site's own tables, from the file step 1 printed (without one: the newest good hourly backup, now
-   ${small:-none in $DIR/small/}):
+3. The site's own tables, from the file step 1 printed (without one: the newest good hourly backup made after
+   this full one, now ${small:-none in $DIR/small/: then skip this step, as the full backup holds the newest rows}):
      sudo cm-db-restore --site-tables <file>
 4. If TWIC issues were imported after this full backup, import them again now (scripts/twic/README.md): the
    importer goes on where the restored database ends, with the same game ids, analyses and notes.

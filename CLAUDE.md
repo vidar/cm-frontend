@@ -114,10 +114,12 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below
   `UPLOAD_ID_BASE`, `--patch` keeps uploaded events, and an uploaded slug TWIC now uses is renamed `<slug>-u<n>`;
-  after a `--reset` reload or a restore use "Republish all approved" on the admin page (it publishes again only
-  the rounds whose file differs from what `upload_published` recorded, which only the full backup holds, so
-  everything else keeps its game ids, analyses and notes, and takes uploaded events off the site that no approved
-  upload of that name points to). PGN parsing: `src/lib/pgn.ts`.
+  after a `--reset` reload or a restore use "Republish all approved" on the admin page. After a restore it publishes
+  again only the rounds whose file differs from what `upload_published` recorded (which only the full backup
+  holds), so everything else keeps its game ids, analyses and notes; after a `--reset` every approved tournament is
+  published whole with new game ids, and the analyses and notes of uploaded games are lost (`scripts/twic/README.md`).
+  Either way it takes uploaded events off the site that no approved upload of that name points to. The id counter
+  makes each table's uploaded ids sparse: `/sitemaps/index.xml` lists only the uploaded files that hold rows. PGN parsing: `src/lib/pgn.ts`.
 - **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
   and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,
   player pages Person (FIDE profile as `sameAs`), event pages SportsEvent with competitors and rounds

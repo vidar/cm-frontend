@@ -58,12 +58,14 @@ so nothing writes to Neon during the move. Keep it that way until step 8.
 
 ### 0. Copy the kit to the server, and get the box ready
 
-From a machine with a checkout of the repository (the kit is on branch `claude/nice-darwin-fmxre9` until it is
-merged; afterwards fetch `main`), through the Mac mini (on the Mac mini itself, leave out the outer `ssh`). The
-old copy on the server is replaced only once the new one has arrived whole:
+From a machine with a full checkout of the repository (in a `--filter` clone `git archive` fetches file by file
+and can seem to hang), through the Mac mini (on the Mac mini itself, leave out the outer `ssh`). `BRANCH` is
+`main`, or, for a kit update, the branch with the change before it is merged. The old copy on the server is
+replaced only once the new one has arrived whole:
 
 ```sh
-cd cm-frontend && git fetch origin claude/nice-darwin-fmxre9
+BRANCH=main
+cd cm-frontend && git fetch origin "$BRANCH"
 git archive FETCH_HEAD ops/postgres scripts | ssh vidar@100.120.87.91 'ssh hetz-stock "rm -rf cm-db-kit.new && mkdir cm-db-kit.new && tar xf - -C cm-db-kit.new && test -f cm-db-kit.new/ops/postgres/install.sh && rm -rf cm-db-kit && mv cm-db-kit.new cm-db-kit && echo copied"'
 ```
 
@@ -291,8 +293,9 @@ zero, so the waiting week costs nothing.
     `sudo ls -t /var/backups/cm-db/small/ | head` lists the hourly backups.
   - `sudo cm-db-restore --site-tables <file.dump>` replaces those four tables (and the counter of uploaded ids)
     with an hourly backup's, in one transaction, and drops analyses and notes of uploaded games the database
-    doesn't have. Name the file: after a restore the newest hourly backup may already be one of the restored, older
-    data. Then, with the database routes open, "Republish all approved" on `/upload/admin/`: it publishes again only
+    doesn't have. The counter only ever moves forward. Name the file: after a restore the newest hourly backup may
+    already be one of the restored, older data. After a full restore it refuses an hourly backup made before that
+    full one (its rows would be older than the full backup's; skip the step then, or add `--force`). Then, with the database routes open, "Republish all approved" on `/upload/admin/`: it publishes again only
     the rounds of uploaded tournaments whose files changed since the full backup (everything else keeps its game
     ids, analyses and notes) and takes down tournaments rejected since.
   - `sudo cm-db-restore --test [file.dump]` is the drill the monthly timer runs (`journalctl -u cm-db-restore-test`);
@@ -300,15 +303,20 @@ zero, so the waiting week costs nothing.
     `sudo systemctl start cm-db-restore-test` runs it again and clears the alarm.
 - **Updates**: unattended-upgrades restarts Postgres for security releases (a few seconds; Hyperdrive and the
   edge cache cover it) and updates cloudflared, which then restarts (about 5 seconds). A new major version (19 or
-  later) is deliberate, in maintenance: `sudo pg_upgradecluster --no-start 18 main`, then
+  later) is deliberate, in maintenance: install it (`sudo apt install postgresql-19`; on Ubuntu 26.04 from the
+  PostgreSQL apt repository, apt.postgresql.org), remove the empty cluster the package creates
+  (`sudo pg_dropcluster --stop 19 main`), `sudo pg_upgradecluster --no-start 18 main`, then
   `sudo PGMAJOR=19 bash ~/cm-db-kit/ops/postgres/install.sh` (it starts 19 with the settings and the same
   certificate, which lives outside the cluster), `sudo -u postgres psql -c 'SHOW ssl_cert_file'` (must name
   `cm-origin.crt`), the site checks, then `sudo pg_dropcluster 18 main`; and `postgresql@18-main` in this README
   becomes `19-main`.
-- **Kit updates** (a new version of these scripts, or of the site's tables, e.g. after a merge that changes
-  `scripts/*.pg.sql` or `scripts/db/grants.sql`): copy the kit again (step 0's command) and rerun
-  `sudo bash ~/cm-db-kit/ops/postgres/install.sh`. It applies the schema scripts (only what is new) and the grants,
-  and installs the backup, check and restore commands. Do it before the site code that needs the change goes live.
+- **Kit updates** (a new version of these scripts, or a branch that changes the site's tables in
+  `scripts/*.pg.sql` or `scripts/db/grants.sql`, before it is merged): copy the kit again (step 0's command with
+  `BRANCH` set to that branch) and rerun `sudo bash ~/cm-db-kit/ops/postgres/install.sh`. It applies the schema
+  scripts (only what is new) and the grants, and installs the backup, check and restore commands; if a table is
+  busy (the nightly backup from 03:20 UTC, an import) it stops after 10 seconds instead of holding up the site's
+  queries: run it again a few minutes later. If `tunnel.sh` or `systemd/cloudflared-cm-db.service` changed, also
+  run `sudo bash ~/cm-db-kit/ops/postgres/tunnel.sh` (it keeps the token).
 - **Losing the box** (the site in maintenance meanwhile: `MAINTENANCE` "1"):
   1. Cut the old box off, in case it still runs or comes back: power it off or delete it in the Hetzner console
      if you can. Tailscale admin console → Machines → `hetz-stock` → **Remove** (frees the name and its access to
@@ -326,7 +334,8 @@ zero, so the waiting week costs nothing.
      (and `small/<file>` into `/var/backups/cm-db/small/`). From the Mac mini: `scp` both files to the server's
      home directory; the restore reads them from there.
   4. `sudo cm-db-restore <full dump>`, then the swap it prints, then `sudo cm-db-restore --site-tables <hourly dump>`
-     (and a TWIC re-import if issues came after the full dump), then
+     if the hourly dump was made after the full one (a later time in its name; otherwise skip it: the full dump
+     holds the newest rows), a TWIC re-import if issues came after the full dump, then
      `sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer`.
   5. Steps 4–7 with new secrets: a new certificate (`tls.sh`), the new tunnel `cm-db-2`
      (`sudo bash ~/cm-db-kit/ops/postgres/tunnel.sh --new-token`, then the VPC service pointed at it: dashboard VPC →
@@ -371,5 +380,5 @@ zero, so the waiting week costs nothing.
      password and the token secret are on these command lines): `npx wrangler cert upload certificate-authority
      --ca-cert origin_ca_rsa_root.pem --name cf-origin-ca` (the root file from Cloudflare's Origin CA docs), then
      `npx wrangler hyperdrive create cm-games-hetz-access --host pg.chessmoments.com --database cm_games --user cm_web
-     --password <…> --access-client-id <…> --access-client-secret <…> --ca-certificate-id <its id> --sslmode verify-full`.
-     Its id goes into step 8.
+     --password <…> --access-client-id <…> --access-client-secret <…> --ca-certificate-id <its id> --sslmode verify-full
+     --origin-connection-limit 20` (20 as in step 7: `cm_web` may open at most 40). Its id goes into step 8.

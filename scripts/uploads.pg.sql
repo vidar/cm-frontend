@@ -29,17 +29,22 @@ CREATE SEQUENCE IF NOT EXISTS upload_ids_seq START 100000000 MINVALUE 100000000;
 -- What is on the site, round by round: the upload time of the file each published round came from. Written
 -- by every publish; only the full backup holds it (not the hourly one), so after a restore "Republish all
 -- approved" finds the rounds that changed since.
-CREATE TABLE IF NOT EXISTS upload_published (
-  upload_id INTEGER NOT NULL,
-  round INTEGER NOT NULL,
-  uploaded_at TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (upload_id, round)
-);
--- (Once, where tournaments were published before the table existed: they are on the site as uploaded.)
-INSERT INTO upload_published (upload_id, round, uploaded_at)
-SELECT r.upload_id, r.round, r.uploaded_at FROM upload_rounds r JOIN uploads u ON u.id = r.upload_id
-WHERE u.status = 'approved' AND u.event_id IS NOT NULL
-  AND NOT EXISTS (SELECT FROM upload_published p WHERE p.upload_id = u.id)
-ON CONFLICT DO NOTHING;
+-- When the table is created where tournaments were published before it existed, they are on the site as
+-- uploaded. (Only then: on a rerun, e.g. between a restore and "Republish all approved", it would record rounds
+-- that are not on the site.)
+DO $$
+BEGIN
+  IF to_regclass('public.upload_published') IS NULL THEN
+    CREATE TABLE upload_published (
+      upload_id INTEGER NOT NULL,
+      round INTEGER NOT NULL,
+      uploaded_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (upload_id, round)
+    );
+    INSERT INTO upload_published (upload_id, round, uploaded_at)
+    SELECT r.upload_id, r.round, r.uploaded_at FROM upload_rounds r JOIN uploads u ON u.id = r.upload_id
+    WHERE u.status = 'approved' AND u.event_id IS NOT NULL;
+  END IF;
+END $$;
 -- The site's role (cm_web) manages uploads and publishes them into games/events/players: its rights are
 -- in scripts/db/grants.sql.
