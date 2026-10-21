@@ -50,13 +50,28 @@ async function hash(token: string) {
   return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
+/** Constant-time string comparison (for secrets of the same, public length). */
+function same(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 /** The site owner's key (Worker secret ADMIN_KEY); compared in constant time. */
 export function isAdmin(key: string | null | undefined) {
   const want = (env as { ADMIN_KEY?: string }).ADMIN_KEY;
-  if (!want || !key || key.length !== want.length) return false;
-  let diff = 0;
-  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ key.charCodeAt(i);
-  return diff === 0;
+  return !!want && !!key && same(want, key);
+}
+
+/** Value of the admin page's session cookie: a digest of the key, so the browser never stores the key itself. */
+export async function adminSession() {
+  const want = (env as { ADMIN_KEY?: string }).ADMIN_KEY;
+  return want ? hash(`cm-admin-session:${want}`) : null;
+}
+export async function isAdminSession(cookie: string | undefined) {
+  const want = await adminSession();
+  return !!want && !!cookie && same(want, cookie);
 }
 export const adminConfigured = () => !!(env as { ADMIN_KEY?: string }).ADMIN_KEY;
 

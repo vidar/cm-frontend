@@ -3,6 +3,7 @@
 // the standings. Nothing is public until the site owner approves the tournament (src/lib/uploads.ts).
 import { env } from 'cloudflare:workers';
 import Layout from '../../layouts/Layout.astro';
+import { limiterKey } from '../../lib/client';
 import UploadPreview from '../../components/upload/UploadPreview.astro';
 import { query } from '../../lib/games';
 import { deleteRound, findUpload, FORMATS, getRounds, LIMITS, REJECTED, saveRounds } from '../../lib/uploads';
@@ -27,7 +28,7 @@ if (Astro.request.method === 'POST') {
   const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
   if (upload.status === 'rejected') error = REJECTED;
   else if (!(size > 0 && size <= MAX_BODY)) error = 'The file is too large (2 MB at most).';
-  else if (limiter && !(await limiter.limit({ key: `up:${Astro.clientAddress}` })).success) error = 'Too many requests, please try again in a minute.';
+  else if (limiter && !(await limiter.limit({ key: `up:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many requests, please try again in a minute.';
   else {
     const form = await Astro.request.formData();
     if (form.get('action') === 'delete') {

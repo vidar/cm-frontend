@@ -8,13 +8,13 @@ import '../../styles/board.css';
 import { parseRound } from '../../lib/event';
 import { getGamePage, gamePath, resultLabel, twicIssueUrl } from '../../lib/games';
 import { isUploaded } from '../../lib/uploads';
+import { idParam } from '../../lib/client';
 
 export const prerender = false;
 
 // Ids are int4: anything longer or larger can't exist (and would make Postgres fail).
-const digits = /^\d{1,10}/.exec(Astro.params.game ?? '')?.[0];
-const id = digits ? Number(digits) : 0;
-const data = id >= 1 && id <= 2_147_483_647 ? await getGamePage(id) : null;
+const id = idParam(Astro.params.game);
+const data = id ? await getGamePage(id) : null;
 // Missing games and old URLs are cached at the edge too: crawlers retry them and each costs a query.
 if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
 const { game, others } = data;

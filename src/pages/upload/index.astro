@@ -2,6 +2,7 @@
 // Organisers start a tournament upload here and get a secret link to manage it (src/lib/uploads.ts).
 import { env } from 'cloudflare:workers';
 import Layout from '../../layouts/Layout.astro';
+import { limiterKey } from '../../lib/client';
 import { createUpload, FORMATS } from '../../lib/uploads';
 
 export const prerender = false;
@@ -16,7 +17,7 @@ else if (Astro.request.method === 'POST') {
   for (const k of Object.keys(values) as (keyof typeof values)[]) values[k] = String(form.get(k) ?? '');
   const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
   if (!form.get('rights')) error = 'Please confirm that you may publish these games.';
-  else if (limiter && !(await limiter.limit({ key: `up:${Astro.clientAddress}` })).success) error = 'Too many requests, please try again in a minute.';
+  else if (limiter && !(await limiter.limit({ key: `up:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many requests, please try again in a minute.';
   else {
     const r = await createUpload(values);
     if ('token' in r && r.token) return Astro.redirect(`/upload/${r.token}/?new=1`, 303);

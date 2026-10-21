@@ -49,8 +49,8 @@ Measured on the full dataset, connections per uncached request:
 
 - Edge cache lifetimes: game pages a month, player pages and sitemaps a week, finished TWIC
   events a month (a day while running), uploaded events 5 minutes; 301/404 answers cached too;
-  the database pages keep their cache across content deploys (`DATA_VERSION` in
-  `src/middleware.ts`; bump it when their templates change).
+  the database pages keep their cache across content deploys (keyed by a hash of the source, so
+  code changes still roll it), and tracking parameters (fbclid, utm_*) no longer bypass it.
 - Sitemaps carry `<lastmod>` (games: the Monday their TWIC issue came out), so crawlers spend
   their visits on new pages.
 - robots.txt keeps crawlers off the colour/page variants of player pages and off search results.
@@ -73,7 +73,9 @@ Measured on the full dataset, connections per uncached request:
    twelve. Status reads for analysis and uploads use `now()` and stay uncached. An organiser's
    newly uploaded round can then lag up to 10 minutes.
 3. **Workers plan**: on Workers Free, 100,000 requests a day is the cap; a full crawl of the
-   database pages runs into it. Workers Paid ($5 a month, 10 M requests included) removes it.
+   database pages runs into it. Workers Paid ($5 a month, 10 M requests included) removes it. It
+   is also needed before tournament uploads go live: reading a round replays every move, which
+   takes far more than the 10 ms of CPU a request gets on Workers Free.
 4. **Search Console**: watch Crawl Stats after reopening; if Googlebot's rate is too high for
    the database, the request form at
    https://developers.google.com/search/docs/crawling-indexing/reduce-crawl-rate is Google's own

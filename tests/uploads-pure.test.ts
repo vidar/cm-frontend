@@ -287,11 +287,12 @@ describe('previewAnalysis', () => {
       expect(s[0].player.name).toBe('Alice');
       expect(s.map((l) => l.points)).toEqual([2, 0.5, 0.5]);
     });
-    it('a single game between two players previews as a match', () => {
+    it('a single game between two players previews as loose games, an unfinished one scoring for nobody', () => {
       const a = previewAnalysis(upload('swiss'), [round(1, [{ w: 'Alice', b: 'Bob', r: '*', round: '1.1' }])]);
-      expect(a.format).toBe('match');
+      expect(a.format).toBe('games');
       expect(a.players.size).toBe(2);
-      expect(a.knockout![0].matches[0]).toMatchObject({ aPts: 0.5, bPts: 0.5, winner: null });
+      expect(a.knockout).toBeUndefined();
+      expect(a.standingsAfter(Infinity)).toEqual([]);
     });
     it('matches player names case-insensitively, keeping the first spelling', () => {
       const a = previewAnalysis(upload('swiss'), [

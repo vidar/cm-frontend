@@ -53,14 +53,19 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   or two statements and check with `scratchpad measure.sh`-style counting (log_statement) before adding
   a query. Edge cache lifetimes (`src/middleware.ts` honours `s-maxage`): game pages a month, player
   pages and sitemaps a week, TWIC events a month once three weeks past (`eventCacheControl()`), a day
-  while running, uploaded events 5 minutes; 301/404s of database pages are cached too; purge the
-  `games-db` tag after an import. Database pages are cache-keyed by `DATA_VERSION` (middleware), not
-  the build id: bump it when their templates change. The "not analysed yet"/"no notes yet" JSON answers
+  while running, uploaded events, games and players 5 minutes; 301/404s of database pages are cached too;
+  purge the `games-db` tag after an import. Database pages are cache-keyed by `__DATA_VERSION__`, a hash
+  of `src/` without `src/content/` (astro.config.mjs), not the build id, so CMS commits keep their cache and
+  code changes roll it; the key keeps only the query parameters in `src/lib/cache-key.ts` (add one there
+  when a database page starts reading it); HEAD is served and paced like GET. The "not analysed yet"/"no notes yet" JSON answers
   are cached 5 minutes; clients that just queued work poll with `?poll=1`. Crawlers (`src/lib/bots.ts`)
   are paced on cache misses of database pages (bindings `CRAWL_SEARCH` 600/min, `CRAWL_ASSISTANT` 60,
   `CRAWL_BOT` 20; 429 + Retry-After beyond), browsers never; robots.txt keeps crawlers off
-  `/players/*?` and `/games/search/?`. Maintenance: `MAINTENANCE=1` (`src/worker.ts`) closes only
-  the database routes with 503; the rest of the site stays up. Costs and the Neon/Hyperdrive settings
+  `/players/*?` and `/games/search/?`. Maintenance: `MAINTENANCE` "1" in `wrangler.jsonc` (both `vars`
+  blocks; deploys overwrite dashboard vars) closes only the database routes with 503 (`src/worker.ts`,
+  path decoded as Astro routes it, `src/lib/maintenance.ts`) and makes `query()` refuse to connect; the
+  rest of the site stays up. POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
+  by /64, `idParam` for int4 ids). Costs and the Neon/Hyperdrive settings
   that matter are in `docs/database-costs.md`.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
   at `ENGINE_URL` (https://engine.chessmoments.com, API in its `/llm.txt`; Worker secret
@@ -84,11 +89,17 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   (`/upload/<token>/`, only a SHA-256 of the token is stored) to upload PGN round by round (or a whole file
   split by Round tags), replace or remove rounds, and preview standings. Uploads live in Neon tables `uploads`
   and `upload_rounds` (`scripts/uploads.pg.sql`) until the site owner approves them at `/upload/admin/` (Worker
-  secret `ADMIN_KEY`); approval publishes them into `events`/`players`/`games` with ids from
+  secret `ADMIN_KEY`, entered once by POST; the page keeps an HttpOnly cookie holding a digest of it, never the key
+  in a URL); approval publishes them into `events`/`players`/`games` with ids from
   `UPLOAD_ID_BASE` (100000000, `src/lib/uploads.ts`), and later rounds publish at once. `games.twic = 0` and
   ids ≥ `UPLOAD_ID_BASE` mark uploaded data: those pages credit the organiser instead of TWIC, and uploaded
-  event pages are cached for 5 minutes. Players match existing ones by FIDE ID only, else by exact name among
-  uploaded players. The TWIC importer resumes below `UPLOAD_ID_BASE` and `--patch` keeps uploaded events;
+  pages are cached for 5 minutes. Players match existing ones by FIDE ID when the names agree (`sameName`; a
+  FIDE ID under another name is dropped, and the preview lists how IDs resolve), else by exact name among
+  uploaded players. Publishing runs under an advisory lock, in batched statements; saveRounds/deleteRound lock
+  the upload row; Round tags are stored rebuilt from the numbers ("5.1"). `LIMITS` caps bytes, games (per round
+  and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
+  every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below
+  `UPLOAD_ID_BASE`, `--patch` keeps uploaded events, and an uploaded slug TWIC now uses is renamed `<slug>-u<n>`;
   after a `--reset` reload use "Republish all approved" on the admin page. PGN parsing: `src/lib/pgn.ts`.
 - **Structured data:** `Layout` takes `jsonLd` (an object or a `@graph` array; `@context` is added)
   and renders it in `<head>`. Game pages give BreadcrumbList + WebPage about the players and event,

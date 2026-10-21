@@ -73,8 +73,10 @@ function scoreBefore(a: EventAnalysis, id: number, n: number) {
   for (const r of a.rounds) {
     if (r.n >= n) continue;
     for (const g of r.games) {
-      if (g.white_id === id) points += whiteScore(g.result);
-      else if (g.black_id === id) points += 1 - whiteScore(g.result);
+      const ws = whiteScore(g.result);
+      if (ws === null) continue; // unfinished: counts for nobody
+      if (g.white_id === id) points += ws;
+      else if (g.black_id === id) points += 1 - ws;
       else continue;
       games++;
     }
@@ -110,7 +112,11 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
     if (ko) {
       const { r, m } = ko;
       const before = m.games.filter((g) => g.id < game.id);
-      const score = (games: EventGame[], id: number) => games.reduce((s, g) => s + (g.white_id === id ? whiteScore(g.result) : g.black_id === id ? 1 - whiteScore(g.result) : 0), 0);
+      const score = (games: EventGame[], id: number) =>
+        games.reduce((s, g) => {
+          const ws = whiteScore(g.result);
+          return s + (ws === null ? 0 : g.white_id === id ? ws : g.black_id === id ? 1 - ws : 0);
+        }, 0);
       const sA = safeName(m.a.name);
       const sB = safeName(m.b.name);
       const upto = [...before, eg];
