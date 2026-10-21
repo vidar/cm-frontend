@@ -11,7 +11,7 @@ fresh ids. It refuses to run if game or player ids differ between the builds.
 
 Old events folded into another one get a row in `event_redirects` (old slug -> event id), so
 their URLs can redirect. It also writes a `changed_games` table (id, event_id, white_team, black_team) with the games whose
-event or teams differ from the old build, for `import_neon.py --patch`.
+event or teams differ from the old build, for `import_pg.py --patch`.
 """
 import argparse
 import collections

@@ -255,7 +255,7 @@ export async function republishAll() {
 const arr = (xs: (string | number)[]) => `{${xs.map((x) => (typeof x === 'number' ? x : `"${x.replace(/["\\]/g, '\\$&')}"`)).join(',')}}`;
 
 /**
- * Next free uploaded id. Publishes run one at a time (advisory lock in publish), so MAX + 1 is safe.
+ * Next free uploaded id. Publishes run one at a time (the games table lock in publish), so MAX + 1 is safe.
  * Events also count the ids uploads still hold: a TWIC --reset reload empties events, and a new
  * tournament published before "Republish all" must not take an approved one's id.
  */
@@ -364,8 +364,9 @@ interface Side {
 
 /** Publish (or re-publish) rounds of an approved tournament into events/players/games. */
 async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
-  // One publish at a time: ids and slugs are allocated from what is in the tables.
-  await q('SELECT pg_advisory_xact_lock($1::bigint)', [UPLOAD_ID_BASE]);
+  // One publish at a time: ids and slugs are allocated from what is in the tables. A table lock that
+  // conflicts with itself and with writes to games, not with reads (Hyperdrive doesn't support advisory locks).
+  await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE');
 
   // The event: create it the first time (or again after a TWIC --reset reload dropped it). An id that
   // another upload holds as well (given out before nextId counted uploads' ids) is not reused.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Health check of the chessmoments.com database (postgres, backups, disk, tunnel)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cm-db-check
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true

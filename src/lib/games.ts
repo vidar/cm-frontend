@@ -1,4 +1,4 @@
-// Server-side access to the TWIC games database (Neon Postgres through the Hyperdrive binding
+// Server-side access to the TWIC games database (PostgreSQL on hetz-stock, ops/postgres/, through the Hyperdrive binding
 // `HYPERDRIVE`, see scripts/twic/). Only import from on-demand routes (`export const prerender = false`).
 import { env } from 'cloudflare:workers';
 import postgres from 'postgres';
@@ -72,7 +72,7 @@ function connect() {
 
 /**
  * Run one query. Workers can't share connections between requests, so each query opens its own
- * (cheap: Hyperdrive keeps the pool to Neon warm next to the Worker) and closes it afterwards.
+ * (cheap: Hyperdrive keeps the pool to the database warm) and closes it afterwards.
  */
 export async function query<T>(text: string, params: Param[] = []): Promise<T[]> {
   const sql = connect();

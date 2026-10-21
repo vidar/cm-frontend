@@ -1,0 +1,9 @@
+[Unit]
+Description=Health check of the chessmoments.com database every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

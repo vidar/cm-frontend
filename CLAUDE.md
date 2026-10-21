@@ -37,8 +37,13 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   Daily puzzles are on-demand routes (`prerender = false`) that switch at 00:00 UTC; the puzzle set
   runs out on 2028-10-01, regenerate before then. New top-level routes must be added to the
   reserved-names hint in `public/admin/config.yml`.
-- **Games database (TWIC):** Neon Postgres via Hyperdrive (binding `HYPERDRIVE`, also declared under
-  `previews`; the Hyperdrive config connects as the read-only role `readonly`), loaded offline by
+- **Games database (TWIC):** PostgreSQL 18 on hetz-stock (the Hetzner box that also runs the engine),
+  set up by `ops/postgres/` (its README is the runbook: roles, tunnel, backups, restore), reached only via
+  Hyperdrive (binding `HYPERDRIVE`, also declared under `previews`) over a Cloudflare Tunnel (Workers VPC);
+  it listens on localhost only. The site's role `cm_web` has exactly the rights in `scripts/db/grants.sql`
+  (add a line there when code starts writing a table); `cm_owner` owns everything. Until the move from Neon
+  is finished (`wrangler.jsonc` still names the Neon config `ff39804d…`), production reads Neon. Hyperdrive
+  has no advisory locks or session state: serialise with `LOCK TABLE` inside a transaction. Loaded offline by
   `scripts/twic/` (see its README) from The Week in Chess, used with Mark Crowther's permission for
   non-commercial use: keep the TWIC credit + issue link on game pages, offer no bulk export/API of
   games, and tell the user if the site becomes commercial (paid tier). `src/lib/games.ts` must only
@@ -47,7 +52,7 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   `ORDER BY date DESC` needs `NULLS LAST` to match the indexes. Database pages are listed in
   `/sitemaps/index.xml` (on-demand), not in `@astrojs/sitemap`; every URL there carries `<lastmod>`
   (games: the publication Monday of their TWIC issue, `twicIssueDate()`).
-  **Database budget:** compute is what costs money (Neon bills awake time), so a page makes ONE
+  **Database budget:** the database shares a 4-vCPU box with the engine, so a page makes ONE
   statement where it can: `getGamePage()`, `getPlayerPage()` and `getEventWithGames()` return the
   whole page's data with JSON aggregation (round pages add one for board moves). Keep new pages to one
   or two statements and check with `scratchpad measure.sh`-style counting (log_statement) before adding
@@ -65,12 +70,12 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   blocks; deploys overwrite dashboard vars) closes only the database routes with 503 (`src/worker.ts`,
   path decoded as Astro routes it, `src/lib/maintenance.ts`) and makes `query()` refuse to connect; the
   rest of the site stays up. POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
-  by /64, `idParam` for int4 ids). Costs and the Neon/Hyperdrive settings
+  by /64, `idParam` for int4 ids). Hosting decisions and the Hyperdrive settings
   that matter are in `docs/database-costs.md`.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
   at `ENGINE_URL` (https://engine.chessmoments.com, API in its `/llm.txt`; Worker secret
   `STOCKFISH_TOKEN`). `src/lib/analysis.ts` submits a game as a job and polls it; results are stored in
-  Neon table `game_analysis` (`scripts/analysis.pg.sql`) through the site's `HYPERDRIVE` binding
+  table `game_analysis` (`scripts/analysis.pg.sql`) through the site's `HYPERDRIVE` binding
   (status reads include `now()` so Hyperdrive doesn't cache them). Endpoint
   `/games/analysis/<id>.json` (GET state, POST queue; same-site, rate-limited by `ANALYSIS_LIMITER`,
   refused while the engine queue is long); UI in `src/scripts/game-analysis.ts`. The panel stays hidden
@@ -79,7 +84,7 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
 - **AI notes (on demand):** once a game is analysed, "Write notes with AI" has Claude (`MODEL` in
   `src/lib/annotate.ts`, Haiku 5.5; Worker secret `ANTHROPIC_KEY`, set for Production and Previews) write a
   summary and notes on key moves for club players from the stored analysis only (no invented lines). Stored in
-  Neon table `game_annotation` (`scripts/annotation.pg.sql`), endpoint `/games/annotation/<id>.json` (GET state,
+  table `game_annotation` (`scripts/annotation.pg.sql`), endpoint `/games/annotation/<id>.json` (GET state,
   POST write; same-site, rate-limited, at most `DAILY_LIMIT` new annotations a day). UI in
   `src/scripts/game-annotation.ts`: summary in the analysis panel, notes under their moves. A preamble and
   postamble set the game in its tournament: standings going into the round and after it (team standings and the
@@ -87,7 +92,7 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   gives only what was known at the time (no final standings).
 - **Tournament uploads (`/upload/`):** organisers create a tournament and get a secret link
   (`/upload/<token>/`, only a SHA-256 of the token is stored) to upload PGN round by round (or a whole file
-  split by Round tags), replace or remove rounds, and preview standings. Uploads live in Neon tables `uploads`
+  split by Round tags), replace or remove rounds, and preview standings. Uploads live in tables `uploads`
   and `upload_rounds` (`scripts/uploads.pg.sql`) until the site owner approves them at `/upload/admin/` (Worker
   secret `ADMIN_KEY`, entered once by POST; the page keeps an HttpOnly cookie holding a digest of it, never the key
   in a URL); approval publishes them into `events`/`players`/`games` with ids from
@@ -95,7 +100,7 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   ids ≥ `UPLOAD_ID_BASE` mark uploaded data: those pages credit the organiser instead of TWIC, and uploaded
   pages are cached for 5 minutes. Players match existing ones by FIDE ID when the names agree (`sameName`; a
   FIDE ID under another name is dropped, and the preview lists how IDs resolve), else by exact name among
-  uploaded players. Publishing runs under an advisory lock, in batched statements; saveRounds/deleteRound lock
+  uploaded players. Publishing runs one at a time (a lock on the games table: Hyperdrive has no advisory locks), in batched statements; saveRounds/deleteRound lock
   the upload row; Round tags are stored rebuilt from the numbers ("5.1"). `LIMITS` caps bytes, games (per round
   and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below

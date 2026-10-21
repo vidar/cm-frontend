@@ -17,5 +17,4 @@ CREATE TABLE IF NOT EXISTS game_annotation (
 ALTER TABLE game_annotation ADD COLUMN IF NOT EXISTS preamble TEXT;
 ALTER TABLE game_annotation ADD COLUMN IF NOT EXISTS postamble TEXT;
 CREATE INDEX IF NOT EXISTS game_annotation_requested ON game_annotation (requested_at);
--- The site's Hyperdrive role writes annotations.
-GRANT SELECT, INSERT, UPDATE ON game_annotation TO readonly;
+-- The site's role (cm_web) writes annotations: its rights are in scripts/db/grants.sql.

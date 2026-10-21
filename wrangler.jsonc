@@ -11,8 +11,8 @@
 		"directory": "./dist",
 		"binding": "ASSETS"
 	},
-	// TWIC games database: Neon Postgres (read-only role) through Hyperdrive. `localConnectionString`
-	// is only used by `astro dev` / `wrangler dev`; point it at a local copy if you need one.
+	// TWIC games database through Hyperdrive (ops/postgres/README.md; until the move from Neon is done, this
+	// id is the Neon config "cm-games"). `localConnectionString` is only used by `astro dev` / `wrangler dev`.
 	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
 	// Engine analysis (src/lib/analysis.ts): Stockfish service on the VPS; STOCKFISH_TOKEN is a secret.
 	// MAINTENANCE "1" closes the database routes (src/worker.ts). Change it here (and in previews), not in

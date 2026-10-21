@@ -12,7 +12,7 @@ python3 scripts/twic/download.py --from 920 --to <latest> --dir /tmp/twic   # po
 curl -o /tmp/players_list.zip https://ratings.fide.com/download/players_list.zip   # FIDE names/feds/titles
 python3 scripts/twic/build.py --dir /tmp/twic --out /tmp/twic.sqlite --fide /tmp/players_list.zip   # ~40 min, ~8 GB RAM
 python3 scripts/twic/opening_games.py --db /tmp/twic.sqlite                 # -> src/data/opening-master-games.json
-NEON_DATABASE_URL=... python3 scripts/twic/import_neon.py --db /tmp/twic.sqlite --reset
+DATABASE_URL=... python3 scripts/twic/import_pg.py --db /tmp/twic.sqlite --reset
 ```
 
 **Updating the live database** (new issues, or build changes) without breaking URLs or downtime:
@@ -20,7 +20,7 @@ keep the SQLite file that is currently loaded (`twic-live.sqlite`), rebuild into
 
 ```sh
 python3 scripts/twic/remap_events.py --old /tmp/twic-live.sqlite --new /tmp/twic.sqlite
-NEON_DATABASE_URL=... python3 scripts/twic/import_neon.py --db /tmp/twic.sqlite --patch
+DATABASE_URL=... python3 scripts/twic/import_pg.py --db /tmp/twic.sqlite --patch
 ```
 
 `remap_events.py` checks that game and player ids are unchanged (they are deterministic for the
@@ -28,18 +28,20 @@ same input; new issues only append games with later dates, but a new game dated 
 existing ones shifts ids, and then a full `--reset` import is needed), keeps event ids and slugs,
 records redirects for events merged into others and lists the changed games. `--patch` swaps
 the new events and changed games in with one transaction. New games (later issues) still need
-loading: run `import_neon.py` without flags afterwards; it continues after the highest id.
+loading: run `import_pg.py` without flags afterwards; it continues after the highest id.
 
-The site reads the database from Neon Postgres through Hyperdrive (binding `HYPERDRIVE`, config
-`cm-games`, connecting as the read-only role `readonly`). `import_neon.py` loads the SQLite build
-over Neon's HTTPS SQL endpoint (standard library only, resumable: rerun without `--reset` to
-continue), then creates the indexes (`indexes.pg.sql`), grants SELECT to `readonly` and ANALYZEs.
-`NEON_DATABASE_URL` must be the owner role's connection string. `--reset` drops the tables, so
-the site shows errors until the reload finishes; for zero downtime load into a Neon branch and
-switch Hyperdrive's origin to it.
+The site reads the database from PostgreSQL on hetz-stock through Hyperdrive (`ops/postgres/README.md`).
+`import_pg.py` loads the SQLite build through the `psql` client (standard library only, resumable: rerun
+without `--reset` to continue), then creates the indexes (`indexes.pg.sql`), applies the site role's rights
+(`scripts/db/grants.sql`) and ANALYZEs. `DATABASE_URL` connects as the owner role `cm_owner`; on the server
+itself, as root: `DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql'` (no password:
+root maps to `cm_owner` over the local socket). It also still speaks Neon's HTTPS SQL endpoint with
+`NEON_DATABASE_URL`, until the Neon project is gone. `--reset` drops the tables, so the site shows errors
+until the reload finishes; for zero downtime load into a second database (`createdb -O cm_owner -T template0
+-l C.UTF-8 cm_games_new`, `CREATE EXTENSION pg_trgm` as `cm_owner`) and swap the names (see `restore.sh`).
 
-Local development: run Postgres locally, load it with `import_neon.py` (or `pg_restore` a dump
-from Neon) and point `localConnectionString` in `wrangler.jsonc` at it.
+Local development: run Postgres locally, load it with `import_pg.py` (or `pg_restore` a backup) and point
+`localConnectionString` in `wrangler.jsonc` at it.
 
 ## Notes
 
@@ -61,7 +63,7 @@ from Neon) and point `localConnectionString` in `wrangler.jsonc` at it.
 ## Uploaded tournaments
 
 Organisers' uploads (`/upload/`, `src/lib/uploads.ts`) are published into the same `events`, `players` and
-`games` tables with ids from 100000000. `import_neon.py` resumes below that range and `--patch` keeps those
+`games` tables with ids from 100000000. `import_pg.py` resumes below that range and `--patch` keeps those
 events. `--reset` drops them with everything else: afterwards open `/upload/admin/` and use "Republish all
 approved" (the uploads themselves are kept in `uploads`/`upload_rounds`; republished games get new ids, so
 their Stockfish analyses and AI notes are lost).

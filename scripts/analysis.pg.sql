@@ -11,5 +11,4 @@ CREATE TABLE IF NOT EXISTS game_analysis (
   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- The site's Hyperdrive role writes analyses (and only needs to write this table).
-GRANT SELECT, INSERT, UPDATE ON game_analysis TO readonly;
+-- The site's role (cm_web) writes analyses: its rights are in scripts/db/grants.sql.

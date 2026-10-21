@@ -1,0 +1,33 @@
+[Unit]
+Description=Cloudflare Tunnel cm-db (Workers VPC: Hyperdrive -> local PostgreSQL)
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=notify
+DynamicUser=yes
+# The token reaches the service as a read-only credential file, never on the command line.
+LoadCredential=tunnel-token:/etc/cloudflared/cm-db.token
+# QUIC is required by Workers VPC; apt updates cloudflared, so no self-update.
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --protocol quic --metrics 127.0.0.1:20241 --loglevel info run --token-file %d/tunnel-token
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=0
+MemoryMax=256M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

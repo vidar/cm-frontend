@@ -1,6 +1,6 @@
 // AI annotations of analysed games: Claude writes a short story of the game and notes on the key
 // moves, from the stored Stockfish analysis (src/lib/analysis.ts) only, for club players. Stored in
-// Neon table game_annotation (scripts/annotation.pg.sql) through the site's Hyperdrive binding and
+// table game_annotation (scripts/annotation.pg.sql) through the site's Hyperdrive binding and
 // shown to everyone. Only import from on-demand routes.
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
@@ -24,8 +24,6 @@ const STALE_MINUTES = 5;
 const CALL_TIMEOUT_MS = 90_000;
 /** A failed annotation can be retried after this long (every attempt is a paid call). */
 const RETRY_MINUTES = 10;
-/** Advisory lock that serialises the daily budget check with the claim (a constant no other code locks). */
-const BUDGET_LOCK = 0x41494e4f;
 
 const key = () => (env as { ANTHROPIC_KEY?: string }).ANTHROPIC_KEY;
 export const annotationEnabled = () => !!key();
@@ -254,15 +252,16 @@ export interface Refused {
 
 /**
  * Write the annotation of a game (once; a failed one can be retried after RETRY_MINUTES, an interrupted
- * one after STALE_MINUTES). The daily budget check and the claim run in one transaction under an advisory
- * lock, so parallel requests for different games can't all pass the check. The budget counts games
+ * one after STALE_MINUTES). The daily budget check and the claim run in one transaction that locks the
+ * table against other claims (not against reads; Hyperdrive doesn't support advisory locks), so parallel
+ * requests for different games can't all pass the check. The budget counts games
  * requested in the last day: a retry re-dates its game's row instead of adding one, so retries are bounded
  * per game by those pauses, not by DAILY_LIMIT (counting every attempt would need a new column).
  */
 export async function createAnnotation(gameId: number): Promise<AnnotationState | Refused> {
   if (!annotationEnabled()) return { status: 'unavailable' };
   const claim = await transaction(async (q) => {
-    await q('SELECT pg_advisory_xact_lock($1::bigint)', [BUDGET_LOCK]);
+    await q('LOCK TABLE game_annotation IN SHARE ROW EXCLUSIVE MODE');
     const [{ n }] = await q<{ n: string }>(`SELECT count(*) AS n FROM game_annotation WHERE requested_at > now() - interval '1 day'`);
     if (Number(n) >= DAILY_LIMIT) return 'limit' as const;
     // Claim the row so concurrent clicks pay for one annotation; its requested_at identifies this run.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Backup of the chessmoments.com analyses, AI notes and uploads every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:50:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

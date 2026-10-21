@@ -1,5 +1,5 @@
 // Maintenance switch for the games database (src/worker.ts): with the var MAINTENANCE = "1" the
-// database routes answer 503 and nothing may reach Neon.
+// database routes answer 503 and nothing may reach the database.
 const DB_ROUTES = /^\/(games|players|events|sitemaps|upload)(\/|$)/i;
 
 /** The path as Astro routes it: percent-decoded until stable (it decodes up to 10 times) and with `//` collapsed, so `/%67ames/` can't slip past. */

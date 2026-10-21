@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly full backup of the chessmoments.com database
+After=postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cm-db-backup full
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true

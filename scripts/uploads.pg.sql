@@ -23,7 +23,5 @@ CREATE TABLE IF NOT EXISTS upload_rounds (
   PRIMARY KEY (upload_id, round)
 );
 CREATE INDEX IF NOT EXISTS uploads_status ON uploads (status, created_at);
--- The site's Hyperdrive role manages uploads. Publishing also writes games/events/players and deletes
--- analyses of replaced games: that role can already do so (Neon console roles are in neon_superuser).
-GRANT SELECT, INSERT, UPDATE, DELETE ON uploads, upload_rounds TO readonly;
-GRANT USAGE ON SEQUENCE uploads_id_seq TO readonly;
+-- The site's role (cm_web) manages uploads and publishes them into games/events/players: its rights are
+-- in scripts/db/grants.sql.

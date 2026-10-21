@@ -1,4 +1,4 @@
--- TWIC games database (Neon Postgres, read through Hyperdrive). Loaded by scripts/twic/import_neon.py
+-- TWIC games database (PostgreSQL on hetz-stock, read through Hyperdrive). Loaded by scripts/twic/import_pg.py
 -- from the SQLite file built by scripts/twic/build.py (see schema.sql for column notes).
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS players (

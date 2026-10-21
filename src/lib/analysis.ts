@@ -1,5 +1,5 @@
 // On-demand Stockfish analysis of database games. The engine runs on our VPS (ENGINE_URL, bearer
-// STOCKFISH_TOKEN; API described at ENGINE_URL/llm.txt). Results live in Neon table game_analysis
+// STOCKFISH_TOKEN; API described at ENGINE_URL/llm.txt). Results live in table game_analysis
 // (scripts/analysis.pg.sql), through the site's Hyperdrive binding (its role may insert/update
 // that table only). Only import from on-demand routes.
 import { env } from 'cloudflare:workers';
