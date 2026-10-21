@@ -8,14 +8,29 @@ import type { FullGame } from './games';
 
 const TOP = 8;
 
+/**
+ * A name (player, team, event) as prompt text: name-like characters only, cut to `max`. Organisers name
+ * the players and teams of uploaded tournaments, so a name must not carry markup or a long message into
+ * the prompt (src/lib/annotate.ts puts all of it inside a data block, too).
+ */
+export function safeName(s: string | null | undefined, max = 60) {
+  return (s ?? '')
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{M}\p{N} .,'’()&/-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max)
+    .trim();
+}
+
 /** Ranked lines as text: the top of the table plus the given players' lines. */
 function table<T>(lines: T[], label: (l: T) => string, keep: (l: T) => boolean) {
   const shown = lines.filter((l, i) => i < TOP || keep(l));
   return shown.map((l, i) => (i > 0 && lines.indexOf(l) !== lines.indexOf(shown[i - 1]) + 1 ? `  …\n${label(l)}` : label(l))).join('\n');
 }
 
-const lineText = (l: Line) => `  ${l.rank}. ${l.player.name} ${pts(l.points)}/${l.games}`;
-const teamText = (l: TeamLine) => `  ${l.rank}. ${l.team} ${l.mp} match points, ${pts(l.gp)} game points (${l.played} matches)`;
+const lineText = (l: Line) => `  ${l.rank}. ${safeName(l.player.name)} ${pts(l.points)}/${l.games}`;
+const teamText = (l: TeamLine) => `  ${l.rank}. ${safeName(l.team)} ${l.mp} match points, ${pts(l.gp)} game points (${l.played} matches)`;
 
 /** Place with ties by score: "3rd", "shared 2nd-4th". */
 function place<T>(lines: T[], line: T, score: (l: T) => number) {
@@ -84,7 +99,9 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
   const prev = a.rounds.filter((r) => r.n < n).at(-1);
   const W = game.white_id;
   const B = game.black_id;
-  const out: string[] = [`Tournament: ${game.event_name}, ${FORMAT_LABEL[a.format].toLowerCase()}, ${total} rounds${a.format !== 'team' ? `, ${a.players.size} players` : ''}.`];
+  const white = safeName(game.white_name);
+  const black = safeName(game.black_name);
+  const out: string[] = [`Tournament: ${safeName(game.event_name, 100)}, ${FORMAT_LABEL[a.format].toLowerCase()}, ${total} rounds${a.format !== 'team' ? `, ${a.players.size} players` : ''}.`];
   out.push(n === total ? `This game was played in round ${n}, the last round.` : `This game was played in round ${n} of ${total}.`);
   if (!a.complete && a.format !== 'knockout' && a.format !== 'match') out.push('Not every game of the event is in the database, so the standings below may be incomplete; treat them as approximate.');
 
@@ -94,11 +111,11 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
       const { r, m } = ko;
       const before = m.games.filter((g) => g.id < game.id);
       const score = (games: EventGame[], id: number) => games.reduce((s, g) => s + (g.white_id === id ? whiteScore(g.result) : g.black_id === id ? 1 - whiteScore(g.result) : 0), 0);
-      const sA = m.a.name;
-      const sB = m.b.name;
+      const sA = safeName(m.a.name);
+      const sB = safeName(m.b.name);
       const upto = [...before, eg];
       out.push(
-        `${a.format === 'match' ? 'Match' : `Knockout stage: ${r.name}`} between ${m.a.name} and ${m.b.name}, ${m.games.length} games in all.`,
+        `${a.format === 'match' ? 'Match' : `Knockout stage: ${r.name}`} between ${sA} and ${sB}, ${m.games.length} games in all.`,
         `This was game ${before.length + 1} of the match. Score before it: ${sA} ${pts(score(before, m.a.id))}, ${sB} ${pts(score(before, m.b.id))}.`,
         `Score after it: ${sA} ${pts(score(upto, m.a.id))}, ${sB} ${pts(score(upto, m.b.id))}.`,
         upto.length === m.games.length ? `This was the last game of the match.` : `${m.games.length - upto.length} more game(s) followed in the match.`,
@@ -115,8 +132,8 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
     if (match) {
       const board = match.games.findIndex((g) => g.id === game.id) + 1;
       out.push(
-        `Team match in round ${n}: ${match.home} vs ${match.away}, ${match.games.length} boards; this game was board ${board}. ${game.white_name} played for ${wt}, ${game.black_name} for ${bt}.`,
-        `Final score of the team match (known only after the round; for the postamble): ${match.home} ${pts(match.homePts)}, ${match.away} ${pts(match.awayPts)}.`,
+        `Team match in round ${n}: ${safeName(match.home)} vs ${safeName(match.away)}, ${match.games.length} boards; this game was board ${board}. ${white} played for ${safeName(wt)}, ${black} for ${safeName(bt)}.`,
+        `Final score of the team match (known only after the round; for the postamble): ${safeName(match.home)} ${pts(match.homePts)}, ${safeName(match.away)} ${pts(match.awayPts)}.`,
       );
     }
     const keep = (l: TeamLine) => l.team === wt || l.team === bt;
@@ -125,14 +142,14 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
     if (before) out.push(`Team standings going into round ${n}:`, table(before, teamText, keep));
     out.push(`Team standings after round ${n}:`, table(after, teamText, keep));
     out.push(
-      facts(before, after, (l) => l.mp, (l) => l.team, (l) => `${l.mp} match points`, [
-        { label: `${wt} (${game.white_name}'s team)`, is: (l) => l.team === wt },
-        { label: `${bt} (${game.black_name}'s team)`, is: (l) => l.team === bt },
+      facts(before, after, (l) => l.mp, (l) => safeName(l.team), (l) => `${l.mp} match points`, [
+        { label: `${safeName(wt)} (${white}'s team)`, is: (l) => l.team === wt },
+        { label: `${safeName(bt)} (${black}'s team)`, is: (l) => l.team === bt },
       ]),
     );
     for (const [id, name] of [
-      [W, game.white_name],
-      [B, game.black_name],
+      [W, white],
+      [B, black],
     ] as const) {
       const s = scoreBefore(a, id, n);
       if (s.games) out.push(`${name} had scored ${pts(s.points)}/${s.games} in the event before this game.`);
@@ -148,9 +165,9 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
   else out.push('This was the first round.');
   out.push(`Standings after round ${n}:`, table(after, lineText, keep));
   out.push(
-    facts(before, after, (l) => l.points, (l) => l.player.name, (l) => `${pts(l.points)}/${l.games}`, [
-      { label: game.white_name, is: (l) => l.player.id === W },
-      { label: game.black_name, is: (l) => l.player.id === B },
+    facts(before, after, (l) => l.points, (l) => safeName(l.player.name), (l) => `${pts(l.points)}/${l.games}`, [
+      { label: white, is: (l) => l.player.id === W },
+      { label: black, is: (l) => l.player.id === B },
     ]),
   );
   return out.join('\n');
