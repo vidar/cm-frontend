@@ -197,9 +197,15 @@ echo "rows (restored | live):"
 join -a1 -a2 -e '-' -o 0,1.2,2.2 <(count "$TARGET" | sort) <(count "$DB" 2>/dev/null | sort) | awk '{ printf "  %-18s %10s | %s\n", $1, $2, $3 }'
 # Step 3 without a fresh hourly backup: the newest one, if it was made after this full backup.
 small=$(newest_small)
+step3="none in $DIR/small/: name an hourly dump made after this full one if you have one elsewhere (e.g. copied
+   back from off-box), else skip this step"
 if [ -n "$small" ] && [ -n "$made" ]; then
   s_made=$(made_at "$small")
-  [ -n "$s_made" ] && [ "$s_made" -gt "$made" ] || small=
+  if [ -z "$s_made" ] || [ "$s_made" -le "$made" ]; then
+    small=
+    step3="none in $DIR/small/ is newer than this full one: skip this step (the full backup holds the newest rows)
+   unless you have a newer one elsewhere"
+  fi
 fi
 cat <<EOF
 
@@ -219,7 +225,7 @@ $TARGET is ready. To make it the live database, in this order:
      sudo -u postgres psql -c "ALTER DATABASE ${DB}_old RENAME TO $DB"
      sudo -u postgres psql -c "ALTER DATABASE $DB WITH ALLOW_CONNECTIONS true"
 3. The site's own tables, from the file step 1 printed (without one: the newest good hourly backup made after
-   this full one, now ${small:-none in $DIR/small/: then skip this step, as the full backup holds the newest rows}):
+   this full one, now ${small:-$step3}):
      sudo cm-db-restore --site-tables <file>
 4. If TWIC issues were imported after this full backup, import them again now (scripts/twic/README.md): the
    importer goes on where the restored database ends, with the same game ids, analyses and notes.

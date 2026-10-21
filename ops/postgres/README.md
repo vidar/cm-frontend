@@ -309,7 +309,7 @@ zero, so the waiting week costs nothing.
   `sudo PGMAJOR=19 bash ~/cm-db-kit/ops/postgres/install.sh` (it starts 19 with the settings and the same
   certificate, which lives outside the cluster), `sudo -u postgres psql -c 'SHOW ssl_cert_file'` (must name
   `cm-origin.crt`), the site checks, then `sudo pg_dropcluster 18 main`; and `postgresql@18-main` in this README
-  becomes `19-main`.
+  becomes `19-main`. Later reruns of `install.sh` find 19 on their own (the version of the cluster on port 5432).
 - **Kit updates** (a new version of these scripts, or a branch that changes the site's tables in
   `scripts/*.pg.sql` or `scripts/db/grants.sql`, before it is merged): copy the kit again (step 0's command with
   `BRANCH` set to that branch) and rerun `sudo bash ~/cm-db-kit/ops/postgres/install.sh`. It applies the schema

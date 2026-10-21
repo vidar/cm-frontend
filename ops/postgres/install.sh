@@ -30,7 +30,9 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 KIT=$(cd "$HERE/../.." && pwd)            # repo root (or the unpacked kit): needs ops/postgres and scripts/db
 DB=cm_games
 CLUSTER=${CLUSTER:-main}
-PGMAJOR=${PGMAJOR:-18}                               # Ubuntu 26.04's PostgreSQL
+# The version of the cluster on 5432 (so reruns after a major upgrade pick the new one), else Ubuntu 26.04's.
+PGMAJOR=${PGMAJOR:-$( (pg_lsclusters -h 2>/dev/null || true) | awk -v c="$CLUSTER" '$2 == c && $3 == 5432 { print $1; exit }')}
+PGMAJOR=${PGMAJOR:-18}
 ETC=/etc/cm-db
 BACKUP_DIR=${BACKUP_DIR:-/var/backups/cm-db}
 LIB=/usr/local/lib/cm-db                             # what cm-db-restore needs from the kit (schema, grants)
@@ -61,6 +63,10 @@ install -d -m 700 "$ETC"
 printf 'TAILSCALE_IP=%s\nTAILNET_CLIENTS=%s\n' "$TAILSCALE_IP" "$TAILNET_CLIENTS" > "$ETC/install.env"
 
 say "1. packages"
+# Never set up an older version next to a newer live one (e.g. PGMAJOR=18 left over after an upgrade to 19).
+live=$( (pg_lsclusters -h 2>/dev/null || true) | awk '$3 == 5432 { print $1; exit }')
+[ -n "${PGPORT:-}" ] || [ -z "$live" ] || [ "${live%%.*}" -le "${PGMAJOR%%.*}" ] \
+  || die "the cluster on port 5432 is PostgreSQL $live, newer than $PGMAJOR: run install.sh without PGMAJOR (or PGMAJOR=$live)"
 # The cluster the package creates gets this locale (else the shell's, which may be anything).
 install -d -m 755 /etc/postgresql-common/createcluster.d
 # Exactly this version, whatever else may be installed (an older one would not know the builtin locale).
@@ -230,7 +236,8 @@ if [ "$(psql_su -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname =
   migrated=1
   for f in scripts/analysis.pg.sql scripts/annotation.pg.sql scripts/uploads.pg.sql scripts/db/grants.sql; do
     PGOPTIONS='-c client_min_messages=warning -c lock_timeout=10s' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" -f "$KIT/$f" \
-      || die "$f: a table is busy (the nightly backup from 03:20 UTC, an import or a restore holds it). Run install.sh again in a few minutes."
+      || die "$f failed (the error is above). If it says \"lock timeout\", a table is busy (the nightly backup from 03:20 UTC,
+  an import or a restore holds it): run install.sh again in a few minutes."
   done
   echo "applied scripts/analysis.pg.sql, annotation.pg.sql, uploads.pg.sql and scripts/db/grants.sql"
 else
