@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Compare two copies of the chessmoments.com database table by table: row counts, content checksums
-# (md5 over every row in key order, in buckets for the big tables), sequence values, extensions and
-# indexes. Exit 0 only when everything matches.
+# (md5 over every row in key order, in buckets for the big tables), sequence values, the schema (tables
+# and columns, indexes, constraints, other objects), extensions and locale. Exit 0 only when everything
+# matches. NOT NULL is compared through pg_attribute, which reads the
+# same on every version (PostgreSQL 18 also lists NOT NULLs in pg_constraint, older versions don't).
 #
 #   compare.sh <source> <target>     each a libpq connection: a postgresql:// URL, "service=neon", or
 #                                    "dbname=cm_games" (the local socket, as the user running it)
@@ -28,10 +30,17 @@ $(checksum game_annotation game_id 0)
 $(checksum uploads id 0)
 $(checksum upload_rounds 'upload_id, round' 0)
 SELECT 'seq uploads_id_seq', 0, last_value, is_called::text FROM public.uploads_id_seq;
-SELECT 'extension pg_trgm', 0, count(*), '' FROM pg_extension WHERE extname = 'pg_trgm';
-SELECT 'database', 0, 0, pg_encoding_to_char(encoding) || ' ' || datcollate || ' ' || datctype FROM pg_database WHERE datname = current_database();
+SELECT 'extensions', 0, count(*), string_agg(extname || ' ' || extversion || ' ' || extnamespace::regnamespace::text, ', ' ORDER BY extname) FROM pg_extension WHERE extname <> 'plpgsql';
+SELECT 'database', 0, 0, pg_encoding_to_char(encoding) || ' ' || datcollate || ' ' || datctype || ' ' || datlocprovider::text FROM pg_database WHERE datname = current_database();
+SELECT 'tables+columns', 0, count(*), md5(string_agg(table_name || '.' || column_name || ':' || data_type || ':' || coalesce(column_default, ''), ';' ORDER BY table_name, column_name)) FROM information_schema.columns WHERE table_schema = 'public';
+SELECT 'other objects', 0, count(*), md5(string_agg(kind || ' ' || name, ';' ORDER BY kind, name)) FROM (
+  SELECT 'relation ' || c.relkind::text AS kind, c.relname::text AS name FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('v', 'm', 'f', 'p', 'S')
+  UNION ALL SELECT 'function', p.oid::regprocedure::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+  UNION ALL SELECT 'trigger', t.tgname::text FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE c.relnamespace = 'public'::regnamespace AND NOT t.tgisinternal
+  UNION ALL SELECT 'schema', nspname::text FROM pg_namespace WHERE nspname NOT IN ('public', 'information_schema') AND nspname NOT LIKE 'pg\_%') o;
 SELECT 'indexes', 0, count(*), md5(string_agg(indexdef, ';' ORDER BY indexname)) FROM pg_indexes WHERE schemaname = 'public';
-SELECT 'constraints', 0, count(*), md5(string_agg(conname || ':' || pg_get_constraintdef(oid), ';' ORDER BY conname)) FROM pg_constraint WHERE connamespace = 'public'::regnamespace;"
+SELECT 'constraints', 0, count(*), md5(string_agg(conname || ':' || pg_get_constraintdef(oid), ';' ORDER BY conname)) FROM pg_constraint WHERE connamespace = 'public'::regnamespace AND contype <> 'n';
+SELECT 'not null', 0, count(*), md5(string_agg(c.relname || '.' || a.attname, ';' ORDER BY c.relname, a.attname)) FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped AND a.attnotnull;"
 
 run() { psql -X -q -At -F ' | ' -v ON_ERROR_STOP=1 -d "$1" -f - <<< "$SQL"; }
 a=$(mktemp) b=$(mktemp)

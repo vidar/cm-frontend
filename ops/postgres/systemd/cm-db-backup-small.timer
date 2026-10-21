@@ -1,8 +1,8 @@
 [Unit]
-Description=Backup of the chessmoments.com analyses, AI notes and uploads every 6 hours
+Description=Hourly backup of the chessmoments.com analyses, AI notes and uploads
 
 [Timer]
-OnCalendar=*-*-* 00/6:50:00 UTC
+OnCalendar=*-*-* *:50:00 UTC
 Persistent=true
 
 [Install]

@@ -6,7 +6,7 @@ import Layout from '../../layouts/Layout.astro';
 import { limiterKey } from '../../lib/client';
 import UploadPreview from '../../components/upload/UploadPreview.astro';
 import { query } from '../../lib/games';
-import { deleteRound, findUpload, FORMATS, getRounds, LIMITS, REJECTED, saveRounds } from '../../lib/uploads';
+import { BUSY, deleteRound, findUpload, FORMATS, getRounds, isBusy, LIMITS, REJECTED, saveRounds } from '../../lib/uploads';
 import type { PgnProblem } from '../../lib/pgn';
 
 export const prerender = false;
@@ -24,39 +24,44 @@ let problems: PgnProblem[] = [];
 // A request body is read only up to a file at the size limit plus the form around it.
 const MAX_BODY = LIMITS.bytes + 100_000;
 if (Astro.request.method === 'POST') {
-  const size = Number(Astro.request.headers.get('Content-Length'));
-  const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
-  if (upload.status === 'rejected') error = REJECTED;
-  else if (!(size > 0 && size <= MAX_BODY)) error = 'The file is too large (2 MB at most).';
-  else if (limiter && !(await limiter.limit({ key: `up:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many requests, please try again in a minute.';
-  else {
-    const form = await Astro.request.formData();
-    if (form.get('action') === 'delete') {
-      const n = Number(form.get('round'));
-      if (Number.isInteger(n) && n > 0) {
-        if (await deleteRound(upload, n)) message = `Round ${n} removed.`;
-        else error = REJECTED;
-      }
-    } else {
-      const file = form.get('file');
-      const pasted = String(form.get('pgn') ?? '');
-      const roundField = String(form.get('round') ?? '').trim();
-      const forced = roundField ? Number(roundField) : null;
-      if ((file instanceof File && file.size > LIMITS.bytes) || pasted.length > LIMITS.bytes) error = 'The file is too large (2 MB at most).';
-      else {
-        const text = file instanceof File && file.size ? await file.text() : pasted;
-        if (!text.trim()) error = 'Choose a PGN file or paste the games.';
-        else if (forced !== null && !(Number.isInteger(forced) && forced >= 1 && forced <= LIMITS.rounds)) error = `The round must be a number from 1 to ${LIMITS.rounds}.`;
+  try {
+    const size = Number(Astro.request.headers.get('Content-Length'));
+    const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;
+    if (upload.status === 'rejected') error = REJECTED;
+    else if (!(size > 0 && size <= MAX_BODY)) error = 'The file is too large (2 MB at most).';
+    else if (limiter && !(await limiter.limit({ key: `up:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many requests, please try again in a minute.';
+    else {
+      const form = await Astro.request.formData();
+      if (form.get('action') === 'delete') {
+        const n = Number(form.get('round'));
+        if (Number.isInteger(n) && n > 0) {
+          if (await deleteRound(upload, n)) message = `Round ${n} removed.`;
+          else error = REJECTED;
+        }
+      } else {
+        const file = form.get('file');
+        const pasted = String(form.get('pgn') ?? '');
+        const roundField = String(form.get('round') ?? '').trim();
+        const forced = roundField ? Number(roundField) : null;
+        if ((file instanceof File && file.size > LIMITS.bytes) || pasted.length > LIMITS.bytes) error = 'The file is too large (2 MB at most).';
         else {
-          const r = await saveRounds(upload, forced, text);
-          problems = r.problems ?? [];
-          if ('error' in r && r.error) error = r.error;
-          else if ('saved' in r && r.saved)
-            message =
-              r.saved.map((s) => `Round ${s.round}: ${s.games} game${s.games === 1 ? '' : 's'}`).join(', ') + ` saved${r.published ? ' and published' : ''}.`;
+          const text = file instanceof File && file.size ? await file.text() : pasted;
+          if (!text.trim()) error = 'Choose a PGN file or paste the games.';
+          else if (forced !== null && !(Number.isInteger(forced) && forced >= 1 && forced <= LIMITS.rounds)) error = `The round must be a number from 1 to ${LIMITS.rounds}.`;
+          else {
+            const r = await saveRounds(upload, forced, text);
+            problems = r.problems ?? [];
+            if ('error' in r && r.error) error = r.error;
+            else if ('saved' in r && r.saved)
+              message =
+                r.saved.map((s) => `Round ${s.round}: ${s.games} game${s.games === 1 ? '' : 's'}`).join(', ') + ` saved${r.published ? ' and published' : ''}.`;
+          }
         }
       }
     }
+  } catch (e) {
+    if (!isBusy(e)) throw e;
+    error = BUSY;
   }
 }
 

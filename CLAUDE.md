@@ -69,7 +69,8 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   `/players/*?` and `/games/search/?`. Maintenance: `MAINTENANCE` "1" in `wrangler.jsonc` (both `vars`
   blocks; deploys overwrite dashboard vars) closes only the database routes with 503 (`src/worker.ts`,
   path decoded as Astro routes it, `src/lib/maintenance.ts`) and makes `query()` refuse to connect; the
-  rest of the site stays up. POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
+  rest of the site stays up. A 500 from a database route (the database failing) becomes a 503 with
+  `Retry-After: 120` in `src/worker.ts`, so search engines retry instead of dropping URLs. POST endpoints use `src/lib/client.ts` (`sameSite`, `limiterKey` keys IPv6
   by /64, `idParam` for int4 ids). Hosting decisions and the Hyperdrive settings
   that matter are in `docs/database-costs.md`.
 - **Engine analysis (on demand):** game pages offer "Analyse with Stockfish". The engine runs on our VPS
@@ -100,7 +101,8 @@ Astro site for https://chessmoments.com, deployed to Cloudflare Workers via Work
   ids ≥ `UPLOAD_ID_BASE` mark uploaded data: those pages credit the organiser instead of TWIC, and uploaded
   pages are cached for 5 minutes. Players match existing ones by FIDE ID when the names agree (`sameName`; a
   FIDE ID under another name is dropped, and the preview lists how IDs resolve), else by exact name among
-  uploaded players. Publishing runs one at a time (a lock on the games table: Hyperdrive has no advisory locks), in batched statements; saveRounds/deleteRound lock
+  uploaded players. Publishing runs one at a time (a lock on the games table: Hyperdrive has no advisory locks; a lock timeout,
+  e.g. behind an import's swap, shows `BUSY` and changes nothing), in batched statements; saveRounds/deleteRound lock
   the upload row; Round tags are stored rebuilt from the numbers ("5.1"). `LIMITS` caps bytes, games (per round
   and tournament), plies (per game and file), pending tournaments with games, and new ones a day; uploads replay
   every move with chess.js, which needs Workers Paid CPU time for real rounds. The TWIC importer resumes below

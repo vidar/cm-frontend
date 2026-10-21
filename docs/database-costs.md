@@ -18,10 +18,14 @@ CU-hour), more when crawls push it above the smallest size. Neon's $5 spending a
 - **Cost:** nothing extra. The server is already paid for the engine (stockfish-svc) and render-svc.
 - **No compute meter:** crawlers cost CPU time on a box we have, not money. Crawler pacing (`src/lib/bots.ts`) stays,
   now to protect the engine and the page latency rather than the bill.
-- **Trade-offs:** one machine, shared with CPU-heavy neighbours (Postgres keeps to about 1 GB and gets
-  `CPUWeight=400`); no point-in-time restore (nightly full dumps plus 6-hourly dumps of the tables that can't be
-  rebuilt, and a monthly restore drill); security updates are automatic, major upgrades are ours. If the box is
-  lost, the TWIC tables can be rebuilt from source in hours and the rest comes from the newest dump.
+- **Trade-offs:** one machine, shared with CPU-heavy neighbours (Postgres keeps to about 1 GB, its slice gets
+  `CPUWeight=500` against the engine's 50 and the renders' 20, and the renders are capped so the box can't run out
+  of memory); no point-in-time restore (nightly full dumps plus hourly dumps of the tables that can't be rebuilt,
+  an off-site copy, and a restore drill every month); security updates are automatic, major upgrades are ours. If
+  the box is lost: a new box with `install.sh`, then `cm-db-restore` of the newest full dump and
+  `cm-db-restore --table` for each of the site's own tables from the newest hourly one (both from the off-site
+  copy). Only if every dump is gone are the TWIC tables rebuilt from source (hours), on an empty database with
+  the site's tables created from `scripts/*.pg.sql`.
 - **No open port:** Postgres listens on localhost; Hyperdrive comes in through a Cloudflare Tunnel (Workers VPC),
   with TLS and a role that can only do what the site does (`scripts/db/grants.sql`).
 

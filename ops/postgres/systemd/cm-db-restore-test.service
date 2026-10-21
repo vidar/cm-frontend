@@ -1,0 +1,13 @@
+[Unit]
+Description=Restore drill: the newest full backup into cm_games_drill, counted, dropped again
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cm-db-restore --test
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true

@@ -1,10 +1,10 @@
-// Unit tests for the pure parts of src/lib/uploads.ts (UPLOAD_ID_BASE, isUploaded, FORMATS, LIMITS and
-// previewAnalysis over rounds of games parsed from small PGN strings) and the pure helpers of
+// Unit tests for the pure parts of src/lib/uploads.ts (UPLOAD_ID_BASE, isUploaded, isBusy, FORMATS, LIMITS
+// and previewAnalysis over rounds of games parsed from small PGN strings) and the pure helpers of
 // src/lib/games.ts (slugify, gamePath, scoreFor, resultLabel). Nothing here touches the database:
 // no query(), createUpload(), saveRounds(), approve() or the like. Fixtures are hand-built and the
 // expected standings are worked out by hand.
 import { describe, expect, it } from 'vitest';
-import { FORMATS, isUploaded, LIMITS, previewAnalysis, sameName, UPLOAD_ID_BASE, type Upload, type UploadFormat, type UploadRound } from '../src/lib/uploads';
+import { FORMATS, isBusy, isUploaded, LIMITS, previewAnalysis, sameName, UPLOAD_ID_BASE, type Upload, type UploadFormat, type UploadRound } from '../src/lib/uploads';
 import { gamePath, resultLabel, scoreFor, slugify } from '../src/lib/games';
 import { parsePgn, type ParsedGame } from '../src/lib/pgn';
 
@@ -121,6 +121,20 @@ describe('UPLOAD_ID_BASE / isUploaded', () => {
     expect(isUploaded(UPLOAD_ID_BASE - 1)).toBe(false);
     expect(isUploaded(1)).toBe(false);
     expect(isUploaded(0)).toBe(false);
+  });
+});
+
+describe('isBusy', () => {
+  it('is true for lock and statement timeouts (the transaction rolled back)', () => {
+    expect(isBusy({ code: '55P03' })).toBe(true); // lock_not_available: cm_web's lock_timeout
+    expect(isBusy({ code: '57014' })).toBe(true); // query_canceled: statement_timeout
+  });
+  it('is false for other errors and non-errors', () => {
+    expect(isBusy({ code: '23505' })).toBe(false);
+    expect(isBusy(new Error('boom'))).toBe(false);
+    expect(isBusy(null)).toBe(false);
+    expect(isBusy(undefined)).toBe(false);
+    expect(isBusy('55P03')).toBe(false);
   });
 });
 

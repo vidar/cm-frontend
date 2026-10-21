@@ -1,7 +1,7 @@
 [Unit]
 Description=Nightly full backup of the chessmoments.com database
+# After, not Requires: a backup must never start a database that was stopped on purpose.
 After=postgresql.service
-Requires=postgresql.service
 
 [Service]
 Type=oneshot

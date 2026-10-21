@@ -60,8 +60,5 @@ CREATE TABLE IF NOT EXISTS event_redirects (
   slug TEXT PRIMARY KEY,         -- slug of an event that was merged into another
   event_id INTEGER NOT NULL
 );
--- Columns added after the first load (no-ops on a fresh database).
-ALTER TABLE events ADD COLUMN IF NOT EXISTS type TEXT;
-ALTER TABLE events ADD COLUMN IF NOT EXISTS rounds INTEGER;
-ALTER TABLE games ADD COLUMN IF NOT EXISTS white_team TEXT;
-ALTER TABLE games ADD COLUMN IF NOT EXISTS black_team TEXT;
+-- Run before every import: only CREATE ... IF NOT EXISTS here, nothing that locks an existing table (an
+-- ALTER TABLE would queue the site's reads behind a running backup). Add new columns by hand, once.

@@ -12,6 +12,15 @@ import { parseGame, roundOf, splitPgn, type ParsedGame, type PgnProblem } from '
 /** Shown when a rejected tournament is changed (also thrown inside a transaction when it was rejected meanwhile). */
 export const REJECTED = 'This tournament was not accepted, so it can no longer be changed.';
 
+/** Shown when a write gave up waiting for a lock (a TWIC import swapping tables in); it was rolled back. */
+export const BUSY = 'The database is busy with an update. Nothing was changed: please try again in a minute.';
+
+/** A lock or statement timeout (cm_web's lock_timeout / statement_timeout): the transaction rolled back. */
+export function isBusy(e: unknown) {
+  const code = (e as { code?: unknown } | null)?.code;
+  return code === '55P03' || code === '57014';
+}
+
 /** Uploaded events, players and games get ids from here up; the TWIC importer stays below. */
 export const UPLOAD_ID_BASE = 100_000_000;
 export const isUploaded = (id: number) => id >= UPLOAD_ID_BASE;

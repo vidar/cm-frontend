@@ -4,10 +4,12 @@
 // (puzzles, openings, tools, the homepage, robots.txt) keeps working, which is what search engines
 // want to see during an outage (a 503 on robots.txt stops crawling; a 503 on a URL for more than
 // two days drops it). Set it to "0" to reopen the database.
+// When the database fails (an outage: Hyperdrive gives up after 15 s and Astro answers an empty 500), the
+// database routes answer 503 with Retry-After and a short page instead, which search engines retry.
 import { handle } from '@astrojs/cloudflare/handler';
 import { isDbRoute, maintenance } from './lib/maintenance';
 
-const PAGE = `<!doctype html>
+const page = (text: string) => `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -34,20 +36,28 @@ const PAGE = `<!doctype html>
   <p class="logo"><a href="/"><span>c</span>hessmoments</a></p>
   <div class="board" aria-hidden="true"></div>
   <h1>Games database back soon</h1>
-  <p>The games, players and events pages are offline for maintenance.</p>
+  <p>${text}</p>
   <p>The <a href="/puzzle/">daily puzzle</a>, the <a href="/openings/">openings</a> and the <a href="/analysis/">analysis board</a> are working.</p>
 </main>
 </body>
 </html>`;
 
+const MAINTENANCE_PAGE = page('The games, players and events pages are offline for maintenance.');
+const DOWN_PAGE = page('The games database is not answering right now. Please try again in a few minutes.');
+
+const unavailable = (request: Request, body: string, retryAfter: number) =>
+  new Response(request.method === 'HEAD' ? null : body, {
+    status: 503,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': String(retryAfter) },
+  });
+
 export default {
   async fetch(request, env, ctx) {
-    if (maintenance(env) && isDbRoute(request.url)) {
-      return new Response(request.method === 'HEAD' ? null : PAGE, {
-        status: 503,
-        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '3600' },
-      });
-    }
-    return handle(request, env, ctx);
+    const db = isDbRoute(request.url);
+    if (db && maintenance(env)) return unavailable(request, MAINTENANCE_PAGE, 3600);
+    const response = await handle(request, env, ctx);
+    // Only 500: the JSON endpoints answer their own 503s (engine busy, budget used up).
+    if (db && response.status === 500) return unavailable(request, DOWN_PAGE, 120);
+    return response;
   },
 } satisfies ExportedHandler<Env>;

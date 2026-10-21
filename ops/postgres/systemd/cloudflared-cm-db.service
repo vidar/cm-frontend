@@ -14,6 +14,14 @@ Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=0
 MemoryMax=256M
+# Every query passes through it: as much CPU priority as Postgres, and not the OOM killer's first choice.
+CPUWeight=500
+OOMScoreAdjust=-500
+# The tunnel only needs Cloudflare (public addresses) and localhost. Without this, a Workers VPC *network*
+# binding on this tunnel (anyone with VPC rights in the account) could reach the tailnet (the Mac mini)
+# and private networks from this box. Services on 127.0.0.1 (engine, renders) stay reachable: they keep
+# their own authentication.
+IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7 fe80::/10
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Load the TWIC SQLite build into the site's PostgreSQL database.
 
-    DATABASE_URL=postgresql://cm_owner:...@127.0.0.1/cm_games \
+    # on the database server, as root (the owner role over the local socket, no password):
+    sudo DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql' \
       python3 scripts/twic/import_pg.py --db twic.sqlite [--reset] [--batch 4000]
 
 DATABASE_URL is any PostgreSQL server, driven through the psql client (on the database server
-itself, or over Tailscale). NEON_DATABASE_URL instead talks to Neon over its HTTPS SQL endpoint
-(no psql needed), for as long as the Neon project exists. Use the owner role either way.
+itself, or over Tailscale: postgresql://cm_owner@<host>/cm_games?sslmode=require with the password in
+~/.pgpass, never in the URL, where shell history and `ps` would keep it). NEON_DATABASE_URL instead
+talks to Neon over its HTTPS SQL endpoint (no psql needed), for as long as the Neon project exists.
+Use the owner role either way.
 
 Resumable: each table is copied in id order and a rerun continues after the highest id already
 in Postgres. --reset drops the tables first (do this for a full rebuild). Afterwards it creates
-the indexes (indexes.pg.sql), applies the grants (--grants, scripts/db/grants.sql: the Hyperdrive
-role's rights) and ANALYZEs. Standard library only.
+the indexes (indexes.pg.sql), ANALYZEs and applies the grants: on a server set up by ops/postgres
+(role cm_web exists) scripts/db/grants.sql, the site role's rights; on Neon the read grant to its
+role `readonly`; on a database without either (local development) none. --grants FILE or '' overrides.
+Standard library only.
 
 Uploaded tournaments (/upload/, ids from 100000000) are left alone, except by --reset, which drops
 them from games/players/events: republish them afterwards from /upload/admin/. An uploaded event or
@@ -248,7 +253,7 @@ def main():
     ap.add_argument('--db', required=True, help='SQLite file from build.py')
     ap.add_argument('--batch', type=int, default=4000, help='rows per INSERT')
     ap.add_argument('--reset', action='store_true', help='drop and recreate the tables first')
-    ap.add_argument('--grants', default=str(HERE.parent / 'db' / 'grants.sql'), help="SQL file with the app role's rights ('' to skip)")
+    ap.add_argument('--grants', default=None, help="SQL file with the site role's rights ('' to skip; default: see above)")
     ap.add_argument('--patch', action='store_true', help='update events and changed games in place (see remap_events.py)')
     a = ap.parse_args()
     if os.environ.get('DATABASE_URL'):
@@ -258,6 +263,20 @@ def main():
     else:
         sys.exit('set DATABASE_URL (PostgreSQL, through psql) or NEON_DATABASE_URL (Neon over HTTPS)')
     src = sqlite3.connect(a.db)
+    grants = a.grants
+    if grants is None and isinstance(db, Psql):
+        if db("SELECT 1 FROM pg_roles WHERE rolname = 'cm_web'")['rows']:
+            grants = str(HERE.parent / 'db' / 'grants.sql')
+            # The site's own tables come from Neon or a backup, never from here: without them this is the
+            # wrong database (or a new one), and the grants would fail after hours of loading.
+            have = {r['tablename'] for r in db("SELECT tablename FROM pg_tables WHERE schemaname = 'public'")['rows']}
+            missing = sorted({'game_analysis', 'game_annotation', 'uploads', 'upload_rounds'} - have)
+            if missing:
+                sys.exit(f'this database has no {", ".join(missing)}: restore them from a backup (ops/postgres/README.md), '
+                         'or for a new, empty database create them first with psql -f scripts/analysis.pg.sql '
+                         '-f scripts/annotation.pg.sql -f scripts/uploads.pg.sql')
+        else:
+            print('no role cm_web here: skipping the grants (a local database)')
     if a.reset:
         db('DROP TABLE IF EXISTS games, players, events, openings, meta')
     db.script(HERE / 'schema.pg.sql')
@@ -269,9 +288,13 @@ def main():
                 copy_table(db, src, table, a.batch)
     print('creating indexes…')
     db.script(HERE / 'indexes.pg.sql')
-    if a.grants:
-        db.script(Path(a.grants))
     db('ANALYZE')
+    if grants:
+        db.script(Path(grants))
+    elif grants is None and isinstance(db, Neon):
+        # Neon's site role; recreated tables (--reset) lose its rights otherwise. Nothing is revoked.
+        db('GRANT USAGE ON SCHEMA public TO readonly')
+        db('GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly')
     print('done')
 
 

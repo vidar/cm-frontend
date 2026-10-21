@@ -1,7 +1,7 @@
 [Unit]
 Description=Backup of the chessmoments.com tables that can't be rebuilt (analyses, AI notes, uploads)
+# After, not Requires: a backup must never start a database that was stopped on purpose.
 After=postgresql.service
-Requires=postgresql.service
 
 [Service]
 Type=oneshot

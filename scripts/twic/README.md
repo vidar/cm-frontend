@@ -32,16 +32,29 @@ loading: run `import_pg.py` without flags afterwards; it continues after the hig
 
 The site reads the database from PostgreSQL on hetz-stock through Hyperdrive (`ops/postgres/README.md`).
 `import_pg.py` loads the SQLite build through the `psql` client (standard library only, resumable: rerun
-without `--reset` to continue), then creates the indexes (`indexes.pg.sql`), applies the site role's rights
-(`scripts/db/grants.sql`) and ANALYZEs. `DATABASE_URL` connects as the owner role `cm_owner`; on the server
-itself, as root: `DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql'` (no password:
-root maps to `cm_owner` over the local socket). It also still speaks Neon's HTTPS SQL endpoint with
-`NEON_DATABASE_URL`, until the Neon project is gone. `--reset` drops the tables, so the site shows errors
-until the reload finishes; for zero downtime load into a second database (`createdb -O cm_owner -T template0
--l C.UTF-8 cm_games_new`, `CREATE EXTENSION pg_trgm` as `cm_owner`) and swap the names (see `restore.sh`).
+without `--reset` to continue), then creates the indexes (`indexes.pg.sql`), ANALYZEs and applies the grants.
+`DATABASE_URL` connects as the owner role `cm_owner`; on the server itself, as root:
+`DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql'` (no password: root maps to
+`cm_owner` over the local socket). From elsewhere, keep the password in `~/.pgpass`, not in the URL. Grants:
+where the role `cm_web` exists (the server) `scripts/db/grants.sql`, and the import stops at once if the
+site's own tables (analyses, notes, uploads) are missing, since then it is the wrong or a new database; with
+`NEON_DATABASE_URL` (Neon's HTTPS SQL endpoint, until the project is gone) the read grant to `readonly`; on a
+local database none.
+
+- **`--reset`** drops `games`, `players` and `events` (uploaded tournaments included), so the database pages
+  fail until the reload ends. First put the site in maintenance (`MAINTENANCE` "1" in both `vars` blocks of
+  `wrangler.jsonc`; only the database routes close). A reset is only needed when game ids shift, so afterwards
+  empty the analyses and notes, which belong to the old ids
+  (`sudo -u postgres psql -d cm_games -c 'SET ROLE cm_owner' -c 'TRUNCATE game_analysis, game_annotation'`),
+  use "Republish all approved" on `/upload/admin/`, set `MAINTENANCE` back to "0" and purge the `games-db` tag.
+- **Not during the nightly backup** (03:20 to about 03:40 UTC): a `--reset` or `--patch` waits for the dump's
+  locks, and the site's reads would queue behind it.
+- **`--patch`** swaps in one transaction; while it runs, publishing an uploaded round waits for it and gives
+  up after 20 seconds ("busy, try again in a minute").
 
 Local development: run Postgres locally, load it with `import_pg.py` (or `pg_restore` a backup) and point
-`localConnectionString` in `wrangler.jsonc` at it.
+`localConnectionString` in `wrangler.jsonc` at it. For the analysis, notes and upload features, also run
+`scripts/analysis.pg.sql`, `annotation.pg.sql` and `uploads.pg.sql` once.
 
 ## Notes
 
