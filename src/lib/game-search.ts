@@ -110,16 +110,19 @@ export interface SearchResult {
   empty?: string;
 }
 
+/** A case-insensitive LIKE pattern for "contains", with % and _ in the text matched literally (backslash is the default escape). */
+export const contains = (text: string) => `%${text.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+
 export async function searchGames(p: SearchParams): Promise<SearchResult> {
   const eco = /^([A-E]\d{2})(?:\s*-\s*([A-E]\d{2}))?$/i.exec(p.opening);
   const [white, black, eventIds, openingSlugs] = await Promise.all([
     p.white ? resolvePlayers(p.white) : null,
     p.black ? resolvePlayers(p.black) : null,
     p.event
-      ? query<{ id: number }>('SELECT id FROM events WHERE lower(name) LIKE $1 ORDER BY start_date DESC NULLS LAST LIMIT 2000', [`%${p.event.toLowerCase()}%`]).then((r) => r.map((x) => x.id))
+      ? query<{ id: number }>('SELECT id FROM events WHERE lower(name) LIKE $1 ORDER BY start_date DESC NULLS LAST LIMIT 2000', [contains(p.event)]).then((r) => r.map((x) => x.id))
       : null,
     p.opening && !eco
-      ? query<{ slug: string }>('SELECT slug FROM openings WHERE lower(name) LIKE $1 LIMIT 2000', [`%${p.opening.toLowerCase()}%`]).then((r) => r.map((x) => x.slug))
+      ? query<{ slug: string }>('SELECT slug FROM openings WHERE lower(name) LIKE $1 LIMIT 2000', [contains(p.opening)]).then((r) => r.map((x) => x.slug))
       : null,
   ]);
   const base = { white: white ?? [], black: black ?? [], events: eventIds?.length ?? null, openings: openingSlugs?.length ?? null };
@@ -157,7 +160,8 @@ export async function searchGames(p: SearchParams): Promise<SearchResult> {
 
   const order = {
     newest: 'g.date DESC NULLS LAST, g.id DESC',
-    oldest: 'g.date ASC NULLS LAST, g.id ASC',
+    // NULLS FIRST: the backward scan of games_date (date DESC NULLS LAST); NULLS LAST would scan the table.
+    oldest: 'g.date ASC NULLS FIRST, g.id ASC',
     rating: 'g.elo_avg DESC NULLS LAST, g.id DESC',
     shortest: 'g.plies ASC, g.id ASC',
   }[p.sort];

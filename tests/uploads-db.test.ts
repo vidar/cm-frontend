@@ -13,12 +13,14 @@ import {
   approve,
   createUpload,
   deleteRound,
+  fideLinks,
   findUpload,
   getRounds,
   getUpload,
   isAdmin,
   LIMITS,
   listUploads,
+  REJECTED,
   reject,
   republishAll,
   saveRounds,
@@ -29,7 +31,8 @@ import { dbAvailable } from './db';
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
-const YEAR = new Date().getUTCFullYear();
+/** Slug year of an event whose name has none: the year of its first game (the fixtures are dated 2004). */
+const YEAR = 2004;
 /** Above FIDE's range of real ids (the largest in the database is ~653 million) and absent from players. */
 const FAKE_FIDE = 1_999_999_999;
 /** Throwaway players row that FAKE_FIDE matches; id above UPLOAD_ID_BASE so it counts as uploaded data. */
@@ -241,7 +244,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
     await cleanup();
     await query(
       `INSERT INTO players (id, fide_id, name, slug, search, title, fed, born, max_elo, games, last_date)
-       VALUES ($1, $2, 'Vitest, Existing', 'vitest-existing', 'vitest existing', NULL, NULL, NULL, 2250, 0, NULL)`,
+       VALUES ($1, $2, 'Fide M. Vitest', 'vitest-existing', 'fide m vitest', NULL, NULL, NULL, 2250, 0, NULL)`,
       [EXISTING_ID, FAKE_FIDE],
     );
   });
@@ -347,7 +350,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
 
   describe('saveRounds', () => {
     it('stores a file as the forced round and numbers the boards', async () => {
-      expect(await saveRounds(uploadA, 1, ROUND1)).toEqual({ saved: [{ round: 1, games: 2 }], problems: [] });
+      expect(await saveRounds(uploadA, 1, ROUND1)).toEqual({ saved: [{ round: 1, games: 2 }], published: false, problems: [] });
       const [r1] = await getRounds(uploadA.id);
       expect(r1.round).toBe(1);
       expect(r1.games.map((g) => [g.white, g.black, g.round, g.result])).toEqual([
@@ -364,6 +367,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
           { round: 2, games: 2 },
           { round: 3, games: 1 },
         ],
+        published: false,
         problems: [],
       });
       const rounds = await getRounds(uploadA.id);
@@ -377,24 +381,25 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
         { white: P.gamma, black: P.alpha, moves: M4, tags: { Round: '5.7' } },
         { white: P.delta, black: P.beta, moves: M4, tags: { Round: '5' } },
       );
-      expect(await saveRounds(uploadA, null, text)).toEqual({ saved: [{ round: 5, games: 2 }], problems: [] });
+      expect(await saveRounds(uploadA, null, text)).toEqual({ saved: [{ round: 5, games: 2 }], published: false, problems: [] });
       const r5 = (await getRounds(uploadA.id)).find((r) => r.round === 5)!;
       expect(r5.games.map((g) => g.round)).toEqual(['5.7', '5.2']);
       // Forced to another round, the tag's number no longer matches and the board is renumbered.
-      expect(await saveRounds(uploadA, 6, text)).toEqual({ saved: [{ round: 6, games: 2 }], problems: [] });
+      expect(await saveRounds(uploadA, 6, text)).toEqual({ saved: [{ round: 6, games: 2 }], published: false, problems: [] });
       const r6 = (await getRounds(uploadA.id)).find((r) => r.round === 6)!;
       expect(r6.games.map((g) => g.round)).toEqual(['6.1', '6.2']);
       await deleteRound(uploadA, 5);
       await deleteRound(uploadA, 6);
     });
     it('keeps plain round numbers for a team event', async () => {
-      expect(await saveRounds(uploadC, null, C_ROUND1)).toEqual({ saved: [{ round: 1, games: 1 }], problems: [] });
+      expect(await saveRounds(uploadC, null, C_ROUND1)).toEqual({ saved: [{ round: 1, games: 1 }], published: false, problems: [] });
       const [r1] = await getRounds(uploadC.id);
       expect(r1.games.map((g) => [g.round, g.whiteTeam, g.blackTeam])).toEqual([['1', 'Vitest Team One', 'Vitest Team Two']]);
     });
     it('skips a game with an illegal move and reports its 1-based number in the file', async () => {
       expect(await saveRounds(uploadA, 4, ROUND4_WITH_BAD_GAME)).toEqual({
         saved: [{ round: 4, games: 2 }],
+        published: false,
         problems: [{ game: 2, message: 'illegal or unreadable move "e4" after 1 half-moves' }],
       });
       const r4 = (await getRounds(uploadA.id)).find((r) => r.round === 4)!;
@@ -494,7 +499,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       expect(ev).toMatchObject({
         name: 'Vitest Open',
         site: 'Vitest City',
-        slug: `vitest-open-${YEAR}`, // no year in the name: the current one is appended
+        slug: `vitest-open-${YEAR}`, // no year in the name: the first game's is appended
         games: 5,
         rounds: 3,
         twic: null,
@@ -540,7 +545,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
     it('matches a player by FIDE ID to an existing row instead of creating one', async () => {
       expect(await playerByName(P.fide)).toBeUndefined();
       const existing = await one<PlayerRow>('SELECT * FROM players WHERE id = $1', [EXISTING_ID]);
-      expect(existing).toMatchObject({ name: 'Vitest, Existing', fide_id: FAKE_FIDE, games: 1, last_date: '2004-10-03', max_elo: 2300 });
+      expect(existing).toMatchObject({ name: 'Fide M. Vitest', fide_id: FAKE_FIDE, games: 1, last_date: '2004-10-03', max_elo: 2300 });
       const game = await one<GameRow>(`SELECT * FROM games WHERE event_id = $1 AND round = '3.1'`, [eventA]);
       expect(game).toMatchObject({ white_id: EXISTING_ID, white_elo: 2300, white_title: 'IM' });
     });
@@ -570,7 +575,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
 
   describe('saveRounds after approval', () => {
     it('publishes a new round straight away', async () => {
-      expect(await saveRounds(uploadA, 4, ROUND4_LATER)).toEqual({ saved: [{ round: 4, games: 2 }], problems: [] });
+      expect(await saveRounds(uploadA, 4, ROUND4_LATER)).toEqual({ saved: [{ round: 4, games: 2 }], published: true, problems: [] });
       expect(await eventById(eventA)).toMatchObject({ games: 7, rounds: 4, end_date: '2004-10-04' });
       const games = await eventGames(eventA);
       expect(games.map((g) => g.round)).toEqual(['1.1', '1.2', '2.1', '2.2', '3.1', '4.1', '4.2']);
@@ -588,7 +593,7 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       await query(`INSERT INTO game_analysis (game_id, status) VALUES ($1, 'queued')`, [oldIds[1]]);
       const maxBefore = (await one<{ m: number }>('SELECT max(id) AS m FROM games WHERE id >= $1', [UPLOAD_ID_BASE])).m;
 
-      expect(await saveRounds(uploadA, 1, ROUND1_REPLACEMENT)).toEqual({ saved: [{ round: 1, games: 2 }], problems: [] });
+      expect(await saveRounds(uploadA, 1, ROUND1_REPLACEMENT)).toEqual({ saved: [{ round: 1, games: 2 }], published: true, problems: [] });
 
       expect(await eventById(eventA)).toMatchObject({ games: 7, rounds: 4, start_date: '2004-10-01' });
       const games = await eventGames(eventA);
@@ -728,6 +733,157 @@ describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
       expect(list.find((u) => u.id === uploadA.id)).toMatchObject({ status: 'approved', event_id: eventA, rounds: 3, games: 5 });
       expect(list.find((u) => u.id === uploadB.id)).toMatchObject({ status: 'approved', event_id: eventB, rounds: 1, games: 1 });
       expect(list.find((u) => u.id === uploadC.id)).toMatchObject({ status: 'approved', event_id: eventC, rounds: 1, games: 1 });
+    });
+  });
+  // Fixes from the security/correctness review (docs in src/lib/uploads.ts).
+  describe('review fixes', () => {
+    const newUpload = async (name: string, format = 'swiss') => {
+      const r = await createUpload({ name, site: '', format, contact: '' });
+      expect(r).toHaveProperty('token');
+      const u = await findUpload((r as { token: string }).token);
+      expectUpload(u);
+      return u;
+    };
+    const fresh = async (id: number) => {
+      const u = await getUpload(id);
+      expectUpload(u);
+      return u;
+    };
+    const roundsOf = async (eventId: number) => (await eventGames(eventId)).map((g) => g.round);
+
+    it('rebuilds Round tags from the numbers, so padded tags are replaced and removed like any other', async () => {
+      let u = await newUpload('Vitest Review Padded');
+      const text = pgn(
+        { white: P.eta, black: P.theta, moves: M4, result: '1-0', tags: { Round: '05.1' } },
+        { white: P.iota, black: P.kappa, moves: M4, result: '0-1', tags: { Round: '+5.02' } },
+        { white: P.eta, black: P.kappa, moves: M4, result: '1-0', tags: { Round: '6.x' } },
+        { white: P.theta, black: P.iota, moves: M4, result: '1-0', tags: { Round: '6.1.3' } },
+      );
+      expect(await saveRounds(u, null, text)).toMatchObject({ saved: [{ round: 5, games: 2 }, { round: 6, games: 2 }], published: false });
+      expect((await getRounds(u.id)).map((r) => r.games.map((g) => g.round))).toEqual([['5.1', '5.2'], ['6.1', '6.1.3']]);
+      const eventId = (await approve(u.id))!;
+      u = await fresh(u.id);
+      expect(await eventById(eventId)).toMatchObject({ rounds: 6, games: 4 });
+      // Uploading round 5 again replaces its games instead of adding to them...
+      await saveRounds(u, null, text);
+      expect(await roundsOf(eventId)).toEqual(['5.1', '5.2', '6.1', '6.1.3']);
+      // ...and removing it takes them off the site.
+      expect(await deleteRound(u, 5)).toBe(true);
+      expect(await roundsOf(eventId)).toEqual(['6.1', '6.1.3']);
+      await expectConsistent();
+    });
+
+    it('drops dates in the future (they would become a player\'s last game)', async () => {
+      const u = await newUpload('Vitest Review Dates');
+      await saveRounds(u, 1, pgn({ white: P.eta, black: P.theta, moves: M4, tags: { Date: '2099.12.31' } }, { white: P.iota, black: P.kappa, moves: M4, tags: { Date: '2004.10.09' } }));
+      expect((await getRounds(u.id))[0].games.map((g) => g.date)).toEqual([null, '2004-10-09']);
+    });
+
+    it('counts games before parsing any, per round and per tournament, and caps moves per file', async () => {
+      const u = await newUpload('Vitest Review Limits');
+      const many = (n: number) => pgn(...Array.from({ length: n }, () => ({ white: P.eta, black: P.theta, moves: M4 })));
+      expect(await saveRounds(u, 1, many(LIMITS.gamesPerRound + 1))).toEqual({ error: `Round 1 has more than ${LIMITS.gamesPerRound} games.` });
+      expect(await saveRounds(u, null, many(LIMITS.games + 1))).toEqual({ error: `At most ${LIMITS.games} games per tournament.` });
+      // Four rounds of 500 games fit; one game more in another round goes over the tournament's total.
+      for (const n of [1, 2, 3, 4]) expect(await saveRounds(u, n, many(500))).toMatchObject({ saved: [{ round: n, games: 500 }] });
+      expect(await saveRounds(u, 5, many(1))).toEqual({ error: `At most ${LIMITS.games} games per tournament.`, problems: [] });
+      // Replacing a round counts its new games instead of the old ones.
+      expect(await saveRounds(u, 4, many(499))).toMatchObject({ saved: [{ round: 4, games: 499 }] });
+      // Moves: 151 games of 1000 plies are more than LIMITS.plies.
+      const long = { pgn: Array.from({ length: 250 }, (_, i) => `${2 * i + 1}. Nf3 Nf6 ${2 * i + 2}. Ng1 Ng8`).join(' ') };
+      const u2 = await newUpload('Vitest Review Plies');
+      const r = await saveRounds(u2, 1, pgn(...Array.from({ length: 151 }, () => ({ white: P.eta, black: P.theta, moves: long }))));
+      expect(r).toMatchObject({ error: 'The file has too many moves to read at once: please upload it a few rounds at a time.' });
+      expect(await getRounds(u2.id)).toEqual([]);
+    });
+
+    it('refuses changes once the tournament was rejected, even from a page loaded before', async () => {
+      const u = await newUpload('Vitest Review Rejected');
+      await saveRounds(u, 1, pgn({ white: P.eta, black: P.theta, moves: M4, result: '1-0' }));
+      await approve(u.id);
+      const stale = await fresh(u.id); // the organiser's page, loaded while it was approved
+      await reject(u.id);
+      expect(await saveRounds(stale, 2, pgn({ white: P.iota, black: P.kappa, moves: M4, result: '1-0' }))).toEqual({ error: REJECTED, problems: [] });
+      expect(await deleteRound(stale, 1)).toBe(false);
+      expect(await fresh(u.id)).toMatchObject({ status: 'rejected', event_id: null });
+      expect(await count('events WHERE id = $1', [stale.event_id])).toBe(0);
+      expect((await getRounds(u.id)).map((r) => r.round)).toEqual([1]);
+    });
+
+    it('links a FIDE ID to an existing player only when the names agree', async () => {
+      const u = await newUpload('Vitest Review Fide');
+      await saveRounds(u, 1, pgn({ white: 'Vitest, Imposter', black: P.theta, moves: M4, result: '0-1', tags: { WhiteFideId: String(FAKE_FIDE) } }));
+      const owner = await one<PlayerRow>('SELECT * FROM players WHERE fide_id = $1 ORDER BY games DESC LIMIT 1', [FAKE_FIDE]);
+      expect(owner.name).toBe(P.fide);
+      const before = owner.games;
+      expect(await fideLinks(await getRounds(u.id))).toEqual([{ name: 'Vitest, Imposter', fide: FAKE_FIDE, player: { fide_id: FAKE_FIDE, name: P.fide, slug: owner.slug }, linked: false }]);
+      const eventId = (await approve(u.id))!;
+      const [g] = await eventGames(eventId);
+      expect(g.white_id).not.toBe(owner.id);
+      expect(await playerByName('Vitest, Imposter')).toMatchObject({ fide_id: null, games: 1 }); // the ID is not copied either
+      expect((await one<PlayerRow>('SELECT * FROM players WHERE id = $1', [owner.id])).games).toBe(before);
+      // The same ID with the owner's name written another way is linked.
+      const u2 = await newUpload('Vitest Review Fide Two');
+      await saveRounds(u2, 1, pgn({ white: 'Fide Match Vitest', black: P.theta, moves: M4, result: '1-0', tags: { WhiteFideId: String(FAKE_FIDE) } }));
+      expect((await fideLinks(await getRounds(u2.id)))[0]).toMatchObject({ linked: true });
+      const e2 = (await approve(u2.id))!;
+      expect((await eventGames(e2))[0].white_id).toBe(owner.id);
+      await expectConsistent();
+    });
+
+    it("doesn't give a new tournament the event id an approved one still holds (after a --reset reload)", async () => {
+      const x = await newUpload('Vitest Review Reset X');
+      await saveRounds(x, 1, pgn({ white: P.eta, black: P.theta, moves: M4, result: '1-0' }));
+      const ex = (await approve(x.id))!;
+      // --reset drops events and games; uploads keep their event ids.
+      await query('DELETE FROM games WHERE event_id = $1', [ex]);
+      await query('DELETE FROM events WHERE id = $1', [ex]);
+      const y = await newUpload('Vitest Review Reset Y');
+      await saveRounds(y, 1, pgn({ white: P.iota, black: P.kappa, moves: M4, result: '0-1' }));
+      const ey = (await approve(y.id))!;
+      expect(ey).toBeGreaterThan(ex);
+      expect((await approve(x.id))!).toBe(ex); // "Republish all" gives X its id back
+      expect(await count('games WHERE event_id = $1', [ex])).toBe(1);
+      expect(await count('games WHERE event_id = $1', [ey])).toBe(1);
+      // An id two uploads hold (given out before this fix) is not reused for the second one.
+      await query('UPDATE uploads SET event_id = $2 WHERE id = $1', [y.id, ex]);
+      const again = (await approve(y.id))!;
+      expect(again).not.toBe(ex);
+      expect((await eventById(ex)).name).toBe('Vitest Review Reset X');
+      expect(await count('games WHERE event_id = $1', [ex])).toBe(1);
+      // Y's old event is orphaned by the manual change above; take it down like unpublish() would.
+      await query('DELETE FROM games WHERE event_id = $1', [ey]);
+      await query('DELETE FROM events WHERE id = $1', [ey]);
+      await query(
+        `UPDATE players p SET games = (SELECT count(*) FROM games g WHERE g.white_id = p.id OR g.black_id = p.id) WHERE p.id >= $1 AND p.slug LIKE 'vitest-%'`,
+        [UPLOAD_ID_BASE],
+      );
+      await query(`DELETE FROM players WHERE id >= $1 AND slug LIKE 'vitest-%' AND games = 0`, [UPLOAD_ID_BASE]);
+      await expectConsistent();
+    });
+
+    it('publishes two tournaments at the same moment without clashing ids', async () => {
+      const [a, b] = [await newUpload('Vitest Review Race A'), await newUpload('Vitest Review Race B')];
+      for (const u of [a, b]) {
+        await saveRounds(u, 1, pgn({ white: P.eta, black: P.theta, moves: M4, result: '1-0' }));
+        await approve(u.id);
+      }
+      const round = (w: string) => pgn(...Array.from({ length: 40 }, (_, i) => ({ white: `${w} ${i}`, black: P.kappa, moves: M4, result: '1-0' as const })));
+      const [ra, rb] = await Promise.all([saveRounds(await fresh(a.id), 2, round('Vitest, Racer A')), saveRounds(await fresh(b.id), 2, round('Vitest, Racer B'))]);
+      expect(ra).toMatchObject({ saved: [{ round: 2, games: 40 }], published: true });
+      expect(rb).toMatchObject({ saved: [{ round: 2, games: 40 }], published: true });
+      await expectConsistent();
+    });
+
+    it('drops tournaments that got no games within a week when a new one is created', async () => {
+      const old = await newUpload('Vitest Review Stale');
+      await query(`UPDATE uploads SET created_at = now() - interval '8 days' WHERE id = $1`, [old.id]);
+      const kept = await newUpload('Vitest Review Stale Kept');
+      await saveRounds(kept, 1, pgn({ white: P.eta, black: P.theta, moves: M4 }));
+      await query(`UPDATE uploads SET created_at = now() - interval '8 days' WHERE id = $1`, [kept.id]);
+      await newUpload('Vitest Review Trigger');
+      expect(await getUpload(old.id)).toBeNull();
+      expect(await getUpload(kept.id)).not.toBeNull(); // it has a round
     });
   });
 });

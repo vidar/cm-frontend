@@ -79,8 +79,10 @@ Measured on the full dataset, connections per uncached request:
    https://developers.google.com/search/docs/crawling-indexing/reduce-crawl-rate is Google's own
    route (robots `Crawl-delay` is ignored by Google; Bing honours it and has a crawl-control
    panel in Bing Webmaster Tools).
-5. **Reopen** by setting `MAINTENANCE` to `0` (dashboard variable or `wrangler.jsonc`) once the
-   database is back; the longer the database routes are closed, the more re-indexing is lost.
+5. **Reopen** by setting `MAINTENANCE` to `"0"` in `wrangler.jsonc` (both `vars` blocks) once the
+   database is back, or tell Claude to; the longer the database routes are closed, the more
+   re-indexing is lost. `wrangler.jsonc` is the only source of truth: a change in the dashboard is
+   overwritten by the next deploy, and every CMS commit deploys.
 
 ## Options not taken (yet)
 

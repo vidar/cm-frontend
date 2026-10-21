@@ -3,17 +3,23 @@ import { START_FEN } from '../../lib/og-url';
 import Layout from '../../layouts/Layout.astro';
 import GameTable from '../../components/GameTable.astro';
 import { getPlayerPage } from '../../lib/games';
+import { isUploaded } from '../../lib/uploads';
 
 export const prerender = false;
 
 const q = Astro.url.searchParams;
-const page = Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1);
+// Capped so the offset stays a sane integer (the most active players have a few hundred pages).
+const page = Math.min(10_000, Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1));
 const color = q.get('color') === 'w' || q.get('color') === 'b' ? (q.get('color') as 'w' | 'b') : undefined;
 const data = await getPlayerPage(Astro.params.slug ?? '', page, color);
-if (!data) return new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
-// New games arrive weekly (TWIC) and the cache is purged by tag after imports: a week at the edge.
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=604800');
+const notFound = () => new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
+if (!data) return notFound();
 const { player, games, hasMore, score } = data;
+// Pages past the last game don't exist (or crawlers could walk an endless list of empty pages).
+if (page > 1 && !games.length) return notFound();
+// New games arrive weekly (TWIC) and the cache is purged by tag after imports: a week at the edge.
+// Uploaded players change whenever their organiser uploads or the site owner takes a tournament down.
+Astro.response.headers.set('Cache-Control', isUploaded(player.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=3600, s-maxage=604800');
 const total = score.w + score.d + score.l;
 const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
 const link = (p: number, c = color) => {

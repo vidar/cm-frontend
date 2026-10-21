@@ -30,6 +30,8 @@ export interface PgnProblem {
 }
 
 const RESULTS = new Set(['1-0', '0-1', '1/2-1/2', '*']);
+/** Longest game accepted, in half-moves (the longest real games have about 540; each costs CPU to replay). */
+export const MAX_PLIES = 1000;
 
 /** Splits PGN text into the text of each game (a game starts at a tag line after movetext). */
 export function splitPgn(text: string): string[] {
@@ -60,7 +62,8 @@ export function normDate(d: string | undefined): string | null {
 }
 
 const clean = (s: string | undefined, max = 100) => {
-  const v = (s ?? '').replace(/\s+/g, ' ').trim();
+  // Angle brackets and control characters never belong in a name; dropping them keeps markup out of every page and prompt.
+  const v = (s ?? '').replace(/[<>\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim();
   return v && v !== '?' && v !== '-' ? v.slice(0, max) : null;
 };
 const int = (s: string | undefined, lo: number, hi: number) => {
@@ -94,9 +97,11 @@ export function parseGame(text: string): ParsedGame | string {
   const white = clean(tags.White);
   const black = clean(tags.Black);
   if (!white || !black) return 'missing White or Black name';
+  const moves = tokens(body.join('\n'));
+  if (moves.length > MAX_PLIES) return `longer than ${MAX_PLIES / 2} moves`;
   const chess = new Chess();
   const sans: string[] = [];
-  for (const t of tokens(body.join('\n'))) {
+  for (const t of moves) {
     try {
       sans.push(chess.move(t).san);
     } catch {

@@ -10,7 +10,8 @@ the indexes (indexes.pg.sql), grants SELECT to the read-only role used by Hyperd
 and ANALYZEs. Use the owner role's direct (non-pooler) connection string. Standard library only.
 
 Uploaded tournaments (/upload/, ids from 100000000) are left alone, except by --reset, which drops
-them from games/players/events: republish them afterwards from /upload/admin/.
+them from games/players/events: republish them afterwards from /upload/admin/. An uploaded event or
+player whose slug TWIC now uses (the same tournament, or a namesake) is renamed to <slug>-u<n> first.
 
 --patch updates a loaded database in place from a build processed by remap_events.py (same game
 ids): it uploads `changed_games` and the events table into staging tables, then swaps them in with
@@ -116,12 +117,22 @@ def copy_table(neon: Neon, src: sqlite3.Connection, table: str, batch: int, targ
     where, args = ('WHERE id > ?', [done]) if done is not None else ('', [])
     cur = src.execute(f'SELECT {names} FROM {source} {where} ORDER BY {key}', args)
     copied, t0 = 0, time.time()
+    slug_at = next((i for i, (c, _) in enumerate(cols) if c == 'slug'), None)
     while rows := cur.fetchmany(batch):
+        if table in ('events', 'players'):
+            free_slugs(neon, table, [r[slug_at] for r in rows])
         neon(insert, [pg_array(col) for col in zip(*rows)])
         copied += len(rows)
         rate = copied / max(time.time() - t0, 1e-6)
         print(f'\r{table}: {copied + (done or 0):,}/{total:,} ({rate:,.0f} rows/s)', end='', flush=True)
     print(f'\r{table}: {total:,} rows' + ' ' * 30)
+
+
+def free_slugs(neon: Neon, table: str, slugs):
+    """Rename uploaded rows (ids from UPLOAD_ID_BASE) holding any of these slugs, which TWIC is about to use
+    (slugs are UNIQUE, and ON CONFLICT (id) doesn't cover them)."""
+    neon(f"UPDATE {table} SET slug = slug || '-u' || (id - {UPLOAD_ID_BASE} + 1) WHERE id >= {UPLOAD_ID_BASE} AND slug = ANY($1::text[])",
+         [pg_array(slugs)])
 
 
 def patch(neon: Neon, src: sqlite3.Connection, batch: int):
@@ -135,6 +146,8 @@ def patch(neon: Neon, src: sqlite3.Connection, batch: int):
     neon.transaction([
         'UPDATE games g SET event_id = p.event_id, white_team = p.white_team, black_team = p.black_team FROM patch_games p WHERE g.id = p.id',
         f'DELETE FROM events WHERE id < {UPLOAD_ID_BASE}',  # keep uploaded tournaments
+        # ...but move an uploaded event off a slug the new TWIC events use
+        f"UPDATE events SET slug = slug || '-u' || (id - {UPLOAD_ID_BASE} + 1) WHERE id >= {UPLOAD_ID_BASE} AND slug IN (SELECT slug FROM patch_events)",
         'INSERT INTO events SELECT * FROM patch_events',
         'DROP TABLE patch_games, patch_events',
     ])

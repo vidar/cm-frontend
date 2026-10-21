@@ -7,18 +7,22 @@ import GameTable from '../../components/GameTable.astro';
 import '../../styles/board.css';
 import { parseRound } from '../../lib/event';
 import { getGamePage, gamePath, resultLabel, twicIssueUrl } from '../../lib/games';
+import { isUploaded } from '../../lib/uploads';
 
 export const prerender = false;
 
-const id = Number.parseInt(Astro.params.game ?? '', 10);
-const data = Number.isFinite(id) ? await getGamePage(id) : null;
+// Ids are int4: anything longer or larger can't exist (and would make Postgres fail).
+const digits = /^\d{1,10}/.exec(Astro.params.game ?? '')?.[0];
+const id = digits ? Number(digits) : 0;
+const data = id >= 1 && id <= 2_147_483_647 ? await getGamePage(id) : null;
 // Missing games and old URLs are cached at the edge too: crawlers retry them and each costs a query.
 if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
 const { game, others } = data;
 const canonical = gamePath(game);
 if (Astro.url.pathname !== canonical) return new Response(null, { status: 301, headers: { Location: canonical, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
-// The page itself never changes (analysis and notes load separately): a month at the edge.
-Astro.response.headers.set('Cache-Control', 'public, max-age=86400, s-maxage=2592000');
+// The page itself never changes (analysis and notes load separately): a month at the edge. Uploaded
+// games can be replaced or taken down by the organiser or the site owner, so theirs is 5 minutes.
+Astro.response.headers.set('Cache-Control', isUploaded(game.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=86400, s-maxage=2592000');
 
 const sans = game.moves.split(' ').filter(Boolean);
 const chess = new Chess();

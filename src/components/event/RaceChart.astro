@@ -112,7 +112,20 @@ const data = JSON.stringify({ rounds, series: series.map((s) => ({ l: s.label, v
       cross.setAttribute('x2', String(x));
       cross.setAttribute('visibility', 'visible');
       const rows = data.series.map((s, k) => ({ l: s.l, v: s.v[i], k })).sort((a, b) => b.v - a.v);
-      tip.innerHTML = `<strong>After round ${data.rounds[i - 1]}</strong><br>` + rows.map((r) => `${r.k < 3 ? `<i class="sw s${r.k + 1}" style="display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.3rem;background:var(--s${r.k + 1})"></i>` : ''}${r.l}: <strong>${half(r.v)}</strong>`).join('<br>');
+      // Built from DOM nodes: the names come from uploaded PGNs and must never be parsed as HTML.
+      const el = (tag: string, text = '') => Object.assign(document.createElement(tag), { textContent: text });
+      const lines: Node[] = [el('strong', `After round ${data.rounds[i - 1]}`)];
+      for (const r of rows) {
+        lines.push(el('br'));
+        if (r.k < 3) {
+          const sw = el('i');
+          sw.className = `sw s${r.k + 1}`;
+          sw.style.cssText = `display:inline-block;width:.6rem;height:.6rem;border-radius:50%;margin-right:.3rem;background:var(--s${r.k + 1})`;
+          lines.push(sw);
+        }
+        lines.push(document.createTextNode(`${r.l}: `), el('strong', half(r.v)));
+      }
+      tip.replaceChildren(...lines);
       tip.hidden = false;
       const box = svg.getBoundingClientRect();
       const px = (x / 640) * box.width;

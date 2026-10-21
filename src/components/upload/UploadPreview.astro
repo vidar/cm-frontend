@@ -2,7 +2,7 @@
 // Preview of an uploaded tournament (organiser page and admin page): standings as the event page
 // will compute them, and each round's games.
 import { FORMAT_LABEL, pts } from '../../lib/event';
-import { previewAnalysis, type Upload, type UploadRound } from '../../lib/uploads';
+import { fideLinks, previewAnalysis, type Upload, type UploadRound } from '../../lib/uploads';
 
 interface Props {
   upload: Upload;
@@ -14,6 +14,7 @@ const individual = a && (a.format === 'swiss' || a.format === 'round-robin');
 const standings = individual ? a.standingsAfter(Infinity).slice(0, 40) : [];
 const teams = a?.teams?.standingsAfter(Infinity).slice(0, 40) ?? [];
 const RES: Record<string, string> = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½', '*': '*' };
+const links = rounds.length ? await fideLinks(rounds) : [];
 ---
 
 {a && (
@@ -35,6 +36,19 @@ const RES: Record<string, string> = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2':
         <tbody>{teams.map((l) => <tr><td>{l.rank}</td><td>{l.team}</td><td class="num">{l.mp}</td><td class="num">{pts(l.gp)}</td></tr>)}</tbody>
       </table>
     )}
+    {links.length > 0 && (
+      <details open={links.some((l) => !l.linked)}>
+        <summary>FIDE IDs of players already on the site: {links.filter((l) => l.linked).length} linked{links.some((l) => !l.linked) && `, ${links.filter((l) => !l.linked).length} not linked`}</summary>
+        <ul class="links">
+          {links.map((l) => (
+            <li>
+              {l.name} (FIDE {l.fide}) {l.linked ? '→' : '≠'} <a href={`/players/${l.player.slug}/`}>{l.player.name}</a>
+              {!l.linked && <span class="muted"> (another name, so the ID is ignored and {l.name} gets a page of their own)</span>}
+            </li>
+          ))}
+        </ul>
+      </details>
+    )}
     {rounds.map((r) => (
       <details>
         <summary>Round {r.round}: {r.games.length} game{r.games.length === 1 ? '' : 's'}</summary>
@@ -55,6 +69,6 @@ const RES: Record<string, string> = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2':
   .standings .num { text-align: right; }
   details { margin: 0.3rem 0; }
   summary { cursor: pointer; }
-  .games { font-size: 0.9rem; }
+  .games, .links { font-size: 0.9rem; }
   .muted { color: var(--muted); }
 </style>

@@ -2,6 +2,7 @@
 // `HYPERDRIVE`, see scripts/twic/). Only import from on-demand routes (`export const prerender = false`).
 import { env } from 'cloudflare:workers';
 import postgres from 'postgres';
+import { maintenance } from './maintenance';
 import type { EventGame } from './event';
 
 export interface Player {
@@ -63,12 +64,18 @@ export interface FullGame extends GameRow {
 
 type Param = string | number | null;
 
+/** One connection; refused while the database is closed for maintenance (whatever route asked). */
+function connect() {
+  if (maintenance(env)) throw new Error('The games database is closed for maintenance (MAINTENANCE=1).');
+  return postgres((env as { HYPERDRIVE: Hyperdrive }).HYPERDRIVE.connectionString, { max: 1, fetch_types: false });
+}
+
 /**
  * Run one query. Workers can't share connections between requests, so each query opens its own
  * (cheap: Hyperdrive keeps the pool to Neon warm next to the Worker) and closes it afterwards.
  */
 export async function query<T>(text: string, params: Param[] = []): Promise<T[]> {
-  const sql = postgres((env as { HYPERDRIVE: Hyperdrive }).HYPERDRIVE.connectionString, { max: 1, fetch_types: false });
+  const sql = connect();
   try {
     return (await sql.unsafe(text, params)) as unknown as T[];
   } finally {
@@ -80,7 +87,7 @@ const first = async <T>(text: string, params: Param[] = []) => (await query<T>(t
 export type Q = <T>(text: string, params?: (Param | Param[])[]) => Promise<T[]>;
 /** Run several queries in one transaction on one connection (writes that must land together). */
 export async function transaction<T>(fn: (q: Q) => Promise<T>): Promise<T> {
-  const sql = postgres((env as { HYPERDRIVE: Hyperdrive }).HYPERDRIVE.connectionString, { max: 1, fetch_types: false });
+  const sql = connect();
   try {
     return (await sql.begin((tx) => fn(async (text, params = []) => (await tx.unsafe(text, params as never[])) as never))) as T;
   } finally {

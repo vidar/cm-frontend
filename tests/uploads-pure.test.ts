@@ -4,7 +4,7 @@
 // no query(), createUpload(), saveRounds(), approve() or the like. Fixtures are hand-built and the
 // expected standings are worked out by hand.
 import { describe, expect, it } from 'vitest';
-import { FORMATS, isUploaded, LIMITS, previewAnalysis, UPLOAD_ID_BASE, type Upload, type UploadFormat, type UploadRound } from '../src/lib/uploads';
+import { FORMATS, isUploaded, LIMITS, previewAnalysis, sameName, UPLOAD_ID_BASE, type Upload, type UploadFormat, type UploadRound } from '../src/lib/uploads';
 import { gamePath, resultLabel, scoreFor, slugify } from '../src/lib/games';
 import { parsePgn, type ParsedGame } from '../src/lib/pgn';
 
@@ -131,8 +131,8 @@ describe('FORMATS', () => {
 });
 
 describe('LIMITS', () => {
-  it('caps file size, games per round, rounds and pending uploads', () => {
-    expect(LIMITS).toEqual({ bytes: 2_000_000, gamesPerRound: 600, rounds: 40, pending: 50 });
+  it('caps file size, games per round and tournament, moves per file, rounds, pending and new uploads', () => {
+    expect(LIMITS).toEqual({ bytes: 2_000_000, gamesPerRound: 600, rounds: 40, games: 2_000, plies: 150_000, pending: 50, perDay: 200 });
   });
 });
 
@@ -458,5 +458,25 @@ describe('resultLabel', () => {
   });
   it('leaves an unfinished game as *', () => {
     expect(resultLabel('*')).toBe('*');
+  });
+});
+
+describe('sameName (FIDE-ID linking)', () => {
+  it('matches the same person written another way', () => {
+    expect(sameName('Nakamura, Hikaru', 'Hikaru Nakamura')).toBe(true);
+    expect(sameName('Nakamura,Hikaru', 'Hikaru Nakamura')).toBe(true);
+    expect(sameName('Nakamura, H.', 'Hikaru Nakamura')).toBe(true);
+    expect(sameName('Nakamura', 'Hikaru Nakamura')).toBe(true);
+    expect(sameName('Ding Liren', 'Ding, Liren')).toBe(true);
+    expect(sameName('Gukesh D', 'Gukesh Dommaraju')).toBe(true);
+    expect(sameName('Jóhann Hjartarson', 'Johann Hjartarson')).toBe(true); // accents are dropped by slugify
+    expect(sameName('Hikaru Nakamura', 'Hikaru Kenji Nakamura')).toBe(true); // a middle name more
+  });
+  it('refuses another person or a name with nothing in full', () => {
+    expect(sameName('John Doe', 'Hikaru Nakamura')).toBe(false);
+    expect(sameName('Nakamura, Taro', 'Hikaru Nakamura')).toBe(false);
+    expect(sameName('H. N.', 'Hikaru Nakamura')).toBe(false);
+    expect(sameName('', 'Hikaru Nakamura')).toBe(false);
+    expect(sameName('Nakamura Nakamura', 'Hikaru Nakamura')).toBe(false); // each part matches its own part
   });
 });

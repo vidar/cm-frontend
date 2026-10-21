@@ -1,13 +1,16 @@
 // Edge cache and crawler pacing for on-demand pages.
 //
-// Cache: Worker responses aren't cached by Cloudflare's CDN on their own, so GET responses that
+// Cache: Worker responses aren't cached by Cloudflare's CDN on their own, so GET/HEAD responses that
 // declare `Cache-Control: public` (200s, and the 301/404s the database pages mark cacheable) are
 // stored with the Cache API (per data centre, for s-maxage / max-age) and served from there next
 // time. Prerendered pages are static assets and never reach this. Database pages get a `Cache-Tag`
 // so they can be purged after a data update (Cloudflare API: purge cache by tag "games-db"). The
 // key includes the build ID, so a deploy never serves pages rendered by the previous build, except
-// for the database pages, which are keyed by DATA_VERSION instead: content deploys (every CMS commit)
-// would otherwise throw away millions of cached pages. Bump DATA_VERSION when their templates change.
+// for the database pages, which are keyed by __DATA_VERSION__, a hash of the source (astro.config.mjs):
+// content deploys (every CMS commit) would otherwise throw away millions of cached pages, while a
+// code or style change rolls them so no cached page links to /_astro assets that are gone. Their key
+// also keeps only the query parameters they read (src/lib/cache-key.ts), so tracking tags and cache
+// busters don't turn every visit into a query.
 //
 // Crawlers: a cache miss on a database page costs a database query, and the database is billed by
 // the hour it is awake, so crawlers are paced on misses (never on hits): each crawler family has a
@@ -17,11 +20,11 @@
 import { defineMiddleware } from 'astro:middleware';
 import { env } from 'cloudflare:workers';
 import { classifyBot, CRAWL_LIMIT, type BotKind } from './lib/bots';
+import { dbCacheKey } from './lib/cache-key';
 
 const DB_PAGES = /^\/(games|players|events|sitemaps)\//;
-/** Bump when the markup of the games/players/events/sitemaps pages changes (keeps their cache across other deploys). */
-const DATA_VERSION = '2026-10-20';
 declare const __BUILD_ID__: string;
+declare const __DATA_VERSION__: string;
 const HOST = 'chessmoments.com'; // the Cache API is a no-op on workers.dev previews anyway
 
 interface Limiter {
@@ -32,20 +35,28 @@ const LIMITERS: Record<BotKind, string> = { search: 'CRAWL_SEARCH', assistant: '
 
 export const onRequest = defineMiddleware(async (ctx, next) => {
   const { request, url } = ctx;
-  if (ctx.isPrerendered || request.method !== 'GET' || url.hostname !== HOST || request.headers.has('Authorization')) return next();
+  // HEAD is served like GET (from the GET entry, and paced): Astro renders the full page for it.
+  const head = request.method === 'HEAD';
+  if (ctx.isPrerendered || (request.method !== 'GET' && !head) || url.hostname !== HOST || request.headers.has('Authorization')) return next();
   const cache = (globalThis as unknown as { caches: { default: Cache } }).caches.default;
-  const keyUrl = new URL(url);
-  keyUrl.searchParams.set('__build', DB_PAGES.test(url.pathname) ? DATA_VERSION : __BUILD_ID__);
-  const key = new Request(keyUrl.toString(), { method: 'GET' });
+  const db = DB_PAGES.test(url.pathname);
+  let keyUrl: string;
+  if (db) keyUrl = dbCacheKey(url, __DATA_VERSION__);
+  else {
+    const k = new URL(url);
+    k.searchParams.set('__build', __BUILD_ID__);
+    keyUrl = k.toString();
+  }
+  const key = new Request(keyUrl, { method: 'GET' });
 
   const hit = await cache.match(key);
   if (hit) {
-    const res = new Response(hit.body, hit);
+    const res = new Response(head ? null : hit.body, hit);
     res.headers.set('X-Edge-Cache', 'HIT');
     return res;
   }
 
-  if (DB_PAGES.test(url.pathname)) {
+  if (db) {
     const bot = classifyBot(request.headers.get('User-Agent'));
     const limiter = bot && (env as unknown as Record<string, Limiter | undefined>)[LIMITERS[bot.kind]];
     if (bot && limiter && !(await limiter.limit({ key: bot.family })).success) {
@@ -60,12 +71,12 @@ export const onRequest = defineMiddleware(async (ctx, next) => {
   const cc = res.headers.get('Cache-Control') ?? '';
   const cacheable = (res.status === 200 || res.status === 301 || res.status === 404) && /\bpublic\b/.test(cc) && /max-age=[1-9]/.test(cc) && !res.headers.has('Set-Cookie');
   if (cacheable) {
-    if (DB_PAGES.test(url.pathname)) res.headers.set('Cache-Tag', 'games-db');
+    if (db) res.headers.set('Cache-Tag', 'games-db');
     const put = cache.put(key, res.clone());
     const cf = (ctx.locals as { cfContext?: { waitUntil(p: Promise<unknown>): void } }).cfContext;
     if (cf) cf.waitUntil(put);
     else await put;
     res.headers.set('X-Edge-Cache', 'MISS');
   }
-  return res;
+  return head ? new Response(null, res) : res;
 });

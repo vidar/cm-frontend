@@ -15,6 +15,8 @@
 	// is only used by `astro dev` / `wrangler dev`; point it at a local copy if you need one.
 	"hyperdrive": [{ "binding": "HYPERDRIVE", "id": "ff39804dfb964a2ca13a9e1d7ec27cbe", "localConnectionString": "postgres://postgres:postgres@localhost:5432/cm_games" }],
 	// Engine analysis (src/lib/analysis.ts): Stockfish service on the VPS; STOCKFISH_TOKEN is a secret.
+	// MAINTENANCE "1" closes the database routes (src/worker.ts). Change it here (and in previews), not in
+	// the dashboard: every deploy, including each CMS commit, replaces dashboard vars with these.
 	"vars": { "ENGINE_URL": "https://engine.chessmoments.com", "MAINTENANCE": "1" },
 	// Rate limits: analysis/AI-note requests per visitor, and crawler pacing on database pages
 	// (src/middleware.ts): uncached pages a minute per search engine, per AI assistant, per other bot.

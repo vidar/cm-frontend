@@ -9,7 +9,9 @@ Astro.response.headers.set('Cache-Control', 'private, no-store');
 
 let error = '';
 const values = { name: '', site: '', format: 'swiss', contact: '' };
-if (Astro.request.method === 'POST') {
+const size = Number(Astro.request.headers.get('Content-Length'));
+if (Astro.request.method === 'POST' && !(size > 0 && size <= 20_000)) error = 'Something went wrong.';
+else if (Astro.request.method === 'POST') {
   const form = await Astro.request.formData();
   for (const k of Object.keys(values) as (keyof typeof values)[]) values[k] = String(form.get(k) ?? '');
   const limiter = (env as { ANALYSIS_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> } }).ANALYSIS_LIMITER;

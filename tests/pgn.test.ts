@@ -4,7 +4,7 @@
 // hand-written games with expected values worked out by hand.
 import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
-import { normDate, parseGame, parsePgn, roundOf, splitPgn, type ParsedGame } from '../src/lib/pgn';
+import { MAX_PLIES, normDate, parseGame, parsePgn, roundOf, splitPgn, type ParsedGame } from '../src/lib/pgn';
 
 const WHITE = 'Carlsen, Magnus';
 const BLACK = 'Nakamura, Hikaru';
@@ -425,5 +425,20 @@ describe('roundOf', () => {
     expect(roundOf('0')).toBeNull();
     expect(roundOf('0.1')).toBeNull();
     expect(roundOf('-1')).toBeNull();
+  });
+});
+
+describe('parseGame limits and clean names', () => {
+  const knights = (plies: number) =>
+    Array.from({ length: plies }, (_, i) => `${i % 2 ? '' : `${i / 2 + 1}. `}${['Nf3', 'Nf6', 'Ng1', 'Ng8'][i % 4]}`).join(' ');
+  it(`accepts a game of MAX_PLIES (${MAX_PLIES}) half-moves and refuses a longer one before replaying it`, () => {
+    expect(MAX_PLIES).toBe(1000);
+    const ok = parseGame(`[White "A"]\n[Black "B"]\n\n${knights(MAX_PLIES)} 1/2-1/2`);
+    expect(typeof ok === 'object' && ok.plies).toBe(MAX_PLIES);
+    expect(parseGame(`[White "A"]\n[Black "B"]\n\n${knights(MAX_PLIES + 1)} 1/2-1/2`)).toBe('longer than 500 moves');
+  });
+  it('drops angle brackets and control characters from tag values', () => {
+    const g = parseGame('[White "<img src=x onerror=alert(1)>"]\n[Black "Doe,\u0007 Jane"]\n[WhiteTeam "<b>Club</b>"]\n\n1. e4 e5 *');
+    expect(g).toMatchObject({ white: 'img src=x onerror=alert(1)', black: 'Doe, Jane', whiteTeam: 'b Club /b' });
   });
 });

@@ -5,8 +5,7 @@
 // want to see during an outage (a 503 on robots.txt stops crawling; a 503 on a URL for more than
 // two days drops it). Set it to "0" to reopen the database.
 import { handle } from '@astrojs/cloudflare/handler';
-
-const DB_ROUTES = /^\/(games|players|events|sitemaps|upload)(\/|$)/;
+import { isDbRoute, maintenance } from './lib/maintenance';
 
 const PAGE = `<!doctype html>
 <html lang="en">
@@ -43,7 +42,7 @@ const PAGE = `<!doctype html>
 
 export default {
   async fetch(request, env, ctx) {
-    if ((env as { MAINTENANCE?: string }).MAINTENANCE === '1' && DB_ROUTES.test(new URL(request.url).pathname)) {
+    if (maintenance(env) && isDbRoute(request.url)) {
       return new Response(request.method === 'HEAD' ? null : PAGE, {
         status: 503,
         headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': '3600' },

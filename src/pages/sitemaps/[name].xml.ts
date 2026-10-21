@@ -1,11 +1,13 @@
 import type { APIRoute } from 'astro';
-import { gamePath, getMeta, query, twicIssueDate, type GameRow } from '../../lib/games';
+import { gamePath, query, twicIssueDate, type GameRow } from '../../lib/games';
+import { UPLOAD_ID_BASE } from '../../lib/uploads';
 
 // Sitemaps for the database pages (on-demand routes aren't covered by @astrojs/sitemap):
 //   /sitemaps/index.xml       sitemap index
 //   /sitemaps/events-N.xml    events and their round pages, by id, 2,500 events per file
 //   /sitemaps/players-N.xml   players, by id, 50,000 per file
 //   /sitemaps/games-N.xml     games, by id, 50,000 per file
+// TWIC ids start at 1 and uploaded ids at UPLOAD_ID_BASE, so the index lists the files of both ranges.
 export const prerender = false;
 
 const CHUNK = 50_000;
@@ -24,38 +26,56 @@ const urlset = (urls: { loc: string; lastmod?: string | null }[]) =>
       .join('')}</urlset>`,
   );
 
-/** Only complete YYYY-MM-DD dates are valid in <lastmod>. */
-const fullDate = (d: string | null) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
+/** W3C dates (YYYY, YYYY-MM or YYYY-MM-DD) are valid in <lastmod>; anything else is left out. */
+const w3cDate = (d: string | null) => (d && /^\d{4}(-\d{2}(-\d{2})?)?$/.test(d) ? d : null);
+// Empty or unknown files are cached too (crawlers retry them, and each costs a query).
+const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=3600, s-maxage=86400' } });
+
+/** The files covering ids lo..hi (inclusive) in chunks of `size`. */
+const chunks = (kind: string, size: number, lo: number, hi: number | null) => {
+  const out: string[] = [];
+  if (hi) for (let i = Math.ceil(lo / size); i <= Math.ceil(hi / size); i++) out.push(`${kind}-${i}.xml`);
+  return out;
+};
 
 export const GET: APIRoute = async ({ params }) => {
   const name = params.name ?? '';
 
   if (name === 'index') {
-    const [meta, [{ max }]] = await Promise.all([getMeta(), query<{ max: number }>('SELECT MAX(id) AS max FROM events')]);
-    const files: string[] = [];
-    for (let i = 1; i <= Math.ceil((max ?? 0) / EVENT_CHUNK); i++) files.push(`events-${i}.xml`);
-    for (let i = 1; i <= Math.ceil((meta.players ?? 0) / CHUNK); i++) files.push(`players-${i}.xml`);
-    for (let i = 1; i <= Math.ceil((meta.games ?? 0) / CHUNK); i++) files.push(`games-${i}.xml`);
+    // Highest TWIC and highest uploaded id per table, in one statement (backward scans of the primary keys).
+    const max = (t: string) => `(SELECT max(id) FROM ${t} WHERE id < $1) AS ${t}, (SELECT max(id) FROM ${t} WHERE id >= $1) AS ${t}_up`;
+    const [r] = await query<Record<'events' | 'events_up' | 'players' | 'players_up' | 'games' | 'games_up', number | null>>(
+      `SELECT ${['events', 'players', 'games'].map(max).join(', ')}`,
+      [UPLOAD_ID_BASE],
+    );
+    const files = [
+      ...chunks('events', EVENT_CHUNK, 1, r.events),
+      ...chunks('events', EVENT_CHUNK, UPLOAD_ID_BASE, r.events_up),
+      ...chunks('players', CHUNK, 1, r.players),
+      ...chunks('players', CHUNK, UPLOAD_ID_BASE, r.players_up),
+      ...chunks('games', CHUNK, 1, r.games),
+      ...chunks('games', CHUNK, UPLOAD_ID_BASE, r.games_up),
+    ];
     return xml(`<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${files.map((f) => `<sitemap><loc>${SITE}/sitemaps/${f}</loc></sitemap>`).join('')}</sitemapindex>`);
   }
-  const m = /^(players|games|events)-(\d+)$/.exec(name);
-  if (!m) return new Response('Not found', { status: 404 });
+  const m = /^(players|games|events)-(\d{1,6})$/.exec(name);
+  if (!m) return notFound();
   const n = Number(m[2]);
   if (m[1] === 'events') {
-    const results = await query<{ slug: string; rounds: number | null; end_date: string | null; start_date: string | null }>(
-      'SELECT slug, rounds, end_date, start_date FROM events WHERE id BETWEEN $1 AND $2 ORDER BY id',
+    const results = await query<{ slug: string; rounds: number | null; end_date: string | null; start_date: string | null; twic: number | null }>(
+      'SELECT slug, rounds, end_date, start_date, twic FROM events WHERE id BETWEEN $1 AND $2 ORDER BY id',
       [(n - 1) * EVENT_CHUNK + 1, n * EVENT_CHUNK],
     );
     const urls = results.flatMap((e) => {
-      const lastmod = fullDate(e.end_date ?? e.start_date);
+      const lastmod = w3cDate(e.end_date) ?? w3cDate(e.start_date) ?? (e.twic ? twicIssueDate(e.twic) : null);
       return [{ loc: `/events/${e.slug}/`, lastmod }, ...Array.from({ length: e.rounds && e.rounds > 1 ? e.rounds : 0 }, (_, i) => ({ loc: `/events/${e.slug}/round-${i + 1}/`, lastmod }))];
     });
-    return urls.length ? urlset(urls) : new Response('Not found', { status: 404 });
+    return urls.length ? urlset(urls) : notFound();
   }
   const [lo, hi] = [(n - 1) * CHUNK + 1, n * CHUNK];
   if (m[1] === 'players') {
     const results = await query<{ slug: string; last_date: string | null }>('SELECT slug, last_date FROM players WHERE id BETWEEN $1 AND $2 ORDER BY id', [lo, hi]);
-    return results.length ? urlset(results.map((p) => ({ loc: `/players/${p.slug}/`, lastmod: fullDate(p.last_date) }))) : new Response('Not found', { status: 404 });
+    return results.length ? urlset(results.map((p) => ({ loc: `/players/${p.slug}/`, lastmod: w3cDate(p.last_date) }))) : notFound();
   }
   const results = await query<Pick<GameRow, 'id' | 'white_name' | 'black_name' | 'event_name' | 'date' | 'twic'>>(
     `SELECT g.id, w.name AS white_name, b.name AS black_name, e.name AS event_name, g.date, g.twic
@@ -64,5 +84,5 @@ export const GET: APIRoute = async ({ params }) => {
     [lo, hi],
   );
   // A game page dates from the TWIC issue that brought the game (uploaded games have no issue).
-  return results.length ? urlset(results.map((g) => ({ loc: gamePath(g), lastmod: g.twic ? twicIssueDate(g.twic) : fullDate(g.date) }))) : new Response('Not found', { status: 404 });
+  return results.length ? urlset(results.map((g) => ({ loc: gamePath(g), lastmod: g.twic ? twicIssueDate(g.twic) : w3cDate(g.date) }))) : notFound();
 };
