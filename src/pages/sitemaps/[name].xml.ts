@@ -61,13 +61,21 @@ export const GET: APIRoute = async ({ params }) => {
   if (!m) return notFound();
   const n = Number(m[2]);
   if (m[1] === 'events') {
-    const results = await query<{ slug: string; rounds: number | null; end_date: string | null; start_date: string | null; twic: number | null }>(
-      'SELECT slug, rounds, end_date, start_date, twic FROM events WHERE id BETWEEN $1 AND $2 ORDER BY id',
+    // Round pages exist only for the rounds that have games (events.rounds is the highest round number
+    // seen; some events skip numbers): the round numbers as parseRound() reads them (src/lib/event.ts),
+    // off the games_event index. Events with a single round have no round pages listed (as on the page).
+    const results = await query<{ slug: string; round_list: number[] | null; end_date: string | null; start_date: string | null; twic: number | null }>(
+      `SELECT e.slug, e.end_date, e.start_date, e.twic,
+         CASE WHEN e.rounds > 1 THEN (
+           SELECT json_agg(DISTINCT r.n::int ORDER BY r.n::int) FROM (SELECT substring(g.round from '^\\s*(\\d+)')::numeric AS n FROM games g WHERE g.event_id = e.id) r
+           WHERE r.n BETWEEN 1 AND 60) END AS round_list
+       FROM events e WHERE e.id BETWEEN $1 AND $2 ORDER BY e.id`,
       [(n - 1) * EVENT_CHUNK + 1, n * EVENT_CHUNK],
     );
     const urls = results.flatMap((e) => {
       const lastmod = w3cDate(e.end_date) ?? w3cDate(e.start_date) ?? (e.twic ? twicIssueDate(e.twic) : null);
-      return [{ loc: `/events/${e.slug}/`, lastmod }, ...Array.from({ length: e.rounds && e.rounds > 1 ? e.rounds : 0 }, (_, i) => ({ loc: `/events/${e.slug}/round-${i + 1}/`, lastmod }))];
+      const rounds = e.round_list && e.round_list.length > 1 ? e.round_list : [];
+      return [{ loc: `/events/${e.slug}/`, lastmod }, ...rounds.map((r) => ({ loc: `/events/${e.slug}/round-${r}/`, lastmod }))];
     });
     return urls.length ? urlset(urls) : notFound();
   }

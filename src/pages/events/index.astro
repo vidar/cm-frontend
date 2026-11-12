@@ -1,26 +1,56 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { recentEvents } from '../../lib/games';
+import { listEvents, type EventListRow } from '../../lib/event-page';
+import { canonicalSearch, eventsListParams, eventsListUrl, EVENTS_PAGE_SIZE } from '../../lib/event-view';
+import { KEY_PARAMS } from '../../lib/cache-key';
 
 export const prerender = false;
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
-const events = await recentEvents(200);
-// "This week": events that finished within a week of the newest data (the latest TWIC issue).
-const latest = events.reduce<string | null>((m, e) => (e.end_date && (!m || e.end_date > m) ? e.end_date : m), null);
+// One spelling per listing (each costs a query on a cache miss): tidy the parameters before querying.
+const { q, year, page, keep } = eventsListParams(Astro.url.searchParams);
+const fix = canonicalSearch(Astro.url.searchParams, keep, KEY_PARAMS);
+if (fix !== null) return new Response(null, { status: 301, headers: { Location: `/events/${fix}`, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
+// Five minutes at the edge: a tournament the site owner approves shows up here as soon as its pages do.
+Astro.response.headers.set('Cache-Control', 'public, max-age=60, s-maxage=300');
+const { events, more, years } = await listEvents({ q, year, page });
+if (!events.length && page > 1) return new Response(null, { status: 301, headers: { Location: eventsListUrl({ q, year }), 'Cache-Control': 'public, max-age=60, s-maxage=300' } });
+const filtered = !!(q || year);
+// "This week": events that finished within a week of the newest data (the latest TWIC issue). First page of the plain listing only.
+const latest = filtered || page > 1 ? null : events.reduce<string | null>((m, e) => (e.end_date && (!m || e.end_date > m) ? e.end_date : m), null);
 const day = 86_400_000;
 const thisWeek = latest ? events.filter((e) => e.end_date && Date.parse(latest) - Date.parse(e.end_date) < 7 * day) : [];
 const earlier = events.filter((e) => !thisWeek.includes(e));
-const dates = (e: (typeof events)[number]) => (e.start_date && e.end_date && e.start_date !== e.end_date ? `${e.start_date} – ${e.end_date}` : (e.start_date ?? ''));
-const describe = (e: (typeof events)[number]) => [e.site, dates(e), `${e.games.toLocaleString('en')} games`].filter(Boolean).join(' · ');
+const dates = (e: EventListRow) => (e.start_date && e.end_date && e.start_date !== e.end_date ? `${e.start_date} – ${e.end_date}` : (e.start_date ?? ''));
+const describe = (e: EventListRow) => [e.site, dates(e), `${e.games.toLocaleString('en')} games`].filter(Boolean).join(' · ');
+const what = q ? `Tournaments matching “${q}”${year ? ` in ${year}` : ''}` : year ? `Chess tournaments in ${year}` : page > 1 ? 'Earlier chess tournaments' : 'Chess tournaments this week and recent events';
+const pageNote = page > 1 ? ` (page ${page})` : '';
+const heading = q ? `Matching “${q}”${year ? ` in ${year}` : ''}` : year ? `Events in ${year}` : thisWeek.length > 0 ? 'Earlier' : page > 1 ? 'Earlier events' : 'Recent events';
+const first = (page - 1) * EVENTS_PAGE_SIZE + 1;
 ---
 
 <Layout
-  title="Chess tournaments this week and recent events"
-  description={`The tournaments that just finished${latest ? ` (games to ${latest})` : ''} and recent over-the-board events, each with standings, round-by-round results and every game to replay.`}
+  title={`${what}${pageNote}`}
+  description={
+    filtered
+      ? `${what}${pageNote}: over-the-board events with standings, round-by-round results and every game to replay.`
+      : `The tournaments that just finished${latest ? ` (games to ${latest})` : ''} and recent over-the-board events, each with standings, round-by-round results and every game to replay.`
+  }
+  noindex={!!q}
 >
-  <nav class="crumbs"><a href="/games/">Games</a></nav>
+  <nav class="crumbs"><a href="/games/">Games</a>{(filtered || page > 1) && <> › <a href="/events/">Events</a></>}</nav>
   <h1>Events</h1>
   <p class="organisers">Organising a tournament? <a href="/upload/">Upload its games</a> round by round.</p>
+  <form class="find" method="get" action="/events/" role="search">
+    <input type="search" name="q" value={q ?? ''} placeholder="Tournament name, e.g. Olympiad" aria-label="Tournament name" minlength="2" maxlength="80" />
+    {year && <input type="hidden" name="year" value={year} />}
+    <button type="submit">Find</button>
+    {year && q && <a href={eventsListUrl({ q })}>All years</a>}
+  </form>
+  {years.length > 1 && (
+    <nav class="years" aria-label="Events by year">
+      <span class="muted">By year:</span>
+      {years.map((y) => (y === year ? <span class="current" aria-current="page">{y}</span> : <a href={eventsListUrl({ q, year: y })}>{y}</a>))}
+    </nav>
+  )}
   {thisWeek.length > 0 && (
     <section>
       <h2>This week</h2>
@@ -33,19 +63,32 @@ const describe = (e: (typeof events)[number]) => [e.site, dates(e), `${e.games.t
     </section>
   )}
   <section>
-    <h2>{thisWeek.length > 0 ? 'Earlier' : 'Recent events'}</h2>
+    <h2>{heading}</h2>
+    {earlier.length === 0 && filtered && <p class="muted">No tournaments found.{q && ' Try fewer or shorter words: every word must appear in the name.'}</p>}
+    {(page > 1 || (filtered && more)) && earlier.length > 0 && <p class="muted">{first.toLocaleString('en')}–{(first + events.length - 1).toLocaleString('en')}, newest first.</p>}
     <ul class="list">
       {earlier.map((e) => (
         <li><a href={`/events/${e.slug}/`}>{e.name}</a> <span class="muted">{describe(e)}</span></li>
       ))}
     </ul>
+    {(page > 1 || more) && (
+      <nav class="pager" aria-label="Pages">
+        {page > 1 ? <a href={eventsListUrl({ q, year, page: page - 1 })} rel="prev">← Newer</a> : <span></span>}
+        {more ? <a href={eventsListUrl({ q, year, page: page + 1 })} rel="next">Older →</a> : <span></span>}
+      </nav>
+    )}
   </section>
 </Layout>
 
 <style>
   .organisers { color: var(--muted); font-size: 0.92rem; margin-top: -0.3rem; }
   .crumbs { font-size: 0.9rem; color: var(--muted); }
+  .find { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.75rem 0; }
+  .find input[type='search'] { flex: 1 1 14rem; max-width: 24rem; }
+  .years { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: baseline; margin: 0.5rem 0 1rem; font-variant-numeric: tabular-nums; }
+  .years .current { font-weight: 700; color: var(--accent); }
   .list { list-style: none; padding: 0; }
   .list li { padding: 0.3rem 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
   .muted { color: var(--muted); font-size: 0.9em; }
+  .pager { display: flex; justify-content: space-between; margin-top: 1rem; }
 </style>

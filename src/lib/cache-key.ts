@@ -6,8 +6,8 @@
 
 /** Every query parameter read by /games/, /players/, /events/ and /sitemaps/ routes. */
 export const KEY_PARAMS = new Set([
-  // player pages and event pages
-  'page', 'color', 'all',
+  // player pages and event pages; the events index (page, q, year)
+  'page', 'color', 'all', 'year',
   // player search and suggestions
   'q',
   // analysis / AI-notes JSON: a client polling live state must not get the cached answer

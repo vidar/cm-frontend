@@ -16,6 +16,8 @@ import {
   winners,
   type EventGame,
 } from '../src/lib/event';
+import { canonicalSearch, eventPageParams, eventsListParams, eventsListUrl, pageParam, roundParam } from '../src/lib/event-view';
+import { KEY_PARAMS } from '../src/lib/cache-key';
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -907,5 +909,265 @@ describe('roundStory (round robin)', () => {
     const a = analyseEvent(doubleRoundRobin().slice(0, 10), null);
     expect(a.complete).toBe(false);
     expect(roundStory(a, 1)).toEqual(['On the top board, Alice beat Dave with the white pieces.', '1 of 2 games was decisive.']);
+  });
+});
+
+// ---- review fixes: team tiebreaks, coverage, team knockouts, ongoing uploads ----------------------
+
+describe('team tiebreaks', () => {
+  // Team Swiss, 6 teams of 2 boards, 3 rounds, nobody meets twice. Board 1: home has White.
+  //   R1: Alpha 2–0 Echo, Bravo 2–0 Fox, Charlie 1–1 Delta
+  //   R2: Alpha 1–1 Charlie, Bravo 1–1 Delta, Echo 2–0 Fox
+  //   R3: Alpha ½–1½ Delta, Bravo 1–1 Echo, Charlie 2–0 Fox
+  // MP / GP: Bravo, Charlie 4 / 4; Delta 4 / 3½; Alpha 3 / 3½; Echo 3 / 3; Fox 0 / 0.
+  // Sonneborn-Berger (opponent's MP × game points against them):
+  //   Alpha  Echo 3×2 + Charlie 4×1 + Delta 4×½ = 12       (Olympiad, without Echo: 6)
+  //   Bravo  Fox 0×2 + Delta 4×1 + Echo 3×1 = 7            (without Fox: 7)
+  //   Charlie Delta 4×1 + Alpha 3×1 + Fox 0×2 = 7          (without Fox: 7)
+  //   Delta  Charlie 4×1 + Bravo 4×1 + Alpha 3×1½ = 12½    (without Alpha: 8)
+  //   Echo   Alpha 3×0 + Fox 0×2 + Bravo 4×1 = 4           (without Fox: 4)
+  const T = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Fox'];
+  const board = (id: number, w: number, b: number, result: string, round: number, wt: string, bt: string): EventGame => ({
+    ...game(id, 1, 2, result, String(round)),
+    white_id: w,
+    black_id: b,
+    white_name: `P${w}`,
+    white_slug: `p${w}`,
+    black_name: `P${b}`,
+    black_slug: `p${b}`,
+    white_team: wt,
+    black_team: bt,
+  });
+  const res = (homeScore: number, homeWhite: boolean) => (homeScore === 0.5 ? '1/2-1/2' : (homeScore === 1) === homeWhite ? '1-0' : '0-1');
+  let id = 0;
+  // A match: the home team's score on board 1 and board 2. Team t's players are 10t+1 and 10t+2.
+  const m = (round: number, h: number, a: number, b1: number, b2: number) => [
+    board(++id, 10 * h + 11, 10 * a + 11, res(b1, true), round, T[h], T[a]),
+    board(++id, 10 * a + 12, 10 * h + 12, res(b2, false), round, T[a], T[h]),
+  ];
+  const games = () => {
+    id = 0;
+    return [
+      ...m(1, 0, 4, 1, 1), ...m(1, 1, 5, 1, 1), ...m(1, 2, 3, 1, 0),
+      ...m(2, 0, 2, 1, 0), ...m(2, 1, 3, 0, 1), ...m(2, 4, 5, 1, 1),
+      ...m(3, 0, 3, 0.5, 0), ...m(3, 1, 4, 1, 0), ...m(3, 2, 5, 1, 1),
+    ];
+  };
+  const row = (l: { team: string; rank: number; mp: number; sb: number; gp: number }) => [l.team, l.rank, l.mp, l.sb, l.gp];
+  it('Olympiads rank by match points, then Olympiad Sonneborn-Berger (lowest opponent dropped), then game points', () => {
+    const a = analyseEvent(games(), 'team', { name: 'Test Olympiad 2026' });
+    expect(a.format).toBe('team');
+    expect(a.teams!.roundRobin).toBe(false);
+    expect(a.teams!.standingsAfter(3).map(row)).toEqual([
+      ['Delta', 1, 4, 8, 3.5],
+      ['Bravo', 2, 4, 7, 4],
+      ['Charlie', 2, 4, 7, 4],
+      ['Alpha', 4, 3, 6, 3.5],
+      ['Echo', 5, 3, 4, 3],
+      ['Fox', 6, 0, 0, 0],
+    ]);
+    expect(winners(a)).toEqual(['Delta']);
+  });
+  it('other team events rank by match points, game points, then Sonneborn-Berger; teams level on all share a rank', () => {
+    const a = analyseEvent(games(), 'team', { name: 'Test Team Open' });
+    expect(a.teams!.standingsAfter(3).map(row)).toEqual([
+      ['Bravo', 1, 4, 7, 4],
+      ['Charlie', 1, 4, 7, 4],
+      ['Delta', 3, 4, 12.5, 3.5],
+      ['Alpha', 4, 3, 12, 3.5],
+      ['Echo', 5, 3, 4, 3],
+      ['Fox', 6, 0, 0, 0],
+    ]);
+    expect(winners(a)).toEqual(['Bravo', 'Charlie']);
+    expect(roundStory(a, 3).at(-1)).toBe('Bravo, Charlie and Delta finish level on 4 match points.');
+  });
+  it('the event name comes from the games when not given', () => {
+    const a = analyseEvent(games().map((g) => ({ ...g, event_name: '46th Olympiad 2026' })), 'team');
+    expect(a.teams!.standingsAfter(3)[0].team).toBe('Delta');
+  });
+});
+
+describe('coverage of team events', () => {
+  it('only one club’s matches in the database: partial, no winner, no lead in the story', () => {
+    // Alpha plays four rounds against four different teams; each of those plays once.
+    const games = [
+      teamGame(1, 1, 3, '1-0', '1', 'Alpha', 'Bravo'),
+      teamGame(2, 4, 2, '0-1', '1', 'Bravo', 'Alpha'),
+      teamGame(3, 1, 5, '1-0', '2', 'Alpha', 'Charlie'),
+      teamGame(4, 6, 2, '0-1', '2', 'Charlie', 'Alpha'),
+      teamGame(5, 1, 7, '1-0', '3', 'Alpha', 'Delta'),
+      teamGame(6, 8, 2, '1/2-1/2', '3', 'Delta', 'Alpha'),
+      teamGame(7, 1, 3, '1-0', '4', 'Alpha', 'Echo'),
+      teamGame(8, 4, 2, '0-1', '4', 'Echo', 'Alpha'),
+    ].map((g, i) => (i >= 6 ? { ...g, white_id: g.white_id + 10, black_id: g.black_id + 10, white_name: `${g.white_name}2`, black_name: `${g.black_name}2` } : g));
+    const a = analyseEvent(games, 'team');
+    expect(a.format).toBe('team');
+    expect(a.coverage).toBeCloseTo(1 / 4, 10);
+    expect(a.teams!.partial).toBe(true);
+    expect(a.complete).toBe(false);
+    expect(winners(a)).toEqual([]);
+    expect(roundStory(a, 4)).toEqual(['On the top table, Alpha beat Echo 2–0.']);
+  });
+  it('a complete league is not partial', () => {
+    const a = analyseEvent(teamEvent(), null);
+    expect(a.coverage).toBe(1);
+    expect(a.teams!.partial).toBe(false);
+  });
+});
+
+describe('thin rounds in a Swiss', () => {
+  // 8 players, 5 rounds of 4 boards, but round 3 has only its top board. All draws but Alice's first win.
+  const games = () =>
+    [
+      [1, 1, 2], [1, 3, 4], [1, 5, 6], [1, 7, 8],
+      [2, 1, 3], [2, 2, 4], [2, 5, 7], [2, 6, 8],
+      [3, 1, 4],
+      [4, 1, 5], [4, 2, 6], [4, 3, 7], [4, 4, 8],
+      [5, 1, 6], [5, 2, 5], [5, 3, 8], [5, 4, 7],
+    ].map(([r, w, b], i) => game(i + 1, w, b, i === 0 ? '1-0' : '1/2-1/2', String(r)));
+  it('flags rounds with far fewer games than the others, names no winner and softens the story', () => {
+    const a = analyseEvent(games(), null);
+    expect(a.format).toBe('swiss');
+    expect(a.coverage).toBeCloseTo(4 / 5, 10);
+    expect(a.complete).toBe(true);
+    expect(a.thinRounds).toEqual([3]);
+    expect(winners(a)).toEqual([]);
+    expect(roundStory(a, 3)[0]).toBe('On the top board, Alice and Dave drew.');
+    expect(roundStory(a, 4)[0]).toBe('On board 1, Alice and Eve drew.');
+    expect(roundStory(a, 5).at(-1)).toBe('Alice has the best score in the games in the database, 3/5.');
+  });
+  it('full rounds are not thin', () => {
+    expect(analyseEvent(swiss(), null).thinRounds).toEqual([]);
+    expect(analyseEvent(roundRobin(), null).thinRounds).toEqual([]);
+  });
+});
+
+describe('ongoing (uploaded) tournaments', () => {
+  it('never call the standings final', () => {
+    const a = analyseEvent(doubleRoundRobin(), null, { ongoing: true });
+    expect(a.ongoing).toBe(true);
+    expect(winners(a)).toEqual([]);
+    expect(roundStory(a, 6).at(-1)).toBe('Alice keeps the sole lead with 4½/6.');
+    const t = analyseEvent(teamEvent(), null, { ongoing: true });
+    expect(roundStory(t, 3).at(-1)).toBe('Alpha lead with 5 match points.');
+    expect(winners(t)).toEqual([]);
+  });
+});
+
+describe('team knockouts', () => {
+  // Semi-finals in round 1 (boards '1.1'..'1.4' numbered across both matches), final in round 2.
+  const cup = (final: [string, string]) => [
+    teamGame(1, 1, 3, '1-0', '1.1', 'Alpha', 'Bravo'),
+    teamGame(2, 4, 2, '0-1', '1.2', 'Bravo', 'Alpha'),
+    teamGame(3, 5, 7, '1/2-1/2', '1.3', 'Charlie', 'Delta'),
+    teamGame(4, 8, 6, '0-1', '1.4', 'Delta', 'Charlie'),
+    teamGame(5, 1, 5, final[0], '2.1', 'Alpha', 'Charlie'),
+    teamGame(6, 6, 2, final[1], '2.2', 'Charlie', 'Alpha'),
+  ];
+  it('builds a bracket instead of league standings, with the final’s winner', () => {
+    const a = analyseEvent(cup(['1-0', '1/2-1/2']), 'team-k.o.');
+    expect(a.format).toBe('team');
+    const ko = a.teams!.knockout!;
+    expect(ko.map((r) => [r.n, r.name, r.matches.map((k) => [k.match.home, k.main, k.match.away, k.winner, k.how])])).toEqual([
+      [1, 'Semi-finals', [['Alpha', [2, 0], 'Bravo', 'Alpha', 'score'], ['Charlie', [1.5, 0.5], 'Delta', 'Charlie', 'score']]],
+      [2, 'Final', [['Alpha', [1.5, 0.5], 'Charlie', 'Alpha', 'score']]],
+    ]);
+    expect(winners(a)).toEqual(['Alpha']);
+    expect(roundStory(a, 2)).toEqual(['Alpha beat Charlie 1½–½ in the final.']);
+    expect(roundStory(a, 1)).toEqual(['2 matches.']);
+  });
+  it('a drawn final decided by a tiebreak not in the database has no winner', () => {
+    const a = analyseEvent(cup(['1-0', '1-0']), 'team-k.o.');
+    expect(winners(a)).toEqual([]);
+    expect(roundStory(a, 2)).toEqual(['Alpha and Charlie drew 1–1 in the final; the tiebreak that decided it is not in the database.']);
+  });
+  it('mini-matches: the usual number of legs is the main score, later legs the tiebreak', () => {
+    // Every match is two legs of two boards ('r.1', 'r.2'); the final adds a tiebreak leg 'r.3'.
+    const leg = (id: number, r: number, l: number, w: string, b: string, res: [string, string]) => [
+      teamGame(id, 1, 3, res[0], `${r}.${l}`, w, b),
+      teamGame(id + 1, 4, 2, res[1], `${r}.${l}`, b, w),
+    ];
+    const games = [
+      ...leg(1, 1, 1, 'Alpha', 'Bravo', ['1-0', '0-1']),
+      ...leg(3, 1, 2, 'Alpha', 'Bravo', ['1-0', '1/2-1/2']),
+      ...leg(5, 1, 1, 'Charlie', 'Delta', ['1-0', '0-1']),
+      ...leg(7, 1, 2, 'Charlie', 'Delta', ['1-0', '1-0']),
+      ...leg(9, 2, 1, 'Alpha', 'Charlie', ['1-0', '1-0']),
+      ...leg(11, 2, 2, 'Alpha', 'Charlie', ['0-1', '0-1']),
+      ...leg(13, 2, 3, 'Alpha', 'Charlie', ['1-0', '1/2-1/2']),
+    ];
+    const a = analyseEvent(games, 'team-k.o.');
+    const final = a.teams!.knockout!.at(-1)!;
+    expect(final.name).toBe('Final');
+    expect(final.matches[0]).toMatchObject({ main: [2, 2], tiebreak: [1.5, 0.5], winner: 'Alpha', how: 'tiebreak' });
+    expect(winners(a)).toEqual(['Alpha']);
+    expect(roundStory(a, 2)).toEqual(['Alpha beat Charlie on tiebreak in the final after 2–2 (tiebreak 1½–½).']);
+  });
+  it('a pairing that meets again after a level match is its tiebreak, not a new round', () => {
+    // Semi-finals, then the final and a third-place match (drawn), then the third-place replay.
+    const games = [
+      teamGame(1, 1, 3, '1-0', '1.1', 'Alpha', 'Bravo'),
+      teamGame(2, 4, 2, '0-1', '1.2', 'Bravo', 'Alpha'),
+      teamGame(3, 5, 7, '1-0', '1.3', 'Charlie', 'Delta'),
+      teamGame(4, 8, 6, '0-1', '1.4', 'Delta', 'Charlie'),
+      teamGame(5, 1, 5, '1-0', '2.1', 'Alpha', 'Charlie'),
+      teamGame(6, 6, 2, '0-1', '2.2', 'Charlie', 'Alpha'),
+      teamGame(7, 3, 7, '1-0', '2.3', 'Bravo', 'Delta'),
+      teamGame(8, 8, 4, '1-0', '2.4', 'Delta', 'Bravo'),
+      teamGame(9, 7, 3, '0-1', '3.1', 'Delta', 'Bravo'),
+      teamGame(10, 4, 8, '1/2-1/2', '3.2', 'Bravo', 'Delta'),
+    ];
+    const ko = analyseEvent(games, 'team-k.o.').teams!.knockout!;
+    expect(ko.map((r) => r.name)).toEqual(['Semi-finals', 'Final and third place', 'Tiebreak']);
+    expect(ko[1].matches.map((k) => [k.match.home, k.match.away, k.winner, k.how])).toEqual([
+      ['Alpha', 'Charlie', 'Alpha', 'score'],
+      ['Bravo', 'Delta', 'Bravo', 'tiebreak'],
+    ]);
+    expect(ko[1].matches[1].tiebreak).toEqual([1.5, 0.5]);
+    expect(ko[2].matches[0].replay).toBe(true);
+  });
+});
+
+// ---- URL parameters of the event routes (src/lib/event-view.ts) ------------------------------------
+
+describe('event route parameters', () => {
+  const sp = (q: string) => new URLSearchParams(q);
+  it('round pages take plain round numbers 1..60 only', () => {
+    expect(roundParam('3')).toBe(3);
+    expect(roundParam('60')).toBe(60);
+    for (const bad of ['03', '3x', '3.0', '0', '61', '', ' 3', '1e1', undefined]) expect(roundParam(bad)).toBeNull();
+  });
+  it('page numbers are plain positive integers up to a maximum', () => {
+    expect(pageParam('2', 100)).toBe(2);
+    for (const bad of [null, '', '0', '02', '2.5', '-1', 'abc', '101']) expect(pageParam(bad, 100)).toBe(1);
+  });
+  it('canonicalSearch: null when the cache-keyed parameters are already as wanted, ignoring tracking tags', () => {
+    expect(canonicalSearch(sp(''), [], KEY_PARAMS)).toBeNull();
+    expect(canonicalSearch(sp('utm_source=x&fbclid=y'), [], KEY_PARAMS)).toBeNull();
+    expect(canonicalSearch(sp('page=2&utm_source=x'), [['page', '2']], KEY_PARAMS)).toBeNull();
+    expect(canonicalSearch(sp('page=1'), [], KEY_PARAMS)).toBe('');
+    expect(canonicalSearch(sp('all=1'), [['all', '']], KEY_PARAMS)).toBe('?all');
+    expect(canonicalSearch(sp('all&page=2'), [['page', '2'], ['all', '']], KEY_PARAMS)).toBe('?page=2&all');
+    expect(canonicalSearch(sp('q=a%20b'), [['q', 'a b']], KEY_PARAMS)).toBeNull();
+    expect(canonicalSearch(sp('year=2026&q=ab'), [['q', 'ab'], ['year', '2026']], KEY_PARAMS)).toBe('?q=ab&year=2026');
+  });
+  it('event pages keep one spelling of page and all', () => {
+    expect(eventPageParams(sp('page=3&all=yes&color=w'))).toEqual({ page: 3, all: true, keep: [['page', '3'], ['all', '']] });
+    expect(eventPageParams(sp('page=abc'))).toEqual({ page: 1, all: false, keep: [] });
+  });
+  it('the events index tidies the search, checks the year and the page', () => {
+    expect(eventsListParams(sp('q=%20%20Candidates%20%20%202026%20'))).toMatchObject({ q: 'Candidates 2026', year: null, page: 1, keep: [['q', 'Candidates 2026']] });
+    expect(eventsListParams(sp('q=a'))).toMatchObject({ q: null, keep: [] });
+    expect(eventsListParams(sp('year=2025&page=3'))).toMatchObject({ q: null, year: 2025, page: 3, keep: [['year', '2025'], ['page', '3']] });
+    expect(eventsListParams(sp('year=25&page=0'))).toMatchObject({ year: null, page: 1, keep: [] });
+    expect(eventsListParams(sp(`q=${'x'.repeat(100)}`)).q).toHaveLength(80);
+  });
+  it('builds /events/ URLs in the same order', () => {
+    expect(eventsListUrl({})).toBe('/events/');
+    expect(eventsListUrl({ q: 'tata steel', year: 2026, page: 2 })).toBe('/events/?q=tata+steel&year=2026&page=2');
+    expect(eventsListUrl({ year: 2026, page: 1 })).toBe('/events/?year=2026');
+    // What the page links to needs no redirect.
+    const u = new URL(eventsListUrl({ q: 'tata steel', year: 2026, page: 2 }), 'https://x');
+    expect(canonicalSearch(u.searchParams, eventsListParams(u.searchParams).keep, KEY_PARAMS)).toBeNull();
   });
 });

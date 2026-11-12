@@ -139,9 +139,12 @@ export interface TeamMatch {
 
 export interface TeamLine {
   team: string;
+  /** Teams level on every tiebreak share a rank. */
   rank: number;
   mp: number;
   gp: number;
+  /** Sonneborn-Berger: each opponent's match points times the game points scored against them (Olympiads: without the lowest-placed opponent). */
+  sb: number;
   played: number;
   w: number;
   d: number;
@@ -173,6 +176,25 @@ export interface KoRound {
   matches: KoMatch[];
 }
 
+/** A team knockout match: the main legs' score, the tiebreak games' score (if any) and who went through. */
+export interface TeamKoMatch {
+  match: TeamMatch;
+  /** The same pairing again after a level match in an earlier round: its tiebreak (counted there). */
+  replay?: boolean;
+  /** Game points [home, away] in the main legs (the usual number of mini-matches); tiebreak games apart. */
+  main: [number, number];
+  tiebreak: [number, number] | null;
+  winner: string | null;
+  /** How the winner is known: the main score, the tiebreak games, or only because they played the next round. */
+  how: 'score' | 'tiebreak' | 'later' | null;
+}
+
+export interface TeamKoRound {
+  n: number;
+  name: string;
+  matches: TeamKoMatch[];
+}
+
 export interface Highlight {
   label: string;
   game: EventGame;
@@ -183,9 +205,16 @@ export interface EventAnalysis {
   format: Format;
   players: Map<number, Player>;
   rounds: RoundInfo[];
-  /** Individual events: are (nearly) all games of every round in the database? Team events: is every match complete? */
+  /**
+   * Individual events: are (nearly) all games of every round in the database? Team events: is every
+   * match complete, and has the median team played (nearly) every round?
+   */
   complete: boolean;
   coverage: number;
+  /** Swiss: rounds with far fewer games than the others (only partly in the database). */
+  thinRounds: number[];
+  /** Standings may still change (uploaded tournaments have no "finished" flag): no "final" wording. */
+  ongoing: boolean;
   /** Round robin: number of cycles (1 = single, 2 = double round robin). */
   cycles: number;
   avgElo: number | null;
@@ -197,13 +226,17 @@ export interface EventAnalysis {
     standingsAfter: (round: number) => TeamLine[];
     rosters: Map<string, RosterLine[]>;
     roundRobin: boolean;
+    /** Most teams are missing from most rounds (only some matches published): not the real standings. */
+    partial: boolean;
+    /** Team knockouts (type 'team-k.o.'): the bracket; the standings mean little there. */
+    knockout?: TeamKoRound[];
   };
   knockout?: KoRound[];
   stats: { games: number; white: number; draws: number; black: number; avgMoves: number; topOpening: { slug: string; name: string; count: number } | null };
   highlights: Highlight[];
 }
 
-export function analyseEvent(games: EventGame[], eventType: string | null): EventAnalysis {
+export function analyseEvent(games: EventGame[], eventType: string | null, opts: { ongoing?: boolean; name?: string } = {}): EventAnalysis {
   const type = (eventType ?? '').toLowerCase();
   const players = new Map<number, Player>();
   const elos = new Map<number, number[]>();
@@ -317,6 +350,11 @@ export function analyseEvent(games: EventGame[], eventType: string | null): Even
     format === 'round-robin' ? Math.min(1, games.length / (((n * (n - 1)) / 2) * cycles)) : rounds.length ? Math.min(1, median / rounds.length) : 0;
   // Big opens are often covered only on the top boards: then the "standings" would be wrong.
   const complete = format === 'round-robin' ? coverage >= 0.85 : format === 'swiss' ? coverage >= 0.75 : true;
+  // A Swiss can look complete while one or two rounds are only half there (TWIC got part of a round):
+  // the scores then aren't the real ones, whoever tops them.
+  const sizes = rounds.map((r) => r.games.length).sort((x, y) => x - y);
+  const medianRound = sizes[Math.floor(sizes.length / 2)] ?? 0;
+  const thinRounds = format === 'swiss' && complete ? rounds.filter((r) => r.games.length < medianRound * 0.7).map((r) => r.n) : [];
 
   // Individual standings after a round (memoised).
   const memo = new Map<number, Line[]>();
@@ -380,6 +418,8 @@ export function analyseEvent(games: EventGame[], eventType: string | null): Even
     rounds,
     complete,
     coverage,
+    thinRounds,
+    ongoing: !!opts.ongoing,
     cycles,
     avgElo,
     category,
@@ -388,9 +428,18 @@ export function analyseEvent(games: EventGame[], eventType: string | null): Even
     highlights: highlights(games),
   };
   if (format === 'team') {
-    analysis.teams = analyseTeams(rounds, players);
+    const t = (analysis.teams = analyseTeams(rounds, players, parsed, { knockout: type.includes('k.o'), olympiad: /olympiad/i.test(opts.name ?? games[0]?.event_name ?? '') }));
+    // Coverage as for a Swiss: in a complete event the median team plays (nearly) every round that has
+    // matches; when only some matches were published (one club's, the top tables), most play a few.
+    // Knockouts lose teams every round and small round robins have byes, so it doesn't apply there.
+    const played = new Map<string, number>();
+    for (const m of t.matches) for (const team of [m.home, m.away]) played.set(team, (played.get(team) ?? 0) + 1);
+    const perTeam = [...played.values()].sort((x, y) => x - y);
+    const matchRounds = new Set(t.matches.map((m) => m.round)).size;
+    analysis.coverage = matchRounds ? Math.min(1, (perTeam[Math.floor(perTeam.length / 2)] ?? 0) / matchRounds) : 0;
+    t.partial = !t.knockout && !t.roundRobin && analysis.coverage < 0.75;
     // Boards missing from the database (forfeits, unpublished games): the standings are approximate.
-    analysis.complete = analysis.teams.matches.every((m) => m.complete);
+    analysis.complete = t.matches.every((m) => m.complete) && !t.partial;
   }
   if (format === 'knockout') analysis.knockout = analyseKnockout(rounds, players, parsed);
   if (format === 'match') analysis.knockout = [{ n: 1, name: 'Match', matches: [koMatch(1, [...games].sort((a, b) => a.id - b.id), players)] }];
@@ -440,7 +489,12 @@ export function highlights(all: EventGame[]): Highlight[] {
   return out;
 }
 
-function analyseTeams(rounds: RoundInfo[], players: Map<number, Player>): NonNullable<EventAnalysis['teams']> {
+function analyseTeams(
+  rounds: RoundInfo[],
+  players: Map<number, Player>,
+  parsed: Map<number, { n: number | null; sub: number[] }>,
+  opts: { knockout: boolean; olympiad: boolean },
+): NonNullable<EventAnalysis['teams']> {
   const matches: TeamMatch[] = [];
   for (const r of rounds) {
     const byPair = new Map<string, EventGame[]>();
@@ -476,10 +530,13 @@ function analyseTeams(rounds: RoundInfo[], players: Map<number, Player>): NonNul
   matches.sort((a, b) => a.round - b.round || a.games[0].id - b.games[0].id);
 
   const teams = new Set(matches.flatMap((m) => [m.home, m.away]));
+  const pairsMet = new Set(matches.map((m) => pairKey(m.home, m.away)));
+  const t = teams.size;
+  const roundRobin = t >= 3 && t <= 20 && pairsMet.size >= ((t * (t - 1)) / 2) * 0.85;
   const memo = new Map<number, TeamLine[]>();
   const standingsAfter = (upto: number) => {
     if (memo.has(upto)) return memo.get(upto)!;
-    const lines = new Map<string, TeamLine>([...teams].map((t) => [t, { team: t, rank: 0, mp: 0, gp: 0, played: 0, w: 0, d: 0, l: 0, matches: [] }]));
+    const lines = new Map<string, TeamLine>([...teams].map((t) => [t, { team: t, rank: 0, mp: 0, gp: 0, sb: 0, played: 0, w: 0, d: 0, l: 0, matches: [] }]));
     for (const m of matches) {
       if (m.round > upto) continue;
       for (const [t, o, my, their] of [
@@ -498,8 +555,24 @@ function analyseTeams(rounds: RoundInfo[], players: Map<number, Player>): NonNul
         l.matches.push({ round: m.round, opp: o, my, their, match: m });
       }
     }
-    const sorted = [...lines.values()].filter((l) => l.played).sort((a, b) => b.mp - a.mp || b.gp - a.gp || a.team.localeCompare(b.team));
-    sorted.forEach((l, i) => (l.rank = i + 1));
+    // Sonneborn-Berger from the match points after the same round. Olympiads leave out the opponent
+    // with the fewest match points (the lowest such contribution when several are level).
+    for (const l of lines.values()) {
+      const parts = l.matches.map((m) => ({ mp: lines.get(m.opp)!.mp, v: lines.get(m.opp)!.mp * m.my }));
+      if (opts.olympiad && parts.length > 1) parts.splice(parts.indexOf([...parts].sort((x, y) => x.mp - y.mp || x.v - y.v)[0]), 1);
+      l.sb = parts.reduce((a, p) => a + p.v, 0);
+    }
+    // Match points first. Olympiads then go by (Olympiad) Sonneborn-Berger and game points; other team
+    // events, whose regulations vary (leagues mostly use board points), by game points and then SB.
+    // Teams still level share the rank (never decided by name); the name only fixes the order.
+    const key = (l: TeamLine) => (opts.olympiad ? [l.mp, l.sb, l.gp] : [l.mp, l.gp, l.sb]);
+    const cmp = (a: TeamLine, b: TeamLine) => {
+      const [x, y] = [key(a), key(b)];
+      for (let i = 0; i < x.length; i++) if (Math.abs(x[i] - y[i]) > 1e-9) return y[i] - x[i];
+      return 0;
+    };
+    const sorted = [...lines.values()].filter((l) => l.played).sort((a, b) => cmp(a, b) || a.team.localeCompare(b.team));
+    sorted.forEach((l, i) => (l.rank = i && cmp(sorted[i - 1], l) === 0 ? sorted[i - 1].rank : i + 1));
     memo.set(upto, sorted);
     return sorted;
   };
@@ -530,9 +603,103 @@ function analyseTeams(rounds: RoundInfo[], players: Map<number, Player>): NonNul
   }
   for (const list of rosters.values()) list.sort((a, b) => a.board - b.board || b.games - a.games);
 
-  const pairsMet = new Set(matches.map((m) => pairKey(m.home, m.away)));
-  const t = teams.size;
-  return { boards, matches, standingsAfter, rosters, roundRobin: t >= 3 && t <= 20 && pairsMet.size >= ((t * (t - 1)) / 2) * 0.85 };
+  return { boards, matches, standingsAfter, rosters, roundRobin, partial: false, ...(opts.knockout ? { knockout: teamKnockout(matches, parsed) } : {}) };
+}
+
+/**
+ * Team knockout bracket. Within a round, a pairing's games are its match. Some events play it in
+ * mini-matches ('3.1', '3.2': Round tags repeat the second number) and add tiebreak mini-matches or an
+ * armageddon game ('3.3', '3.4'); the usual number of mini-matches counts as the main score and the
+ * rest as the tiebreak. When the second number differs on every board, it is the board, not a leg.
+ */
+function teamKnockout(matches: TeamMatch[], parsed: Map<number, { n: number | null; sub: number[] }>): TeamKoRound[] {
+  const legsOf = (m: TeamMatch) => {
+    const byLeg = new Map<number, EventGame[]>();
+    for (const g of m.games) {
+      const leg = parsed.get(g.id)?.sub[0] ?? 0;
+      (byLeg.get(leg) ?? byLeg.set(leg, []).get(leg)!).push(g);
+    }
+    return byLeg.size === m.games.length ? [m.games] : [...byLeg.keys()].sort((x, y) => x - y).map((k) => byLeg.get(k)!);
+  };
+  const legs = new Map(matches.map((m) => [m, legsOf(m)]));
+  const mainLegs = mode([...legs.values()].map((l) => l.length)) ?? 1;
+  const score = (m: TeamMatch, games: EventGame[]): [number, number] => {
+    let [h, a] = [0, 0];
+    for (const g of games) {
+      const ws = whiteScore(g.result);
+      if (ws === null) continue;
+      h += g.white_team === m.home ? ws : 1 - ws;
+      a += g.white_team === m.home ? 1 - ws : ws;
+    }
+    return [h, a];
+  };
+  const out: TeamKoRound[] = [];
+  for (const m of matches) {
+    let r = out.find((x) => x.n === m.round);
+    if (!r) out.push((r = { n: m.round, name: `Round ${m.round}`, matches: [] }));
+    const l = legs.get(m)!;
+    const main = score(m, l.slice(0, mainLegs).flat());
+    const tiebreak = l.length > mainLegs ? score(m, l.slice(mainLegs).flat()) : null;
+    const win = (s: [number, number]) => (s[0] > s[1] ? m.home : s[1] > s[0] ? m.away : null);
+    // A main score the missing boards could still turn decides nothing.
+    const byScore = m.decided ? win(main) : null;
+    const byTiebreak = !byScore && main[0] === main[1] && tiebreak ? win(tiebreak) : null;
+    r.matches.push({ match: m, main, tiebreak, winner: byScore ?? byTiebreak, how: byScore ? 'score' : byTiebreak ? 'tiebreak' : null });
+  }
+  out.sort((a, b) => a.n - b.n);
+  // A pairing that meets again after a level match is that match's tiebreak (a replay filed as a new
+  // round): its games count as the earlier match's tiebreak.
+  const open = new Map<string, TeamKoMatch>();
+  for (const r of out)
+    for (const k of r.matches) {
+      const key = pairKey(k.match.home, k.match.away);
+      const before = open.get(key);
+      if (before) {
+        const flip = before.match.home !== k.match.home;
+        const [h, aw] = [k.main[0] + (k.tiebreak?.[0] ?? 0), k.main[1] + (k.tiebreak?.[1] ?? 0)];
+        const tb: [number, number] = flip ? [aw, h] : [h, aw];
+        before.tiebreak = before.tiebreak ? [before.tiebreak[0] + tb[0], before.tiebreak[1] + tb[1]] : tb;
+        const w = before.tiebreak[0] > before.tiebreak[1] ? before.match.home : before.tiebreak[1] > before.tiebreak[0] ? before.match.away : null;
+        [before.winner, before.how] = w ? [w, 'tiebreak'] : [null, null];
+        k.replay = true;
+        if (w) open.delete(key);
+      } else if (!k.winner) open.set(key, k);
+    }
+  const bracket = out.filter((r) => !r.matches.every((k) => k.replay));
+  for (const r of out) if (!bracket.includes(r)) r.name = 'Tiebreak';
+  // Still open: the team seen in a later round went through.
+  bracket.forEach((r, i) => {
+    const ahead = new Set(bracket.slice(i + 1).flatMap((x) => x.matches.flatMap((k) => [k.match.home, k.match.away])));
+    for (const k of r.matches) {
+      if (k.winner || k.replay || ahead.has(k.match.home) === ahead.has(k.match.away)) continue;
+      k.winner = ahead.has(k.match.home) ? k.match.home : k.match.away;
+      k.how = 'later';
+    }
+  });
+  nameKnockoutRounds(bracket, (k) => [k.match.home, k.match.away], (k) => k.winner);
+  return out;
+}
+
+/**
+ * Names the last rounds of a bracket by size; in a final round with two matches, the final is the one
+ * between the previous round's winners (the other is the third-place match), and it goes first.
+ */
+function nameKnockoutRounds<M, K>(out: { name: string; matches: M[] }[], sides: (m: M) => [K, K], winner: (m: M) => K | null) {
+  const last = out.at(-1);
+  if (!last || out.length < 2) return;
+  const prevWinners = new Set(out.at(-2)!.matches.map(winner));
+  if (last.matches.length === 1) last.name = 'Final';
+  else if (last.matches.length === 2 && out.at(-2)!.matches.length === 2) {
+    last.name = 'Final and third place';
+    const isFinal = (m: M) => (sides(m).every((s) => prevWinners.has(s)) ? 0 : 1);
+    last.matches.sort((x, y) => isFinal(x) - isFinal(y));
+  }
+  const names = ['Semi-finals', 'Quarter-finals'];
+  for (let i = out.length - 2, k = 0; i >= 0 && k < names.length; i--, k++) {
+    const want = 2 ** (k + 1);
+    if (out[i].matches.length === want) out[i].name = names[k];
+    else break;
+  }
 }
 
 function analyseKnockout(rounds: RoundInfo[], players: Map<number, Player>, parsed: Map<number, { n: number | null; sub: number[] }>): KoRound[] {
@@ -560,24 +727,7 @@ function analyseKnockout(rounds: RoundInfo[], players: Map<number, Player>, pars
       else if (m.games.length >= 3 && m.games.length % 2 === 1 && last.result === '1/2-1/2') m.winner = last.black_id;
     }
   });
-  // Name the last rounds by size; in a final round with two matches, the final is the one between
-  // the previous round's winners (the other is the third-place match).
-  const last = out.at(-1);
-  if (last && out.length > 1) {
-    const prevWinners = new Set(out.at(-2)!.matches.map((m) => m.winner));
-    if (last.matches.length === 1) last.name = 'Final';
-    else if (last.matches.length === 2 && out.at(-2)!.matches.length === 2) {
-      last.name = 'Final and third place';
-      const isFinal = (m: KoMatch) => (prevWinners.has(m.a.id) && prevWinners.has(m.b.id) ? 0 : 1);
-      last.matches.sort((x, y) => isFinal(x) - isFinal(y));
-    }
-    const names = ['Semi-finals', 'Quarter-finals'];
-    for (let i = out.length - 2, k = 0; i >= 0 && k < names.length; i--, k++) {
-      const want = 2 ** (k + 1);
-      if (out[i].matches.length === want) out[i].name = names[k];
-      else break;
-    }
-  }
+  nameKnockoutRounds(out, (m) => [m.a.id, m.b.id], (m) => m.winner);
   return out;
 }
 
@@ -605,21 +755,39 @@ export function finalMatch(a: EventAnalysis): KoMatch | null {
   return last && (last.matches.length === 1 || last.name.startsWith('Final')) ? last.matches[0] : null;
 }
 
-/** The winner(s): top of the final standings, the knockout final's winner, or the top team. */
+/** The final of a team knockout, when the database has it (as finalMatch(); tiebreak rounds left out). */
+export function finalTeamMatch(a: EventAnalysis): TeamKoMatch | null {
+  const last = a.teams?.knockout?.filter((r) => r.name !== 'Tiebreak').at(-1);
+  return last && (last.matches.length === 1 || last.name.startsWith('Final')) ? last.matches[0] : null;
+}
+
+/**
+ * The winner(s): top of the final standings, the knockout final's winner, or the top team(s). Nobody
+ * while the standings can't be trusted to be the real ones: an incomplete event, a Swiss with rounds
+ * only partly in the database, a team event with most matches missing, or one still being played.
+ */
 export function winners(a: EventAnalysis): string[] {
   if (a.format === 'team' && a.teams) {
-    const s = a.teams.standingsAfter(Infinity);
-    return s.filter((l) => l.mp === s[0]?.mp && l.gp === s[0]?.gp).map((l) => l.team);
+    if (a.teams.knockout) return finalTeamMatch(a)?.winner ? [finalTeamMatch(a)!.winner!] : [];
+    if (a.teams.partial || a.ongoing) return [];
+    return a.teams.standingsAfter(Infinity).filter((l) => l.rank === 1).map((l) => l.team);
   }
   if (a.format === 'knockout' || a.format === 'match') {
     const final = finalMatch(a);
     return final?.winner ? [players(a, final.winner)] : [];
   }
-  if (a.format === 'games' || !a.complete || !a.rounds.length) return []; // loose games, or a few games of two players: no standings
+  if (a.format === 'games' || !a.complete || a.thinRounds.length || a.ongoing || !a.rounds.length) return []; // loose games, or a few games of two players: no standings
   const s = a.standingsAfter(Infinity);
   return s.filter((l) => l.points === s[0]?.points).map((l) => l.player.name);
 }
+
+/** "Rounds 1 and 11" / "Round 4". */
+export const roundList = (ns: number[]) => `${ns.length > 1 ? 'Rounds' : 'Round'} ${list(ns.map(String))}`;
 const players = (a: EventAnalysis, id: number) => a.players.get(id)?.name ?? '';
+/** 'a, b and c'. */
+export function list(xs: string[]) {
+  return xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`;
+}
 
 export const FORMAT_LABEL: Record<Format, string> = {
   'round-robin': 'Round robin',
@@ -632,14 +800,37 @@ export const FORMAT_LABEL: Record<Format, string> = {
 
 // ---- round stories ---------------------------------------------------------------------------
 
-const list = (xs: string[]) => (xs.length <= 1 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
-
 /** A few sentences on what happened in a round, from the results and the standings. */
 export function roundStory(a: EventAnalysis, n: number): string[] {
   const r = a.rounds.find((x) => x.n === n);
   if (!r) return [];
   const out: string[] = [];
-  const isLast = n === a.rounds.at(-1)?.n;
+  // The last round's story names the winner only when the standings are final.
+  const isLast = n === a.rounds.at(-1)?.n && !a.ongoing;
+
+  if (a.teams?.knockout) {
+    const round = a.teams.knockout.find((k) => k.n === n);
+    if (!round) return out;
+    const sc = (s: [number, number], w: boolean) => (w ? `${pts(Math.max(...s))}–${pts(Math.min(...s))}` : `${pts(s[0])}–${pts(s[1])}`);
+    if (round.name === 'Tiebreak') {
+      for (const k of round.matches) out.push(`${k.match.home} and ${k.match.away} played a tiebreak after their level match: ${sc(k.main, false)}.`);
+    } else if (round.matches.length === 1 || round.name.startsWith('Final')) {
+      const k = round.matches[0];
+      const where = round.name === 'Final and third place' ? 'the final' : round.name === `Round ${n}` ? `round ${n}` : `the ${round.name.toLowerCase()}`;
+      const [h, aw] = [k.match.home, k.match.away];
+      const loser = k.winner === h ? aw : h;
+      if (k.how === 'score') out.push(`${k.winner} beat ${loser} ${sc(k.main, true)} in ${where}.`);
+      else if (k.how === 'tiebreak') out.push(`${k.winner} beat ${loser} on tiebreak in ${where} after ${sc(k.main, true)} (tiebreak ${sc(k.tiebreak!, true)}).`);
+      else if (k.how === 'later') out.push(`${k.winner} went through against ${loser} in ${where}.`);
+      else if (k.main[0] === k.main[1] && k.match.decided)
+        out.push(`${h} and ${aw} drew ${sc(k.main, false)} in ${where}; the tiebreak that decided it is not in the database.`);
+      else out.push(`${h} and ${aw} are ${sc(k.main, false)} in ${where} in the games in the database.`);
+    } else {
+      const tiebreaks = round.matches.filter((k) => k.how === 'tiebreak').length;
+      out.push(`${round.matches.length} matches${tiebreaks ? `, ${tiebreaks} of them decided on tiebreak` : ''}.`);
+    }
+    return out;
+  }
 
   if (a.format === 'team' && a.teams) {
     const ms = a.teams.matches.filter((m) => m.round === n);
@@ -651,6 +842,8 @@ export function roundStory(a: EventAnalysis, n: number): string[] {
       const where = a.teams.roundRobin ? '' : 'On the top table, ';
       out.push(ws === ls ? `${where}${top.home} and ${top.away} drew ${pts(ws)}–${pts(ls)}.` : `${where}${w} beat ${l} ${pts(ws)}–${pts(ls)}.`);
     }
+    // Most matches missing: the table isn't the real one, so say nothing about who leads.
+    if (a.teams.partial) return out;
     const after = a.teams.standingsAfter(n);
     const lead = after.filter((t) => t.mp === after[0]?.mp);
     if (!lead.length) return out; // no match between two teams yet (e.g. only intra-club games in round 1)
@@ -729,7 +922,7 @@ export function roundStory(a: EventAnalysis, n: number): string[] {
           : b1.result === '1/2-1/2'
             ? `${b1.white_name} and ${b1.black_name} drew`
             : `the game between ${b1.white_name} and ${b1.black_name} has no result yet`;
-    out.push(`${a.complete ? 'On board 1' : 'On the top board'}, ${res}.`);
+    out.push(`${a.complete && !a.thinRounds.includes(n) ? 'On board 1' : 'On the top board'}, ${res}.`);
   }
   if (finished.length > 1)
     out.push(
@@ -746,7 +939,14 @@ export function roundStory(a: EventAnalysis, n: number): string[] {
   if (!lead.length) return out; // no finished game yet
   const leadBefore = before.filter((l) => l.points === before[0]?.points).map((l) => l.player.id);
   const score = `${pts(lead[0]?.points ?? 0)}/${lead[0]?.games ?? 0}`;
-  if (isLast) {
+  if (isLast && a.thinRounds.length) {
+    // Some rounds are only partly in the database: the top of these scores may not be the real winner.
+    out.push(
+      lead.length === 1
+        ? `${lead[0].player.name} has the best score in the games in the database, ${score}.`
+        : `${list(lead.map((l) => l.player.name))} share the best score in the games in the database, ${score}.`,
+    );
+  } else if (isLast) {
     out.push(lead.length === 1 ? `${lead[0].player.name} wins the tournament with ${score}.` : `${list(lead.map((l) => l.player.name))} finish level on ${score}.`);
   } else if (lead.length === 1) {
     const same = leadBefore.length === 1 && leadBefore[0] === lead[0].player.id;

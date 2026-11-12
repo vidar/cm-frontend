@@ -73,3 +73,29 @@ a.ev-r:hover { outline: 1px solid currentColor; }
 .ev-bar .w { background: #f5f5f4; color: #111827; }
 .ev-bar .d { background: #9ca3af; color: #111827; }
 .ev-bar .b { background: #1f2937; color: #f9fafb; }
+
+/* Wide tables scroll sideways: a soft shadow at an edge says there is more (covers scroll with the
+   content, shadows stay with the box), and the scrollbar is visible. */
+.ev-scroll {
+  background:
+    linear-gradient(to right, var(--bg) 40%, transparent) left / 2.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--bg) 40%, transparent) right / 2.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--fg) 32%, transparent), transparent) left / 1rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--fg) 32%, transparent), transparent) right / 1rem 100% no-repeat scroll,
+    var(--bg);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg) 30%, transparent) transparent;
+}
+
+/* Phones: knockout matches and the round-by-round list stack instead of scrolling. */
+@media (max-width: 40rem) {
+  .ev-ko tr { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; border-bottom: 1px solid var(--border); }
+  .ev-ko td { border-bottom: 0; }
+  .ev-ko td.name { min-width: 0; }
+  .ev-ko td.b { text-align: right; }
+  .ev-ko td.games { grid-column: 1 / -1; white-space: normal; padding-top: 0; }
+  .ev-rounds tr { display: grid; grid-template-columns: auto 1fr; align-items: baseline; border-bottom: 1px solid var(--border); }
+  .ev-rounds td { border-bottom: 0; }
+  .ev-rounds td.story { grid-column: 1 / -1; white-space: normal; padding-top: 0; }
+}
+.ev-rounds td.story { white-space: normal; min-width: 12rem; }

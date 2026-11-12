@@ -1,5 +1,6 @@
 ---
-// Team standings: match points, game points, and each round's opponent and match score.
+// Team standings: match points, game points (and SB), then each round's opponent and match score.
+// The totals come before the round columns so that they show without scrolling.
 import { pts, type TeamLine } from '../../lib/event';
 import { matchScore } from '../../lib/event-view';
 
@@ -11,9 +12,14 @@ interface Props {
   /** Base URL of the event (for links to round pages). */
   base: string;
   limit?: number;
+  /** Show the Sonneborn-Berger column (the tiebreak after match and game points). */
+  sb?: boolean;
 }
-const { lines, rounds = [], rankOf, moves, base, limit = 200 } = Astro.props;
+const { lines, rounds = [], rankOf, moves, base, limit = 200, sb = false } = Astro.props;
 const shown = lines.slice(0, limit);
+// Teams level on every tiebreak share a rank: "=2".
+const shared = new Set(lines.filter((l, i) => lines.some((o, j) => j !== i && o.rank === l.rank)).map((l) => l.rank));
+const sbText = (x: number) => x.toFixed(2).replace(/\.?0+$/, '');
 // Matches with boards missing from the database (in TWIC usually forfeits) are scored from the games there are.
 const counted = [...new Set(lines.flatMap((l) => l.matches.map((m) => m.match)))];
 const partial = counted.filter((m) => !m.complete).length;
@@ -25,8 +31,10 @@ const undecided = counted.filter((m) => !m.decided).length;
     <thead>
       <tr>
         <th class="num">#</th>{moves && <th></th>}<th class="ev-sticky">Team</th>
+        <th class="num" title="Match points (win 2, draw 1)">MP</th><th class="num" title="Game points">GP</th>
+        {sb && <th class="num" title="Sonneborn-Berger: each opponent’s match points times the game points scored against them">SB</th>}
+        <th class="num">W–D–L</th>
         {rounds.map((n) => <th class="c"><a href={`${base}round-${n}/`}>R{n}</a></th>)}
-        <th class="num" title="Match points (win 2, draw 1)">MP</th><th class="num" title="Game points">GP</th><th class="num">W–D–L</th>
       </tr>
     </thead>
     <tbody>
@@ -34,9 +42,13 @@ const undecided = counted.filter((m) => !m.decided).length;
         const mv = moves?.get(l.team);
         return (
           <tr class:list={{ top: i === 0 }}>
-            <td class="num muted">{l.rank}</td>
+            <td class="num muted">{shared.has(l.rank) ? `=${l.rank}` : l.rank}</td>
             {moves && <td>{mv ? mv > 0 ? <span class="ev-up">▲{mv}</span> : <span class="ev-down">▼{-mv}</span> : ''}</td>}
             <td class="name ev-sticky"><a href={`#team-${encodeURIComponent(l.team)}`}>{l.team}</a></td>
+            <td class="pts">{l.mp}</td>
+            <td class="num">{pts(l.gp)}</td>
+            {sb && <td class="num muted">{sbText(l.sb)}</td>}
+            <td class="num muted">{l.w}–{l.d}–{l.l}</td>
             {rounds.map((n) => {
               const m = l.matches.find((x) => x.round === n);
               if (!m) return <td></td>;
@@ -49,9 +61,6 @@ const undecided = counted.filter((m) => !m.decided).length;
                 </td>
               );
             })}
-            <td class="pts">{l.mp}</td>
-            <td class="num">{pts(l.gp)}</td>
-            <td class="num muted">{l.w}–{l.d}–{l.l}</td>
           </tr>
         );
       })}

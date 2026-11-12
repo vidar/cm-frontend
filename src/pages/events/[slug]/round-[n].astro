@@ -10,20 +10,27 @@ import Knockout from '../../../components/event/Knockout.astro';
 import '../../../styles/event.css';
 import { featured, finalPositions, loadEvent } from '../../../lib/event-page';
 import { roundStory } from '../../../lib/event';
-import { dateRange, resultText } from '../../../lib/event-view';
+import { canonicalSearch, dateRange, resultText, roundParam } from '../../../lib/event-view';
 import { isUploaded } from '../../../lib/uploads';
 import { eventCacheControl } from '../../../lib/event-view';
+import { KEY_PARAMS } from '../../../lib/cache-key';
 import { eventRedirect, gamePath, twicIssueUrl } from '../../../lib/games';
 
 export const prerender = false;
 
-const n = Number.parseInt(Astro.params.n ?? '', 10);
-const data = Number.isFinite(n) ? await loadEvent(Astro.params.slug ?? '') : null;
+const notFound = () => new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
+// One URL per round: 'round-3' only (not 03, 3x, 3.0), and no parameters (the page reads none), so
+// that no variant costs a full event query of its own.
+const n = roundParam(Astro.params.n);
+if (n === null) return notFound();
+const fix = canonicalSearch(Astro.url.searchParams, [], KEY_PARAMS);
+if (fix !== null) return new Response(null, { status: 301, headers: { Location: Astro.url.pathname, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
+const data = await loadEvent(Astro.params.slug ?? '');
 const round = data?.a.rounds.find((r) => r.n === n);
 if (!data || !round) {
-  const moved = !data && Number.isFinite(n) ? await eventRedirect(Astro.params.slug ?? '') : null;
+  const moved = !data ? await eventRedirect(Astro.params.slug ?? '') : null;
   if (moved) return new Response(null, { status: 301, headers: { Location: `/events/${moved}/round-${n}/`, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
-  return new Response('Round not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
+  return notFound();
 }
 const { event, a } = data;
 // Uploaded tournaments change while they run: cache them briefly. TWIC events that ended a few weeks
@@ -34,8 +41,12 @@ const idx = a.rounds.indexOf(round);
 const prev = a.rounds[idx - 1];
 const next = a.rounds[idx + 1];
 const ko = a.format === 'knockout' ? a.knockout?.find((k) => k.n === n) : undefined;
-const roundName = ko && a.format === 'knockout' ? ko.name : a.format === 'match' ? `Game ${n}` : `Round ${n}`;
+const teamKo = a.teams?.knockout?.find((k) => k.n === n);
+const roundName = ko && a.format === 'knockout' ? ko.name : teamKo ? teamKo.name : a.format === 'match' ? `Game ${n}` : `Round ${n}`;
 const individual = (a.format === 'round-robin' || a.format === 'swiss') && a.complete;
+// Team standings mean little in a knockout; with most matches missing they are only these matches' scores.
+const teamTable = a.teams && !a.teams.knockout;
+const labelOf = (r: number) => (a.knockout ?? a.teams?.knockout)?.find((k) => k.n === r)?.name ?? `Round ${r}`;
 
 // Standings before and after this round, and who moved.
 const after = individual ? a.standingsAfter(n) : [];
@@ -52,7 +63,7 @@ const tRank = new Map(tAfter.map((l) => [l.team, l.rank]));
 const story = roundStory(a, n);
 const boards = await finalPositions(featured(a, n));
 const matches = a.teams?.matches.filter((m) => m.round === n) ?? [];
-const title = `${event.name}, ${roundName.toLowerCase()}: results${individual || a.teams ? ' and standings' : ''}`;
+const title = `${event.name}, ${roundName.toLowerCase()}: results${individual || teamTable ? ' and standings' : ''}`;
 const winnerOf = (r: string, w: string, b: string) => (r === '1-0' ? w : r === '0-1' ? b : null);
 const abs = (p: string) => new URL(p, Astro.site ?? 'https://chessmoments.com').href;
 const jsonLd = [
@@ -94,6 +105,10 @@ const jsonLd = [
   </nav>
 
   {story.length > 0 && <div class="ev-story">{story.map((s) => <p>{s}</p>)}</div>}
+  {a.thinRounds.includes(n) && (
+    <p class="ev-note">Only {round.games.length} games of this round are in the database (a full round has about {Math.max(...a.rounds.map((r) => r.games.length))}): the scores count the games there are, so they may differ from the official standings.</p>
+  )}
+  {a.teams?.partial && <p class="ev-note">Only some of this event’s matches are in the database: the scores below count those matches, so they are not the official standings.</p>}
 
   {boards.length > 0 && (
     <section>
@@ -121,9 +136,13 @@ const jsonLd = [
     <section>
       <h2>Matches</h2>
       <div class="ev-matches">{matches.map((m) => <TeamMatch m={m} boards={a.teams!.boards} />)}</div>
-      <h2>Standings after {roundName.toLowerCase()}</h2>
-      <TeamStandings lines={tAfter} rankOf={tRank} moves={tMoves} base={base} limit={40} />
-      {tAfter.length > 40 && <p><a href={base}>Full standings</a></p>}
+      {teamTable && (
+        <>
+          <h2>{a.teams!.partial ? `Scores in these matches after ${roundName.toLowerCase()}` : `Standings after ${roundName.toLowerCase()}`}</h2>
+          <TeamStandings lines={tAfter} rankOf={tRank} moves={tMoves} base={base} limit={40} sb={!a.teams!.partial} />
+          {tAfter.length > 40 && <p><a href={base}>Full standings</a></p>}
+        </>
+      )}
     </section>
   )}
 
@@ -150,8 +169,12 @@ const jsonLd = [
   )}
 
   <nav class="ev-prevnext">
-    {prev ? <a href={`${base}round-${prev.n}/`} rel="prev">← {a.knockout?.find((k) => k.n === prev.n)?.name ?? `Round ${prev.n}`}</a> : <a href={base}>← {event.name}</a>}
-    {next ? <a href={`${base}round-${next.n}/`} rel="next">{a.knockout?.find((k) => k.n === next.n)?.name ?? `Round ${next.n}`} →</a> : <a href={base}>Final {a.format === 'round-robin' ? 'crosstable' : 'standings'} →</a>}
+    {prev ? <a href={`${base}round-${prev.n}/`} rel="prev">← {labelOf(prev.n)}</a> : <a href={base}>← {event.name}</a>}
+    {next ? (
+      <a href={`${base}round-${next.n}/`} rel="next">{labelOf(next.n)} →</a>
+    ) : (
+      <a href={base}>{a.ongoing ? 'Standings' : a.format === 'round-robin' ? 'Final crosstable' : a.format === 'knockout' || a.teams?.knockout ? 'Bracket' : 'Final standings'} →</a>
+    )}
   </nav>
 
   {isUploaded(event.id) && <p class="credit">Games uploaded by the tournament organiser.</p>}

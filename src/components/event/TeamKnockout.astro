@@ -1,0 +1,39 @@
+---
+// Team knockout round: each match's score in the main mini-matches, the tiebreak apart, and who went through.
+import type { TeamKoRound } from '../../lib/event';
+import { matchScore } from '../../lib/event-view';
+
+interface Props {
+  round: TeamKoRound;
+  /** Base URL of the event (for links to the round page's match cards). */
+  base: string;
+}
+const { round, base } = Astro.props;
+const how = (k: TeamKoRound['matches'][number]) =>
+  k.replay
+    ? 'tiebreak of the earlier match'
+    : k.how === 'tiebreak'
+      ? `tiebreak ${matchScore(k.tiebreak![0], k.tiebreak![1])}`
+      : k.how === 'later'
+        ? 'went through (tiebreak not in the database)'
+        : !k.winner && k.main[0] === k.main[1] && k.match.decided
+          ? `level${k.tiebreak ? ` (tiebreak ${matchScore(k.tiebreak[0], k.tiebreak[1])})` : ''}: tiebreak not in the database`
+          : !k.winner
+            ? 'boards missing from the database'
+            : '';
+---
+
+<div class="ev-scroll">
+  <table class="ev-table ev-ko">
+    <tbody>
+      {round.matches.map((k) => (
+        <tr>
+          <td class="name">{k.winner === k.match.home ? <strong>{k.match.home}</strong> : k.match.home}</td>
+          <td class="pts"><a href={`${base}round-${round.n}/#m-${encodeURIComponent(k.match.home)}`}>{matchScore(k.main[0], k.main[1])}</a></td>
+          <td class="name b">{k.winner === k.match.away ? <strong>{k.match.away}</strong> : k.match.away}</td>
+          <td class="games muted">{how(k)}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

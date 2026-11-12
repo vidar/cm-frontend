@@ -6,19 +6,26 @@ import Crosstable from '../../../components/event/Crosstable.astro';
 import Standings from '../../../components/event/Standings.astro';
 import TeamStandings from '../../../components/event/TeamStandings.astro';
 import TeamCrosstable from '../../../components/event/TeamCrosstable.astro';
+import TeamKnockout from '../../../components/event/TeamKnockout.astro';
 import Knockout from '../../../components/event/Knockout.astro';
 import RaceChart from '../../../components/event/RaceChart.astro';
 import Name from '../../../components/event/Name.astro';
 import '../../../styles/event.css';
 import { loadEvent } from '../../../lib/event-page';
-import { finalMatch, FORMAT_LABEL, pts, roundStory } from '../../../lib/event';
-import { dateRange, matchScore, resultText } from '../../../lib/event-view';
+import { finalMatch, finalTeamMatch, FORMAT_LABEL, list as joinList, pts, roundList, roundStory } from '../../../lib/event';
+import { canonicalSearch, dateRange, eventPageParams, matchScore, resultText } from '../../../lib/event-view';
 import { isUploaded } from '../../../lib/uploads';
 import { eventCacheControl } from '../../../lib/event-view';
+import { KEY_PARAMS } from '../../../lib/cache-key';
 import { eventGames, eventRedirect, gamePath, twicIssueUrl, EVENT_PAGE_SIZE } from '../../../lib/games';
 
 export const prerender = false;
 
+// One spelling of each parameter (every cache-keyed variant costs a full event query): fix it first.
+const params = eventPageParams(Astro.url.searchParams);
+const fix = canonicalSearch(Astro.url.searchParams, params.keep, KEY_PARAMS);
+const permanent = { 'Cache-Control': 'public, max-age=86400, s-maxage=604800' };
+if (fix !== null) return new Response(null, { status: 301, headers: { Location: `${Astro.url.pathname}${fix}`, ...permanent } });
 const data = await loadEvent(Astro.params.slug ?? '');
 if (!data) {
   const moved = await eventRedirect(Astro.params.slug ?? '');
@@ -32,7 +39,17 @@ Astro.response.headers.set('Cache-Control', isUploaded(event.id) ? 'public, max-
 const base = `/events/${event.slug}/`;
 const R = a.rounds.map((r) => r.n);
 const individual = a.format === 'round-robin' || a.format === 'swiss';
-const showAll = Astro.url.searchParams.has('all');
+const showAll = params.all;
+// Plain game list for events without usable rounds; `page` means nothing elsewhere (or past the end).
+const pages = Math.max(1, Math.ceil(event.games / EVENT_PAGE_SIZE));
+if (params.page > 1 && (a.format !== 'games' || params.page > pages))
+  return new Response(null, { status: 301, headers: { Location: `${base}${showAll ? '?all' : ''}`, ...permanent } });
+const page = params.page;
+const teamKo = a.teams?.knockout;
+const league = a.teams && !teamKo ? a.teams : undefined;
+// "Final" only when the standings are: uploads may still get rounds.
+const lastN = R.at(-1);
+const settled = !a.ongoing;
 
 // Final standings and the race (cumulative score after each round) for the leaders.
 const final = individual ? a.standingsAfter(Infinity) : [];
@@ -43,7 +60,7 @@ let race: { label: string; values: number[] }[] = [];
 if (individual && a.complete && R.length >= 3) {
   const after = R.map((n) => new Map(a.standingsAfter(n).map((l) => [l.player.id, l.points])));
   race = final.slice(0, 8).map((l) => ({ label: l.player.name, values: [0, ...after.map((m) => m.get(l.player.id) ?? 0)] }));
-} else if (a.teams && R.length >= 3) {
+} else if (league && !league.partial && R.length >= 3) {
   const after = R.map((n) => new Map(a.teams!.standingsAfter(n).map((l) => [l.team, l.mp])));
   race = teamFinal.slice(0, 8).map((l) => ({ label: l.team, values: [0, ...after.map((m) => m.get(l.team) ?? 0)] }));
 }
@@ -51,9 +68,29 @@ if (individual && a.complete && R.length >= 3) {
 // Podium.
 type Place = { who: string; href?: string; detail: string };
 let podium: Place[] = [];
-if (individual && a.complete) podium = final.slice(0, 3).map((l) => ({ who: l.player.name, href: `/players/${l.player.slug}/`, detail: `${pts(l.points)}/${l.games}${l.perf ? ` · perf ${l.perf}` : ''}` }));
-else if (a.teams) podium = teamFinal.slice(0, 3).map((l) => ({ who: l.team, href: `#team-${encodeURIComponent(l.team)}`, detail: `${l.mp} match points · ${pts(l.gp)} game points` }));
-else if (a.knockout?.length) {
+let places = a.format === 'knockout' || a.format === 'match' || teamKo ? ['Winner', 'Runner-up'] : [settled ? 'First' : 'Leading', 'Second', 'Third'];
+// No podium while rounds are only partly in the database: the top of those scores may not be the real winner.
+if (individual && a.complete && !a.thinRounds.length)
+  podium = final.slice(0, 3).map((l) => ({ who: l.player.name, href: `/players/${l.player.slug}/`, detail: `${pts(l.points)}/${l.games}${l.perf ? ` · perf ${l.perf}` : ''}` }));
+else if (teamKo) {
+  const f = finalTeamMatch(a);
+  if (f?.winner) {
+    const loser = f.winner === f.match.home ? f.match.away : f.match.home;
+    const sc = (s: [number, number]) => matchScore(Math.max(...s), Math.min(...s));
+    const how = f.how === 'score' ? sc(f.main) : f.how === 'tiebreak' ? `on tiebreak (${sc(f.main)}, tiebreak ${sc(f.tiebreak!)})` : '';
+    podium = [
+      { who: f.winner, href: `#team-${encodeURIComponent(f.winner)}`, detail: `won the final${how ? ` ${how}` : ''}` },
+      { who: loser, href: `#team-${encodeURIComponent(loser)}`, detail: 'finalist' },
+    ];
+  }
+} else if (league && !league.partial) {
+  // Teams level on every tiebreak share a place.
+  const top = teamFinal.filter((l) => l.rank <= 3).slice(0, 3);
+  const shared = (r: number) => teamFinal.filter((l) => l.rank === r).length > 1;
+  const place = (r: number) => (r === 1 && !settled ? (shared(r) ? 'Joint lead' : 'Leading') : `${shared(r) ? 'Joint ' : ''}${['First', 'Second', 'Third'][r - 1]}`);
+  places = top.map((l) => place(l.rank).replace(/^Joint (\w)/, (_, c: string) => `Joint ${c.toLowerCase()}`));
+  podium = top.map((l) => ({ who: l.team, href: `#team-${encodeURIComponent(l.team)}`, detail: `${l.mp} match points · ${pts(l.gp)} game points` }));
+} else if (a.knockout?.length) {
   // Only a real final (or the match itself) names a winner: a last round of several matches is not one.
   const f = finalMatch(a);
   if (f?.winner) {
@@ -65,7 +102,6 @@ else if (a.knockout?.length) {
     ];
   }
 }
-const places = a.format === 'knockout' || a.format === 'match' ? ['Winner', 'Runner-up'] : ['First', 'Second', 'Third'];
 
 // Rosters and best individual results in team events.
 const bestBoards = a.teams
@@ -76,17 +112,15 @@ const bestBoards = a.teams
       .slice(0, 10)
   : [];
 
-// Plain game list for events without usable rounds.
-const page = Math.max(1, Number.parseInt(Astro.url.searchParams.get('page') ?? '1', 10) || 1);
-const pages = Math.max(1, Math.ceil(event.games / EVENT_PAGE_SIZE));
-const list = a.format === 'games' ? await eventGames(event.id, Math.min(page, pages)) : [];
+const list = a.format === 'games' ? await eventGames(event.id, page) : [];
 
 const dates = dateRange(event.start_date, event.end_date);
 const { stats } = a;
 const pct = (x: number) => Math.round((x / Math.max(1, stats.games)) * 100);
 const count = a.teams ? `${teamFinal.length} teams` : `${a.players.size} players`;
-const formatLabel = a.format === 'round-robin' && a.cycles === 2 ? 'Double round robin' : FORMAT_LABEL[a.format];
-const what = a.format === 'round-robin' ? 'crosstable' : a.format === 'knockout' ? 'bracket' : a.format === 'games' ? 'games' : 'standings';
+const formatLabel = a.format === 'round-robin' && a.cycles === 2 ? 'Double round robin' : teamKo ? 'Team knockout' : FORMAT_LABEL[a.format];
+const what = a.format === 'round-robin' ? 'crosstable' : a.format === 'knockout' || teamKo ? 'bracket' : a.format === 'games' ? 'games' : 'standings';
+const standingsTitle = settled ? 'Final standings' : `Standings after round ${lastN}`;
 const abs = (p: string) => new URL(p, Astro.site ?? 'https://chessmoments.com').href;
 // Structured data: the event with its leading competitors (players, or teams in team events).
 const competitor = individual
@@ -155,6 +189,19 @@ const jsonLd = [
       The scores below count only those games, so they are not the official standings.
     </p>
   )}
+  {individual && a.complete && a.thinRounds.length > 0 && (
+    <p class="ev-note">
+      {roundList(a.thinRounds)} {a.thinRounds.length > 1 ? 'are' : 'is'} only partly in the database
+      ({joinList(a.thinRounds.map((n) => String(a.rounds.find((r) => r.n === n)!.games.length)))} games, against about {Math.max(...a.rounds.map((r) => r.games.length))} in a full round).
+      The scores below count the games there are, so they may differ from the official standings.
+    </p>
+  )}
+  {league?.partial && (
+    <p class="ev-note">
+      The database has {league.matches.length.toLocaleString('en')} matches from this event: most teams appear in only a few rounds.
+      The scores below count only those matches, so they are not the official standings.
+    </p>
+  )}
 
   {a.format === 'round-robin' && (
     <section>
@@ -164,7 +211,7 @@ const jsonLd = [
   )}
   {a.format === 'swiss' && a.complete && (
     <section>
-      <h2>Final standings</h2>
+      <h2>{a.thinRounds.length && settled ? 'Standings' : standingsTitle}</h2>
       <Standings lines={final} rounds={R} rankOf={rankOf} limit={showAll ? 10000 : 100} />
       {final.length > 100 && !showAll && <p><a href="?all">Show all {final.length} players</a></p>}
     </section>
@@ -175,12 +222,22 @@ const jsonLd = [
       <Standings lines={final} limit={30} scoreLabel="Score" />
     </section>
   )}
-  {a.teams && (
+  {teamKo && (
     <section>
-      <h2>Team standings</h2>
-      <TeamStandings lines={teamFinal} rounds={R} rankOf={teamRank} base={base} limit={showAll ? 10000 : 50} />
+      {[...teamKo].reverse().filter((k) => k.name !== 'Tiebreak').map((k) => (
+        <>
+          <h2><a href={`${base}round-${k.n}/`}>{k.name}</a></h2>
+          <TeamKnockout round={k} base={base} />
+        </>
+      ))}
+    </section>
+  )}
+  {league && (
+    <section>
+      <h2>{league.partial ? 'Scores in these matches' : settled ? 'Team standings' : `Team standings after round ${lastN}`}</h2>
+      <TeamStandings lines={teamFinal} rounds={R} rankOf={teamRank} base={base} limit={showAll ? 10000 : 50} sb={!league.partial} />
       {teamFinal.length > 50 && !showAll && <p><a href="?all">Show all {teamFinal.length} teams</a></p>}
-      {a.teams.roundRobin && (
+      {league.roundRobin && (
         <>
           <h2>Crosstable</h2>
           <TeamCrosstable lines={teamFinal} base={base} />
@@ -224,13 +281,13 @@ const jsonLd = [
     <section>
       <h2>Round by round</h2>
       <div class="ev-scroll">
-        <table class="ev-table">
+        <table class="ev-table ev-rounds">
           <tbody>
             {a.rounds.map((r) => (
               <tr>
-                <td><a href={`${base}round-${r.n}/`}><strong>{a.knockout?.find((k) => k.n === r.n)?.name ?? `Round ${r.n}`}</strong></a></td>
+                <td><a href={`${base}round-${r.n}/`}><strong>{(a.knockout ?? teamKo)?.find((k) => k.n === r.n)?.name ?? `Round ${r.n}`}</strong></a></td>
                 <td class="muted">{dateRange(r.first, r.last)}</td>
-                <td class="name">{roundStory(a, r.n).join(' ')}</td>
+                <td class="story">{roundStory(a, r.n).join(' ')}</td>
               </tr>
             ))}
           </tbody>
@@ -259,7 +316,7 @@ const jsonLd = [
       <h2>Teams</h2>
       {teamFinal.slice(0, showAll ? undefined : 50).map((t) => (
         <details id={`team-${encodeURIComponent(t.team)}`}>
-          <summary><strong>{t.rank}. {t.team}</strong> <span class="ev-muted">{t.mp} MP · {pts(t.gp)} GP</span></summary>
+          <summary>{teamKo ? <strong>{t.team}</strong> : <><strong>{t.rank}. {t.team}</strong> <span class="ev-muted">{t.mp} MP · {pts(t.gp)} GP</span></>}</summary>
           <div class="ev-scroll">
             <table class="ev-table">
               <thead><tr><th class="num">Bd</th><th>Player</th><th class="num">Rtg</th><th class="num">Score</th><th class="num">Perf</th></tr></thead>

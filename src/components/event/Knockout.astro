@@ -19,14 +19,14 @@ const scoreChip = (g: EventGame, a: number) => {
 ---
 
 <div class="ev-scroll">
-  <table class="ev-table">
+  <table class="ev-table ev-ko">
     <tbody>
       {round.matches.map((m) => (
         <tr>
           <td class="name">{m.winner === m.a.id ? <strong><Name p={m.a} /></strong> : <Name p={m.a} />} <span class="muted">{m.a.elo ?? ''}</span></td>
           <td class="pts">{pts(m.aPts)}–{pts(m.bPts)}</td>
-          <td class="name">{m.winner === m.b.id ? <strong><Name p={m.b} /></strong> : <Name p={m.b} />} <span class="muted">{m.b.elo ?? ''}</span></td>
-          <td>
+          <td class="name b">{m.winner === m.b.id ? <strong><Name p={m.b} /></strong> : <Name p={m.b} />} <span class="muted">{m.b.elo ?? ''}</span></td>
+          <td class="games">
             {m.games.map((g, i) => {
               const c = scoreChip(g, m.a.id);
               return (

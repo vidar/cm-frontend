@@ -1,5 +1,6 @@
 ---
-// Round-robin crosstable: every player against every other, one chip per game.
+// Round-robin crosstable: every player against every other, one chip per game (score first, so it
+// shows without scrolling on phones).
 import Name from './Name.astro';
 import { gamePath } from '../../lib/games';
 import { pts, type Line } from '../../lib/event';
@@ -17,8 +18,8 @@ const order = lines.map((l) => l.player.id);
     <thead>
       <tr>
         <th class="num">#</th><th class="ev-sticky">Player</th><th class="num">Rtg</th>
-        {order.map((_, i) => <th class="c">{i + 1}</th>)}
         <th class="num">Pts</th><th class="num" title="Sonneborn-Berger">SB</th><th class="num" title="Performance rating">Perf</th>
+        {order.map((_, i) => <th class="c">{i + 1}</th>)}
       </tr>
     </thead>
     <tbody>
@@ -27,6 +28,9 @@ const order = lines.map((l) => l.player.id);
           <td class="num muted">{l.rank}</td>
           <td class="name ev-sticky"><Name p={l.player} /></td>
           <td class="num muted">{l.player.elo ?? ''}</td>
+          <td class="pts">{pts(l.points)}</td>
+          <td class="num muted">{l.sb.toFixed(2).replace(/\.?0+$/, '')}</td>
+          <td class="num muted">{l.perf ?? ''}</td>
           {order.map((opp) =>
             opp === l.player.id ? (
               <td class="ev-diag"></td>
@@ -39,9 +43,6 @@ const order = lines.map((l) => l.player.id);
               </td>
             ),
           )}
-          <td class="pts">{pts(l.points)}</td>
-          <td class="num muted">{l.sb.toFixed(2).replace(/\.?0+$/, '')}</td>
-          <td class="num muted">{l.perf ?? ''}</td>
         </tr>
       ))}
     </tbody>
