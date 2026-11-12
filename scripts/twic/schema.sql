@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS events (
   games INTEGER NOT NULL,
   twic INTEGER,                  -- first TWIC issue with games from this event
   type TEXT,                     -- most common EventType tag ('swiss', 'tourn', 'team', 'k.o.', ...), often missing
-  rounds INTEGER                 -- highest round number seen
+  rounds INTEGER,                -- highest round number seen
+  kind TEXT                      -- 'engine' or 'online' (else NULL); this file only, not loaded into Postgres
 );
 CREATE TABLE IF NOT EXISTS games (
   id INTEGER PRIMARY KEY,

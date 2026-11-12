@@ -4,18 +4,30 @@
 - Parses every twic<N>g.zip in the cache directory (see download.py).
 - Validates each game's moves with python-chess and re-emits normalized SAN; invalid games and
   forfeits (no moves) are skipped.
-- Removes duplicates (same players, date and moves), keeping the earliest issue.
+- Removes duplicates, keeping the earliest issue (the TWIC credit) with the latest copy's headers (later
+  issues fix Round tags and names): same players, date and moves, or, from a later issue, same event,
+  round, result and moves with one player's name unchanged (a corrected spelling).
 - Merges players by FIDE ID (falling back to the name), choosing the fullest spelling for display.
 - Tags each game with the longest matching named opening line (src/data/openings/*.tsv).
+- Ratings above MAX_ELO (typos such as 204269, engines) are stored as NULL. Engine events (TCEC, CCC)
+  get no games.elo_avg, so rating-sorted lists skip them, and engine and online events are marked in
+  events.kind (this SQLite file only) for opening_games.py.
 
 - With --fide (FIDE's players_list.zip, https://ratings.fide.com/download/players_list.zip), players
   get their official full name, federation, title and birth year. A game only counts for a FIDE ID
-  if its name shares a name part with that player's name (TWIC occasionally attaches a wrong ID).
+  if its name shares a name part with that player's name (TWIC occasionally attaches a wrong ID), or,
+  for names without a part of 3+ letters ('So,W'), the surname and first initial.
+
+- With --previous (the build loaded in Postgres now), every game, player and event of that build keeps
+  its id and slug: games match by issue and moves, players by the games they played, events by the
+  games they hold. New rows get ids above the highest the previous build used, in the usual order, so a
+  weekly issue only appends (README: "Updating the live database"). Previous players no game matches
+  any more are kept unchanged (Postgres keeps them too). Without --previous ids are numbered from 1:
+  games by date, players by game count, events by start date.
 
 Usage:
   pip install chess
-  python3 scripts/twic/build.py --dir /path/to/cache --out /path/to/twic.sqlite --fide players_list.zip
-Then scripts/twic/export_sql.py turns the SQLite file into SQL for D1.
+  python3 scripts/twic/build.py --dir /path/to/cache --out /path/to/twic.sqlite --fide players_list.zip [--previous twic-live.sqlite]
 """
 import argparse
 import collections
@@ -39,6 +51,10 @@ MOVE_NUM = re.compile(r'^\d+\.+$')
 TAG = re.compile(r'^\[(\w+)\s+"(.*)"\]\s*$')
 RESULTS = {'1-0', '0-1', '1/2-1/2'}
 EVENT_GAP = 120  # days without games that split two same-named events
+MAX_ELO = 3000  # higher ratings are typos (204269) or engines: stored as NULL
+ENGINE_EVENT = re.compile(r'\b(TCEC|CCC)\b')  # Top Chess Engine Championship, Chess.com Computer Chess Championship
+ONLINE_SITE = re.compile(r'chess\.com|lichess|chess24|playchess|internet|online', re.I)  # TWIC's Site of online events
+RESENT_MIN_PLIES = 20  # re-sent copies with a corrected name are matched by event, round and moves from this length
 # Headers kept per game (everything else is dropped early to bound memory on ~3M games).
 KEEP = ('Event', 'Site', 'Date', 'Round', 'White', 'Black', 'Result', 'WhiteTitle', 'BlackTitle', 'WhiteElo', 'BlackElo',
         'ECO', 'WhiteFideId', 'BlackFideId', 'EventDate', 'WhiteTeam', 'BlackTeam', 'EventType')
@@ -148,6 +164,22 @@ def int_or_none(v):
         return None
 
 
+def rating(v):
+    """An Elo from a WhiteElo/BlackElo tag; None when missing or implausible (above MAX_ELO)."""
+    e = int_or_none(v)
+    return e if e and 0 < e <= MAX_ELO else None
+
+
+def event_kind(name, site, games, engine_games):
+    """'engine' for computer events (TCEC, CCC, or mostly games between two players rated above MAX_ELO), 'online'
+    for events on a chess server (TWIC's Site 'chess.com INT'), None for over-the-board events."""
+    if ENGINE_EVENT.search(name) or engine_games * 2 > games:
+        return 'engine'
+    if (site and ONLINE_SITE.search(site)) or re.search(r'\bonline\b', name, re.I):
+        return 'online'
+    return None
+
+
 def round_number(r):
     """Round number from TWIC's Round tag: '5' (round), '5.3' (round.board, or round.match in team
     events) or '5.3.2' (knockout: round.match.game). None when missing or implausible."""
@@ -176,7 +208,7 @@ def norm_date(d):
 
 
 def load_fide(path):
-    """FIDE players list (fixed-width TXT inside the zip) -> {id: (name, fed, title, born)}."""
+    """FIDE players list (fixed-width TXT inside the zip) -> {id: (name, fed, title, born, (surname, given names) slugified)}."""
     with zipfile.ZipFile(path) as z:
         text = z.read(z.namelist()[0]).decode('latin-1')
     lines = text.splitlines()
@@ -194,13 +226,27 @@ def load_fide(path):
         name = f'{first.strip()} {last.strip()}'.strip() if first.strip() else last.strip()
         title = line[c_tit:c_wtit].strip() or line[c_wtit:c_wtit + 5].strip() or None
         born = line[c_bday:c_flag].strip()
-        out[fid] = (name, line[c_fed:c_sex].strip() or None, title, int(born) if born.isdigit() and born != '0' else None)
+        out[fid] = (name, line[c_fed:c_sex].strip() or None, title, int(born) if born.isdigit() and born != '0' else None,
+                    (slugify(last), slugify(first)))
     return out
 
 
 def name_parts(name):
     """Name parts of 3+ letters, e.g. 'Carlsen,M' -> {'carlsen'}, 'Magnus Carlsen' -> {'magnus', 'carlsen'}."""
     return {t for t in slugify(name).split('-') if len(t) >= 3}
+
+
+def surname_given(name):
+    """'So,W' -> ('so', 'w'): TWIC's 'Surname,Given' spelling, slugified."""
+    last, _, first = name.partition(',')
+    return slugify(last), slugify(first)
+
+
+def short_name_match(name, ref):
+    """For names without a part of 3+ letters ('So,W', 'Li,Di'), which name_parts() can't compare: the same surname
+    and first initial as ref, the (surname, given names) of the FIDE ID's player."""
+    last, first = surname_given(name)
+    return bool(last and first and ref[0] and ref[1] and last == ref[0] and first[0] == ref[1][0])
 
 
 def display_name(variants: collections.Counter) -> str:
@@ -228,34 +274,163 @@ def unique_slug(base, taken):
     return slug
 
 
+class Dedupe:
+    """Drops copies of games TWIC sent twice. A copy has the same players, date and moves, or comes from a later issue
+    with the same event, round, result and moves (RESENT_MIN_PLIES or more) and one player's name unchanged (the
+    other corrected). The first issue stays (the credit); a later issue's copy brings its headers, which fix Round
+    tags and names."""
+
+    def __init__(self):
+        self.games = []  # (issue, headers, sans)
+        self.seen, self.resent = {}, {}  # key -> index in games
+        self.copies = self.resends = 0
+
+    def add(self, issue, h, sans):
+        key = hashlib.sha1('|'.join([h.get('White', '').lower(), h.get('Black', '').lower(), h.get('Date', ''), sans]).encode()).digest()[:12]
+        rnd = round_number(h.get('Round'))
+        rkey = hashlib.sha1('|'.join([h.get('Event', '').strip(), str(rnd), h.get('Result', ''), sans]).encode()).digest()[:12] if (
+            rnd and sans.count(' ') + 1 >= RESENT_MIN_PLIES) else None
+        i = self.seen.get(key)
+        if i is not None:
+            self.copies += 1
+        elif rkey is not None and (i := self.resent.get(rkey)) is not None and self.games[i][0] != issue and any(
+                self.games[i][1].get(s, '').strip().lower() == h.get(s, '').strip().lower() for s in ('White', 'Black')):
+            self.resends += 1
+        else:
+            self.seen[key] = len(self.games)
+            if rkey is not None:
+                self.resent.setdefault(rkey, len(self.games))
+            self.games.append((issue, h, sans))
+            return
+        first = self.games[i][0]
+        if first != issue:
+            self.games[i] = (first, h, sans)
+            self.seen.setdefault(key, i)
+            if rkey is not None:
+                self.resent.setdefault(rkey, i)
+
+
+PLAYER_COLS = 'id, fide_id, name, slug, search, title, fed, born, max_elo, games, last_date'
+
+
+def game_key(issue, sans):
+    """What identifies a game across builds (--previous): its TWIC issue (the first that had it) and its moves."""
+    return hashlib.sha1(f'{issue}|{sans}'.encode()).digest()[:12]
+
+
+def load_previous(path):
+    """From the build loaded now (--previous): its games (id, game_key, white_id, black_id, date, result, event_id),
+    player rows by id, event slugs by id, the redirected event slugs and the highest id each table ever used."""
+    db = sqlite3.connect(path)
+    have = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    games = [(gid, game_key(twic, moves), w, b, date, result, eid) for gid, twic, moves, w, b, date, result, eid in
+             db.execute('SELECT id, twic, moves, white_id, black_id, date, result, event_id FROM games')]
+    players = {r[0]: r for r in db.execute(f'SELECT {PLAYER_COLS} FROM players')}
+    events = dict(db.execute('SELECT id, slug FROM events'))
+    redirects = {s for s, in db.execute('SELECT slug FROM event_redirects')} if 'event_redirects' in have else set()
+    floor = {t: db.execute(f'SELECT COALESCE(MAX(id), 0) FROM {t}').fetchone()[0] for t in ('games', 'players', 'events')}
+    if 'id_floor' in have:
+        for t, m in db.execute('SELECT tbl, max_id FROM id_floor'):
+            floor[t] = max(floor.get(t, 0), m)
+    db.close()
+    return {'games': games, 'players': players, 'events': events, 'redirects': redirects, 'floor': floor}
+
+
+def match_previous(prev_games, new_games, keys, prev_fide):
+    """Pairs this build's games and players with the previous build's.
+    prev_games: (id, game_key, white_id, black_id, date, result, ...) rows; new_games: indexable
+    (game_key, white key, black key, date, result) per game; keys: every player key; prev_fide: {fide_id: player id}.
+    Players take the previous id their games voted for most (from games whose issue and moves occur once in both
+    builds), else that of their FIDE ID. Games with the same issue and moves pair up by players and date/result.
+    Returns ({new game index: previous row}, {player key: previous id})."""
+    by_key = collections.defaultdict(list)
+    for row in prev_games:
+        by_key[row[1]].append(row)
+    new_by = collections.defaultdict(list)
+    for i in range(len(new_games)):
+        new_by[new_games[i][0]].append(i)
+    votes = collections.Counter()
+    for k, idxs in new_by.items():
+        olds = by_key.get(k)
+        if olds and len(olds) == 1 and len(idxs) == 1:
+            n, o = new_games[idxs[0]], olds[0]
+            votes[(n[1], o[2])] += 1
+            votes[(n[2], o[3])] += 1
+    player, used = {}, set()
+    for (key, pid), _ in sorted(votes.items(), key=lambda v: (-v[1], v[0][1], v[0][0])):
+        if key not in player and pid not in used:
+            player[key] = pid
+            used.add(pid)
+    for key in sorted(keys):
+        if key not in player and key.startswith('f') and (pid := prev_fide.get(int(key[1:]))) is not None and pid not in used:
+            player[key] = pid
+            used.add(pid)
+
+    passes = (
+        lambda n, o: player.get(n[1]) == o[2] and player.get(n[2]) == o[3] and n[3] == o[4] and n[4] == o[5],
+        lambda n, o: player.get(n[1]) == o[2] and player.get(n[2]) == o[3],
+        lambda n, o: n[3] == o[4] and n[4] == o[5],
+        lambda n, o: True,
+    )
+    game = {}
+    for k, idxs in new_by.items():
+        olds = sorted(by_key.get(k, ()))
+        if not olds:
+            continue
+        rest = [(i, new_games[i]) for i in idxs]
+        for same in passes:
+            for i, n in list(rest):
+                o = next((o for o in olds if same(n, o)), None)
+                if o is not None:
+                    game[i] = o
+                    olds.remove(o)
+                    rest.remove((i, n))
+            if not olds or not rest:
+                break
+    return game, player
+
+
+def match_events(new_events, overlap, prev_slugs):
+    """Pairs this build's events with the previous build's: each takes the previous event holding most of its games
+    (one whose slug is its natural slug first), biggest events first. new_events: (key, natural slug, games);
+    overlap: {key: Counter(previous event id -> games)}. Returns {key: previous event id}."""
+    out, taken = {}, set()
+    for key, base, _ in sorted(new_events, key=lambda e: (-e[2], e[0][0], str(e[0][1]))):
+        cands = [o for o, _ in sorted(overlap.get(key, {}).items(), key=lambda c: (-c[1], c[0])) if o not in taken]
+        natural = re.compile(re.escape(base) + r'(-\d+)?')
+        pick = next((o for o in cands if natural.fullmatch(prev_slugs[o])), cands[0] if cands else None)
+        if pick is not None:
+            out[key] = pick
+            taken.add(pick)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dir', required=True)
     ap.add_argument('--out', required=True)
     ap.add_argument('--limit', type=int, help='only the first N issues (testing)')
     ap.add_argument('--fide', help="FIDE players_list.zip for official names, federations and titles")
+    ap.add_argument('--previous', help='the SQLite build loaded in Postgres now: keep its ids and slugs, number new rows after them')
     args = ap.parse_args()
+    if args.previous and Path(args.previous).resolve() == Path(args.out).resolve():
+        sys.exit('--previous and --out must be different files')
 
     files = sorted(Path(args.dir).glob('twic*g.zip'), key=lambda p: int(re.search(r'twic(\d+)g', p.name).group(1)))
     if args.limit:
         files = files[: args.limit]
     t0 = time.time()
 
-    seen = set()
-    games = []  # (issue, headers, sans)
-    bad = dupes = 0
+    dedupe = Dedupe()
+    bad = 0
     with mp.Pool() as pool:
         for i, (n, parsed, nbad) in enumerate(pool.imap(parse_issue, map(str, files), chunksize=2)):
             bad += nbad
             for issue, h, sans in parsed:
-                key = hashlib.sha1('|'.join([h.get('White', '').lower(), h.get('Black', '').lower(), h.get('Date', ''), sans]).encode()).digest()[:12]
-                if key in seen:
-                    dupes += 1
-                    continue
-                seen.add(key)
-                games.append((issue, h, sans))
+                dedupe.add(issue, h, sans)
             if (i + 1) % 50 == 0:
-                print(f'{i + 1}/{len(files)} issues, {len(games):,} games, {time.time() - t0:.0f}s', file=sys.stderr, flush=True)
+                print(f'{i + 1}/{len(files)} issues, {len(dedupe.games):,} games, {time.time() - t0:.0f}s', file=sys.stderr, flush=True)
+    games = dedupe.games
 
     fide = load_fide(args.fide) if args.fide else {}
     print(f'{len(fide):,} FIDE players loaded', file=sys.stderr)
@@ -268,21 +443,29 @@ def main():
             fid = int_or_none(h.get(side + 'FideId'))
             if fid:
                 id_names[fid][h.get(side, '').strip()] += 1
-    id_parts = {fid: name_parts(fide[fid][0] if fid in fide else c.most_common(1)[0][0]) for fid, c in id_names.items()}
+    id_parts, id_ref = {}, {}
+    for fid, c in id_names.items():
+        ref = fide[fid][0] if fid in fide else c.most_common(1)[0][0]
+        id_parts[fid] = name_parts(ref)
+        id_ref[fid] = fide[fid][4] if fid in fide else surname_given(ref)
 
     def pkey(h, side):
         fid = int_or_none(h.get(side + 'FideId'))
         name = h.get(side, '').strip()
-        if fid and (name_parts(name) & id_parts[fid]):
-            return f'f{fid}'
+        if fid:
+            parts = name_parts(name)
+            if (parts & id_parts[fid]) if parts else short_name_match(name, id_ref[fid]):
+                return f'f{fid}'
         return f'n{name.lower()}'
     names = collections.defaultdict(collections.Counter)
     pinfo = {}
+    dropped = 0  # ratings above MAX_ELO
     for issue, h, _ in games:
         for side in ('White', 'Black'):
             k = pkey(h, side)
             names[k][h.get(side, '?').strip()] += 1
-            elo = int_or_none(h.get(side + 'Elo'))
+            elo = rating(h.get(side + 'Elo'))
+            dropped += elo is None and (int_or_none(h.get(side + 'Elo')) or 0) > MAX_ELO
             date = norm_date(h.get('Date'))
             p = pinfo.setdefault(k, {'max_elo': None, 'last': None, 'title': None, 'games': 0})
             p['games'] += 1
@@ -293,25 +476,49 @@ def main():
                 if h.get(side + 'Title'):
                     p['title'] = h[side + 'Title']
 
+    # --previous: the loaded build's ids for the games and players this one shares with it.
+    old = load_previous(args.previous) if args.previous else None
+    floor = dict(old['floor']) if old else {'games': 0, 'players': 0, 'events': 0}
+    game_match, player_match = {}, {}
+    if old:
+        class NewGames:  # (game_key, white key, black key, date, result), computed when read
+            __len__ = lambda self: len(games)
+            __getitem__ = lambda self, i: (game_key(games[i][0], games[i][2]), pkey(games[i][1], 'White'), pkey(games[i][1], 'Black'),
+                                           norm_date(games[i][1].get('Date')), games[i][1]['Result'])
+        prev_fide = {r[1]: pid for pid, r in old['players'].items() if r[1] is not None}
+        game_match, player_match = match_previous(old['games'], NewGames(), pinfo.keys(), prev_fide)
+
     db_path = Path(args.out)
     db_path.unlink(missing_ok=True)
     db = sqlite3.connect(db_path)
     db.executescript(SCHEMA)
 
-    taken = set()
+    taken = set(r[3] for r in old['players'].values()) if old else set()
     player_id = {}
-    for i, k in enumerate(sorted(pinfo, key=lambda k: -pinfo[k]['games']), start=1):
+    next_id = floor['players']
+    for k in sorted(pinfo, key=lambda k: -pinfo[k]['games']):
         p = pinfo[k]
         fid = int(k[1:]) if k.startswith('f') else None
         official = fide.get(fid) if fid else None
         name = official[0] if official else display_name(names[k])
         title = (official[2] if official else None) or p['title']
+        if k in player_match:
+            i = player_match[k]
+            slug = old['players'][i][3]
+        else:
+            i = next_id = next_id + 1
+            slug = unique_slug(slugify(name), taken)
         player_id[k] = i
         db.execute(
-            'INSERT INTO players (id, fide_id, name, slug, search, title, fed, born, max_elo, games, last_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-            (i, fid, name, unique_slug(slugify(name), taken), slugify(name).replace('-', ' '), title,
+            f'INSERT INTO players ({PLAYER_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (i, fid, name, slug, slugify(name).replace('-', ' '), title,
              official[1] if official else None, official[3] if official else None, p['max_elo'], p['games'], p['last']),
         )
+    matched = set(player_match.values())
+    kept_players = [r for pid, r in old['players'].items() if pid not in matched] if old else []
+    # Previous players no game names any more (their games moved to another spelling or FIDE ID): kept as they were,
+    # like in Postgres, so their ids and slugs are never given to anyone else.
+    db.executemany(f'INSERT INTO players ({PLAYER_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)', kept_players)
 
     # Events: same name, games no more than EVENT_GAP days apart. (Not keyed by site or EventDate:
     # leagues move venue every weekend, and their EventDate changes with it.) Undated games join the
@@ -340,7 +547,8 @@ def main():
                 gkey[i] = (name, by_issue[issue].most_common(1)[0][0] if by_issue[issue] else f'i{issue}')
     einfo = {}
     for (issue, h, _), k in zip(games, gkey):
-        e = einfo.setdefault(k, {'start': None, 'end': None, 'games': 0, 'twic': issue, 'types': collections.Counter(), 'rounds': 0, 'sites': collections.Counter()})
+        e = einfo.setdefault(k, {'start': None, 'end': None, 'games': 0, 'twic': issue, 'types': collections.Counter(), 'rounds': 0,
+                                 'sites': collections.Counter(), 'engine': 0})
         d = norm_date(h.get('Date'))
         e['games'] += 1
         e['twic'] = min(e['twic'], issue)
@@ -354,29 +562,53 @@ def main():
         if d:
             e['start'] = min(e['start'] or d, d)
             e['end'] = max(e['end'] or d, d)
-    taken = set()
-    event_id = {}
-    for i, k in enumerate(sorted(einfo, key=lambda k: (einfo[k]['start'] or '', k[0])), start=1):
-        e = einfo[k]
-        year = (e['start'] or '')[:4]
+        if min(int_or_none(h.get('WhiteElo')) or 0, int_or_none(h.get('BlackElo')) or 0) > MAX_ELO:
+            e['engine'] += 1
+
+    def natural_slug(k):
+        year = (einfo[k]['start'] or '')[:4]
         base = slugify(k[0])
-        if year and year not in base:
-            base = f'{base}-{year}'
+        return f'{base}-{year}' if year and year not in base else base
+    event_match = {}
+    if old:
+        overlap = collections.defaultdict(collections.Counter)
+        for i, row in game_match.items():
+            overlap[gkey[i]][row[6]] += 1
+        event_match = match_events([(k, natural_slug(k), e['games']) for k, e in einfo.items()], overlap, old['events'])
+    taken = set(old['events'].values()) | old['redirects'] if old else set()
+    event_id, kind = {}, {}
+    next_id = floor['events']
+    for k in sorted(einfo, key=lambda k: (einfo[k]['start'] or '', k[0])):
+        e = einfo[k]
+        site = e['sites'].most_common(1)[0][0] if e['sites'] else None
+        if k in event_match:
+            i = event_match[k]
+            slug = old['events'][i]
+        else:
+            i = next_id = next_id + 1
+            slug = unique_slug(natural_slug(k), taken)
         event_id[k] = i
+        kind[k] = event_kind(k[0], site, e['games'], e['engine'])
         db.execute(
-            'INSERT INTO events (id, name, site, slug, start_date, end_date, games, twic, type, rounds) VALUES (?,?,?,?,?,?,?,?,?,?)',
-            (i, k[0], e['sites'].most_common(1)[0][0] if e['sites'] else None, unique_slug(base, taken), e['start'], e['end'], e['games'], e['twic'],
-             e['types'].most_common(1)[0][0] if e['types'] else None, e['rounds'] or None),
+            'INSERT INTO events (id, name, site, slug, start_date, end_date, games, twic, type, rounds, kind) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (i, k[0], site, slug, e['start'], e['end'], e['games'], e['twic'],
+             e['types'].most_common(1)[0][0] if e['types'] else None, e['rounds'] or None, kind[k]),
         )
 
     rows = []
     order = sorted(range(len(games)), key=lambda i: (norm_date(games[i][1].get('Date')) or '', games[i][0]))
-    for gid, gi in enumerate(order, start=1):
+    next_id = floor['games']
+    for gi in order:
         issue, h, sans = games[gi]
-        we, be = int_or_none(h.get('WhiteElo')), int_or_none(h.get('BlackElo'))
+        if gi in game_match:
+            gid = game_match[gi][0]
+        else:
+            gid = next_id = next_id + 1
+        we, be = rating(h.get('WhiteElo')), rating(h.get('BlackElo'))
         rows.append((
             gid, event_id[gkey[gi]], player_id[pkey(h, 'White')], player_id[pkey(h, 'Black')], we, be,
-            h.get('WhiteTitle') or None, h.get('BlackTitle') or None, (we + be) // 2 if we and be else None,
+            h.get('WhiteTitle') or None, h.get('BlackTitle') or None,
+            (we + be) // 2 if we and be and kind[gkey[gi]] != 'engine' else None,  # engines stay out of rating sorts
             h['Result'], norm_date(h.get('Date')), h.get('Round') if h.get('Round') not in (None, '?', '-') else None,
             h.get('ECO') or None, opening_for(sans.split(' ')), sans.count(' ') + 1, issue, sans,
             team_name(h.get('WhiteTeam')), team_name(h.get('BlackTeam')),
@@ -389,19 +621,38 @@ def main():
         rows,
     )
     issues = [int(re.search(r'twic(\d+)g', f.name).group(1)) for f in files]
+    nplayers = len(player_id) + len(kept_players)
     db.executemany('INSERT INTO meta (key, value) VALUES (?, ?)', [
-        ('games', str(len(rows))), ('players', str(len(player_id))), ('events', str(len(event_id))),
+        ('games', str(len(rows))), ('players', str(nplayers)), ('events', str(len(event_id))),
         ('first_issue', str(min(issues))), ('last_issue', str(max(issues))), ('built_at', time.strftime('%Y-%m-%d')),
     ])
+    if old:
+        # The highest ids ever used, so that ids of rows a later build drops are never given again.
+        db.execute('CREATE TABLE id_floor (tbl TEXT PRIMARY KEY, max_id INTEGER NOT NULL)')
+        used = {'games': max((r[0] for r in rows), default=0), 'players': max(player_id.values(), default=0), 'events': max(event_id.values(), default=0)}
+        db.executemany('INSERT INTO id_floor VALUES (?, ?)', [(t, max(floor[t], used[t])) for t in ('games', 'players', 'events')])
     db.commit()
     db.execute('ANALYZE')
     db.commit()
     db.close()
+    engine = sum(1 for k in kind if kind[k] == 'engine')
+    online = sum(1 for k in kind if kind[k] == 'online')
     print(
-        f'done: {len(files)} issues, {len(rows):,} games, {len(player_id):,} players, {len(event_id):,} events, '
-        f'{dupes:,} duplicates and {bad:,} invalid games skipped, {db_path.stat().st_size / 1e9:.2f} GB, {time.time() - t0:.0f}s',
+        f'done: {len(files)} issues, {len(rows):,} games, {nplayers:,} players, {len(event_id):,} events '
+        f'({engine:,} engine, {online:,} online), {dedupe.copies:,} duplicates, {dedupe.resends:,} re-sent copies with a corrected name '
+        f'and {bad:,} invalid games skipped, {dropped:,} ratings above {MAX_ELO} dropped, '
+        f'{db_path.stat().st_size / 1e9:.2f} GB, {time.time() - t0:.0f}s',
         file=sys.stderr,
     )
+    if old:
+        gone = len(old['games']) - len(game_match)
+        print(f'--previous: kept the ids of {len(game_match):,} games, {len(player_match):,} players and {len(event_match):,} events; '
+              f'new: {len(rows) - len(game_match):,} games, {len(player_id) - len(player_match):,} players, '
+              f'{len(event_id) - len(event_match):,} events; {len(kept_players):,} previous players kept without games, '
+              f'{len(old["events"]) - len(event_match):,} previous events folded into others (remap_events.py redirects them)', file=sys.stderr)
+        if gone:
+            print(f'WARNING: {gone:,} games of the previous build are not in this one (changed input or dedup): '
+                  'remap_events.py will refuse it, so load it with import_pg.py --reset', file=sys.stderr)
 
 
 if __name__ == '__main__':

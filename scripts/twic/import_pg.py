@@ -12,7 +12,9 @@ talks to Neon over its HTTPS SQL endpoint (no psql needed), for as long as the N
 Use the owner role either way.
 
 Resumable: each table is copied in id order and a rerun continues after the highest id already
-in Postgres. --reset drops the tables first (do this for a full rebuild). Afterwards it creates
+in Postgres. Before that it compares a sample of the rows Postgres holds with the build's rows at the
+same ids and stops if they differ (another build: use --patch or --reset). meta (the site's totals)
+is copied last. --reset drops the tables first (do this for a full rebuild). Afterwards it creates
 the indexes (indexes.pg.sql), ANALYZEs and applies the grants: on a server set up by ops/postgres
 (role cm_web exists) scripts/db/grants.sql, the site role's rights; on Neon (role readonly) the read grant
 to it; on a database with neither (local development) none. --grants FILE or '' overrides.
@@ -22,9 +24,12 @@ Uploaded tournaments (/upload/, ids from 100000000) are left alone, except by --
 them from games/players/events: republish them afterwards from /upload/admin/. An uploaded event or
 player whose slug TWIC now uses (the same tournament, or a namesake) is renamed to <slug>-u<n> first.
 
---patch updates a loaded database in place from a build processed by remap_events.py (same game
-ids): it uploads `changed_games` and the events table into staging tables, then swaps them in with
-one transaction, so the site never sees a half-updated database.
+--patch updates a loaded database in place from a build made with build.py --previous and processed by
+remap_events.py (the weekly update): it checks that Postgres holds the same games and players at the
+shared ids, uploads `changed_games`, the events and the players into staging tables, swaps them in with
+one transaction (changed games rewritten, events replaced, players updated and new ones added), then
+appends the new games and copies meta last. Games remap_events.py --drop-missing listed in `gone_games` are
+deleted in that transaction. A rerun after a failure starts the patch again.
 """
 import argparse
 import csv
@@ -43,21 +48,23 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
-# table -> (key column, [(column, postgres array type)])
+GAME_COLS = [('id', 'int'), ('event_id', 'int'), ('white_id', 'int'), ('black_id', 'int'), ('white_elo', 'int'),
+             ('black_elo', 'int'), ('white_title', 'text'), ('black_title', 'text'), ('elo_avg', 'int'),
+             ('result', 'text'), ('date', 'text'), ('round', 'text'), ('eco', 'text'), ('opening', 'text'),
+             ('plies', 'int'), ('twic', 'int'), ('moves', 'text'), ('white_team', 'text'), ('black_team', 'text')]
+# table -> (key column, [(column, postgres array type)]), in copy order: meta (the site's totals) last.
 TABLES = {
     'openings': ('slug', [('slug', 'text'), ('name', 'text'), ('eco', 'text')]),
-    'meta': ('key', [('key', 'text'), ('value', 'text')]),
     'events': ('id', [('id', 'int'), ('name', 'text'), ('site', 'text'), ('slug', 'text'), ('start_date', 'text'),
                       ('end_date', 'text'), ('games', 'int'), ('twic', 'int'), ('type', 'text'), ('rounds', 'int')]),
     'players': ('id', [('id', 'int'), ('fide_id', 'int'), ('name', 'text'), ('slug', 'text'), ('search', 'text'),
                        ('title', 'text'), ('fed', 'text'), ('born', 'int'), ('max_elo', 'int'), ('games', 'int'),
                        ('last_date', 'text')]),
     'event_redirects': ('slug', [('slug', 'text'), ('event_id', 'int')]),
-    'changed_games': ('id', [('id', 'int'), ('event_id', 'int'), ('white_team', 'text'), ('black_team', 'text')]),
-    'games': ('id', [('id', 'int'), ('event_id', 'int'), ('white_id', 'int'), ('black_id', 'int'), ('white_elo', 'int'),
-                     ('black_elo', 'int'), ('white_title', 'text'), ('black_title', 'text'), ('elo_avg', 'int'),
-                     ('result', 'text'), ('date', 'text'), ('round', 'text'), ('eco', 'text'), ('opening', 'text'),
-                     ('plies', 'int'), ('twic', 'int'), ('moves', 'text'), ('white_team', 'text'), ('black_team', 'text')]),
+    'changed_games': ('id', GAME_COLS),
+    'gone_games': ('id', [('id', 'int')]),
+    'games': ('id', GAME_COLS),
+    'meta': ('key', [('key', 'text'), ('value', 'text')]),
 }
 
 
@@ -224,25 +231,79 @@ def free_slugs(db: Database, table: str, slugs):
          [pg_array(slugs)])
 
 
+def has_table(src: sqlite3.Connection, table: str) -> bool:
+    return src.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() is not None
+
+
+IDENTITY = {'games': ('twic', 'moves'), 'players': ('slug',), 'events': ('slug',)}
+
+
+def check_overlap(db: Database, src: sqlite3.Connection, tables, full: bool, sample: int = 100, gone=()) -> list[str]:
+    """What differs between Postgres and the build at the ids both hold (TWIC ids, below UPLOAD_ID_BASE): Postgres must
+    hold as many rows up to its highest id as the build does (plus those of the `gone` games it still has), and a sample
+    of them (spread out, plus the last ones) must be the same game (issue and moves), player or event (slug), or with
+    full the same rows. Empty when they agree."""
+    out = []
+    for table in tables:
+        if not has_table(src, table):
+            continue
+        top = int(db(f'SELECT COALESCE(MAX(id), 0) AS m FROM {table} WHERE id < {UPLOAD_ID_BASE}')['rows'][0]['m'])
+        if not top:
+            continue
+        cols = [c for c, _ in TABLES[table][1]] if full else ['id', *IDENTITY[table]]
+        ids = [r[0] for r in src.execute(f'SELECT id FROM {table} WHERE id <= ? ORDER BY id', (top,))]
+        held = int(db(f'SELECT COUNT(*) AS n FROM {table} WHERE id <= {top}')['rows'][0]['n'])
+        if table == 'games' and gone:
+            held -= int(db('SELECT COUNT(*) AS n FROM games WHERE id = ANY($1::int[])', [pg_array(gone)])['rows'][0]['n'])
+        pick = sorted(set(ids[::max(1, len(ids) // sample)] + ids[-sample:]))
+        text = lambda v: '' if v is None else str(v)  # psql's CSV and Neon's raw text output
+        mine = {r[0]: [text(v) for v in r] for r in src.execute(
+            f'SELECT {", ".join(cols)} FROM {table} WHERE id IN ({",".join("?" * len(pick))})', pick)} if pick else {}
+        theirs = {int(r['id']): [text(r[c]) for c in cols] for r in db(
+            f'SELECT {", ".join(cols)} FROM {table} WHERE id = ANY($1::int[])', [pg_array(pick)])['rows']} if pick else {}
+        differ = sum(1 for i in pick if mine.get(i) != theirs.get(i))
+        if differ or held != len(ids):
+            out.append(f'{table}: {differ} of {len(pick)} sampled rows differ, {held:,} rows up to id {top:,} in Postgres '
+                       f'and {len(ids):,} in the build')
+    return out
+
+
 def patch(db: Database, src: sqlite3.Connection, batch: int):
-    db('CREATE TABLE IF NOT EXISTS patch_games (id INTEGER PRIMARY KEY, event_id INTEGER, white_team TEXT, black_team TEXT)')
-    db('CREATE TABLE IF NOT EXISTS patch_events (LIKE events INCLUDING ALL)')
+    if not has_table(src, 'changed_games'):
+        sys.exit('this build has no changed_games: run remap_events.py on it first')
+    gone = [r[0] for r in src.execute('SELECT id FROM gone_games')] if has_table(src, 'gone_games') else []
+    if bad := check_overlap(db, src, ('players', 'games'), full=False, gone=gone):
+        sys.exit('Postgres holds other games or players at these ids (' + '; '.join(bad) + '): --patch needs a build made '
+                 'with build.py --previous <the build loaded now>, then remap_events.py; otherwise do a full import (--reset)')
+    # Staging tables, new every run (a failed run's leftovers must not be applied).
+    db('DROP TABLE IF EXISTS patch_games, patch_events, patch_players, patch_gone')
+    for table in ('games', 'events', 'players'):
+        db(f'CREATE TABLE patch_{table} (LIKE {table} INCLUDING ALL)')
+    db('CREATE TABLE patch_gone (id INTEGER PRIMARY KEY)')
+    if gone:
+        copy_table(db, src, 'gone_games', batch, 'patch_gone')
     copy_table(db, src, 'changed_games', batch, 'patch_games')
-    db('TRUNCATE patch_events')
     copy_table(db, src, 'events', batch, 'patch_events')
+    copy_table(db, src, 'players', batch, 'patch_players')
     print('swapping in…')
     t0 = time.time()
+    assign = lambda table: ', '.join(f'{c} = p.{c}' for c, _ in TABLES[table][1] if c != 'id')
     db.transaction([
-        'UPDATE games g SET event_id = p.event_id, white_team = p.white_team, black_team = p.black_team FROM patch_games p WHERE g.id = p.id',
+        f'DELETE FROM games WHERE id IN (SELECT id FROM patch_gone) AND id < {UPLOAD_ID_BASE}',  # remap_events.py --drop-missing
+        f'UPDATE games g SET {assign("games")} FROM patch_games p WHERE g.id = p.id',
         f'DELETE FROM events WHERE id < {UPLOAD_ID_BASE}',  # keep uploaded tournaments
-        # ...but move an uploaded event off a slug the new TWIC events use
+        # ...but move an uploaded event or player off a slug the new TWIC rows use
         f"UPDATE events SET slug = slug || '-u' || (id - {UPLOAD_ID_BASE} + 1) WHERE id >= {UPLOAD_ID_BASE} AND slug IN (SELECT slug FROM patch_events)",
         'INSERT INTO events SELECT * FROM patch_events',
-        'DROP TABLE patch_games, patch_events',
+        f"UPDATE players SET slug = slug || '-u' || (id - {UPLOAD_ID_BASE} + 1) WHERE id >= {UPLOAD_ID_BASE} AND slug IN (SELECT slug FROM patch_players)",
+        f'UPDATE players SET {assign("players")} FROM patch_players p WHERE players.id = p.id',
+        'INSERT INTO players SELECT * FROM patch_players p WHERE NOT EXISTS (SELECT 1 FROM players q WHERE q.id = p.id)',
+        'DROP TABLE patch_games, patch_events, patch_players, patch_gone',
     ])
     print(f'swapped in {time.time() - t0:.0f}s')
-    for table in ('openings', 'meta', 'event_redirects'):
-        copy_table(db, src, table, batch)
+    for table in ('openings', 'event_redirects', 'games', 'meta'):  # new games after the highest id; meta last
+        if has_table(src, table):
+            copy_table(db, src, table, batch)
 
 
 UPLOAD_ID_BASE = 100_000_000  # src/lib/uploads.ts
@@ -282,13 +343,17 @@ def main():
         else:
             print('no role cm_web or readonly here: skipping the grants (a local database)')
     if a.reset:
-        db('DROP TABLE IF EXISTS games, players, events, openings, meta')
+        db('DROP TABLE IF EXISTS games, players, events, openings, meta, event_redirects')
     db.script(HERE / 'schema.pg.sql')
     if a.patch:
         patch(db, src, a.batch)
     else:
-        for table in TABLES:
-            if table != 'changed_games' and src.execute('SELECT 1 FROM sqlite_master WHERE name = ?', (table,)).fetchone():
+        # Resuming continues after the highest id: only safe on top of this same build.
+        if bad := check_overlap(db, src, ('events', 'players', 'games'), full=True):
+            sys.exit('Postgres holds another build (' + '; '.join(bad) + '): for a build made with build.py --previous, run '
+                     'remap_events.py and import_pg.py --patch; otherwise do a full import (--reset)')
+        for table in TABLES:  # meta last
+            if table not in ('changed_games', 'gone_games') and has_table(src, table):
                 copy_table(db, src, table, a.batch)
     print('creating indexes…')
     db.script(HERE / 'indexes.pg.sql')

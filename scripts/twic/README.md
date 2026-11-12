@@ -15,20 +15,41 @@ python3 scripts/twic/opening_games.py --db /tmp/twic.sqlite                 # ->
 DATABASE_URL=... python3 scripts/twic/import_pg.py --db /tmp/twic.sqlite --reset
 ```
 
-**Updating the live database** (new issues, or build changes) without breaking URLs or downtime:
-keep the SQLite file that is currently loaded (`twic-live.sqlite`), rebuild into a new file, then
+**Updating the live database** (a new issue each week, or build changes) without breaking URLs or downtime:
+keep the SQLite file that is currently loaded (`twic-live.sqlite`), build into a new file with `--previous`, then
 
 ```sh
+python3 scripts/twic/download.py --from <next> --to <latest> --dir /tmp/twic
+python3 scripts/twic/build.py --dir /tmp/twic --out /tmp/twic.sqlite --fide /tmp/players_list.zip --previous /tmp/twic-live.sqlite
 python3 scripts/twic/remap_events.py --old /tmp/twic-live.sqlite --new /tmp/twic.sqlite
 DATABASE_URL=... python3 scripts/twic/import_pg.py --db /tmp/twic.sqlite --patch
+mv /tmp/twic.sqlite /tmp/twic-live.sqlite        # the next update's --previous
 ```
 
-`remap_events.py` checks that game and player ids are unchanged (they are deterministic for the
-same input; new issues only append games with later dates, but a new game dated earlier than
-existing ones shifts ids, and then a full `--reset` import is needed), keeps event ids and slugs,
-records redirects for events merged into others and lists the changed games. `--patch` swaps
-the new events and changed games in with one transaction. New games (later issues) still need
-loading: run `import_pg.py` without flags afterwards; it continues after the highest id.
+then purge the `games-db` cache tag (event and player pages changed) and rerun `opening_games.py` when the
+openings data should follow.
+
+- **`--previous`** keeps the id and slug of every game, player and event of the loaded build: games match by
+  TWIC issue and moves, players by the games they played (else by FIDE ID), events by the games they hold. New
+  rows get ids above the highest the loaded build ever used (`id_floor`), in the usual order (games by date,
+  players by game count, events by start date), so a new issue only appends, and a game dated before older
+  games still gets a new id at the end. Players no game names any more are kept as they were. Without
+  `--previous` ids are numbered from 1 as before (same input, same ids).
+- **`remap_events.py`** refuses the new build when an id names another game or player than in the loaded one,
+  when loaded games or players are missing from it, or when a new game got an id below the loaded maximum: then
+  build again with the right `--previous`, or do a full `--reset` import. It keeps event ids and slugs where
+  the grouping changed (a new game joining two weekends of a league), records redirects for events folded into
+  others and lists the games whose row changed (`changed_games`: event, players, ratings, round, opening...).
+- **`--patch`** first checks a sample of the games and players Postgres holds against the build, then swaps the
+  changed games, the events and the players (updated, new ones added) in with one transaction, appends the new
+  games after the highest id and copies `meta` (the totals) last. Analyses and notes stay with their games. If it
+  stops, run it again.
+- A build change that drops games (a stricter dedup) leaves loaded games missing from the new build:
+  `remap_events.py` says how many and refuses; with `--drop-missing` it accepts them and `--patch` deletes them
+  (their pages then 404). The first update after the dedup fix of November 2026 needs this: the loaded build
+  still holds re-sent copies. `--previous` also works against a build made before it existed.
+- A plain `import_pg.py` (no flags) only resumes an interrupted load of the same build: it refuses when Postgres
+  holds another one.
 
 The site reads the database from PostgreSQL on hetz-stock through Hyperdrive (`ops/postgres/README.md`).
 `import_pg.py` loads the SQLite build through the `psql` client (standard library only, resumable: rerun
@@ -41,9 +62,9 @@ site's own tables (analyses, notes, uploads) are missing, since then it is the w
 `NEON_DATABASE_URL` (Neon's HTTPS SQL endpoint, until the project is gone) the read grant to `readonly`; on a
 local database none.
 
-- **`--reset`** drops `games`, `players` and `events` (uploaded tournaments included), so the database pages
+- **`--reset`** drops `games`, `players`, `events` and `event_redirects` (uploaded tournaments included), so the database pages
   fail until the reload ends. First put the site in maintenance (`MAINTENANCE` "1" in both `vars` blocks of
-  `wrangler.jsonc`; only the database routes close). A reset is only needed when game ids shift, so afterwards
+  `wrangler.jsonc`; only the database routes close). A reset renumbers the games (build without `--previous`), so afterwards
   empty the analyses and notes, which belong to the old ids
   (`sudo -u postgres psql -d cm_games -c 'SET ROLE cm_owner' -c 'TRUNCATE game_analysis, game_annotation'`),
   purge the `games-db` cache tag (pages of the old ids must not come back), set `MAINTENANCE` back to "0" (the
@@ -60,12 +81,23 @@ Local development: run Postgres locally, load it with `import_pg.py` (or `pg_res
 ## Notes
 
 - `schema.sql` is the SQLite build's schema; `schema.pg.sql` + `indexes.pg.sql` the Postgres one
-  (keep them in sync). Totals live in the `meta` table.
-- Games are validated with python-chess; invalid games and set-up positions are skipped; duplicates
-  (same players, date and moves) keep the earliest issue.
+  (keep them in sync; `events.kind`, `id_floor` and `changed_games` are the SQLite file's own). Totals live in
+  the `meta` table.
+- Tests: `python3 -m unittest discover -s scripts/twic/tests` (needs python-chess; the import test also needs
+  `psql` and `TWIC_TEST_DATABASE_URL`, a scratch database it may wipe, and skips itself without them).
+- Games are validated with python-chess; invalid games and set-up positions are skipped. Duplicates
+  (same players, date and moves; or, from a later issue, same event, round, result and 20+ plies of moves
+  with one player's name unchanged, i.e. a corrected spelling) keep the earliest issue for the credit and
+  the latest copy's headers (later issues fix Round tags and names).
+- Ratings above 3000 (`MAX_ELO`: typos such as 204269, engines) are stored as NULL. Engine events (TCEC,
+  CCC, or mostly games between two players rated above 3000) have no `elo_avg`, so rating sorts and the
+  homepage's top games skip them. `events.kind` ('engine', 'online' for chess.com/lichess sites) exists in
+  the SQLite build only: `opening_games.py` leaves those events out of the opening pages' counts and
+  master games.
 - Players are merged by FIDE ID and get their official FIDE name, federation, title and birth year.
   A game only counts for a FIDE ID if its name shares a name part with that player (TWIC sometimes
-  attaches a wrong ID); otherwise it's filed under its own name. Players without a FIDE ID use the
+  attaches a wrong ID), or, for names without a part of 3+ letters ('So,W', 'Li,Di'), the same surname
+  and first initial; otherwise it's filed under its own name. Players without a FIDE ID use the
   fullest TWIC spelling.
 - Events are grouped by name, split where no games were played for 120 days (`EVENT_GAP`):
   leagues move venue every weekend, so site and EventDate can't be part of the key.
@@ -78,6 +110,6 @@ Local development: run Postgres locally, load it with `import_pg.py` (or `pg_res
 
 Organisers' uploads (`/upload/`, `src/lib/uploads.ts`) are published into the same `events`, `players` and
 `games` tables with ids from 100000000. `import_pg.py` resumes below that range and `--patch` keeps those
-events. `--reset` drops them with everything else: afterwards open `/upload/admin/` and use "Republish all
+events and players (one whose slug a new TWIC row takes is renamed `<slug>-u<n>`). `--reset` drops them with everything else: afterwards open `/upload/admin/` and use "Republish all
 approved" (the uploads themselves are kept in `uploads`/`upload_rounds`; republished games get new ids, so
 their Stockfish analyses and AI notes are lost).

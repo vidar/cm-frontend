@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Write src/data/opening-master-games.json from the TWIC SQLite database (build.py):
 for every named opening line, the number of TWIC games tagged with it, White/draw/Black results,
-and the 5 games with the highest average rating (for "Master games" on opening pages).
+and the 5 games with the highest average rating (for "Master games" on opening pages). Over-the-board
+games only: events that build.py marks as engine or online (events.kind) are left out.
 
 Usage: python3 scripts/twic/opening_games.py --db twic.sqlite
 """
@@ -38,14 +39,18 @@ def main():
     ap.add_argument('--out', default=str(ROOT / 'src/data/opening-master-games.json'))
     args = ap.parse_args()
     db = sqlite3.connect(args.db)
+    if 'kind' not in {r[1] for r in db.execute('PRAGMA table_info(events)')}:
+        raise SystemExit('this build has no events.kind (engine and online events): rebuild it with the current build.py')
+    otb = "g.event_id IN (SELECT id FROM events WHERE kind IS NULL)"
     out = {}
     for slug, n, w, d, b in db.execute(
-        "SELECT opening, COUNT(*), SUM(result='1-0'), SUM(result='1/2-1/2'), SUM(result='0-1') FROM games WHERE opening IS NOT NULL GROUP BY opening"
+        "SELECT opening, COUNT(*), SUM(result='1-0'), SUM(result='1/2-1/2'), SUM(result='0-1') FROM games g "
+        f"WHERE opening IS NOT NULL AND {otb} GROUP BY opening"
     ):
         out[slug] = {'n': n, 'r': [w, d, b], 'top': []}
     q = '''SELECT g.id, w.name, g.white_elo, g.white_title, b.name, g.black_elo, g.black_title, g.result, g.date, e.name
            FROM games g JOIN players w ON w.id = g.white_id JOIN players b ON b.id = g.black_id JOIN events e ON e.id = g.event_id
-           WHERE g.opening = ? AND g.elo_avg IS NOT NULL ORDER BY g.elo_avg DESC, g.date DESC LIMIT 5'''
+           WHERE g.opening = ? AND g.elo_avg IS NOT NULL AND e.kind IS NULL ORDER BY g.elo_avg DESC, g.date DESC LIMIT 5'''
     for slug in out:
         out[slug]['top'] = [
             {'path': game_path(gid, wn, bn, ev, date), 'white': wn, 'whiteElo': we, 'whiteTitle': wt, 'black': bn, 'blackElo': be,
