@@ -5,7 +5,10 @@ import { topPlayers, searchPlayers } from '../../lib/games';
 export const prerender = false;
 Astro.response.headers.set('Cache-Control', 'public, max-age=3600');
 const q = Astro.url.searchParams.get('q')?.trim() ?? '';
-const players = q ? await searchPlayers(q, 100) : await topPlayers(200);
+const found = q ? await searchPlayers(q, 100) : null;
+// Nothing contains every word: the closest names (typos), offered as "Did you mean".
+const fuzzy = !!found?.[0]?.fuzzy;
+const players = found ?? (await topPlayers(200));
 ---
 
 <Layout title={q ? `Chess players matching "${q}"` : 'Chess players'} description="Find over-the-board games of any chess player, from world champions to club players.">
@@ -15,7 +18,7 @@ const players = q ? await searchPlayers(q, 100) : await topPlayers(200);
     <input type="search" name="q" value={q} placeholder="Player name, e.g. Carlsen" aria-label="Player name" />
     <button type="submit">Search</button>
   </form>
-  {q && players.length === 0 && <p>No players found for “{q}”.</p>}
+  {q && (players.length === 0 || fuzzy) && <p>No players found for “{q}”.{fuzzy && ' Did you mean:'}</p>}
   <ul class="list">
     {players.map((p) => (
       <li><a href={`/players/${p.slug}/`}>{p.title && `${p.title} `}{p.name}</a> <span class="muted">{p.games.toLocaleString('en')} games{p.max_elo && ` · peak ${p.max_elo}`}</span></li>

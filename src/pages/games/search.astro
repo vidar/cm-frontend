@@ -9,11 +9,15 @@ export const prerender = false;
 const p = parseSearch(Astro.url.searchParams);
 const active = hasFilters(p);
 const r: SearchResult | null = active ? await searchGames(p) : null;
-Astro.response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+// A search that ran out of time may finish another time (the database was busy): don't keep that answer for a day.
+Astro.response.headers.set('Cache-Control', r?.tooBroad ? 'public, max-age=60, s-maxage=300' : 'public, max-age=3600, s-maxage=86400');
 
-// A name that matched several players: offer each one as an exact search.
+// A name that matched several players: offer each one as an exact search. The pin (wp/bp, the player's
+// slug) tells namesakes apart, who share the same name.
 const narrow = (field: 'white' | 'black', list: SearchResult['white']) =>
-  list.length > 1 ? list.slice(0, 8).map((x) => ({ x, href: searchUrl(p, { [field]: x.name, page: 1 }) })) : [];
+  list.length > 1
+    ? list.slice(0, 8).map((x) => ({ x, href: searchUrl(p, field === 'white' ? { white: x.name, whitePin: x.slug, page: 1 } : { black: x.name, blackPin: x.slug, page: 1 }) }))
+    : [];
 const pick = r ? { white: narrow('white', r.white), black: narrow('black', r.black) } : { white: [], black: [] };
 
 // Plain-language summary of the search.
@@ -55,6 +59,8 @@ const examples = [
       <label>White <input name="white" value={p.white} list="player-list" autocomplete="off" placeholder="e.g. Carlsen" data-suggest /></label>
       <label>Black <input name="black" value={p.black} list="player-list" autocomplete="off" placeholder="e.g. Caruana" data-suggest /></label>
       <label class="check"><input type="checkbox" name="any" value="1" checked={p.anyColour} /> Either colour</label>
+      {p.whitePin && <input type="hidden" name="wp" value={p.whitePin} />}
+      {p.blackPin && <input type="hidden" name="bp" value={p.blackPin} />}
     </div>
     <div class="row">
       <label>Result
@@ -85,7 +91,7 @@ const examples = [
     <section>
       <h2>Try</h2>
       <ul class="examples">{examples.map((e) => <li><a href={e.href}>{e.label}</a></li>)}</ul>
-      <p class="muted">Names match any part of a player's name; pick a suggestion for an exact match. Dates can be a year, a month (2024-04) or a day.</p>
+      <p class="muted">Names match every word you type, in any order (“Giri, Anish” or “anish giri”); pick a suggestion for an exact match. Dates can be a year, a month (2024-04) or a day.</p>
     </section>
   )}
 
@@ -97,7 +103,7 @@ const examples = [
             pick[f].length > 0 && (
               <p>
                 “{p[f]}” matches {r[f].length >= 30 ? 'many' : r[f].length} players, most games first. Narrow to:{' '}
-                {pick[f].map(({ x, href }, i) => <>{i > 0 && ' · '}<a href={href}>{x.title && `${x.title} `}{x.name}</a> <span class="muted">({x.games.toLocaleString('en')})</span></>)}
+                {pick[f].map(({ x, href }, i) => <>{i > 0 && ' · '}<a href={href}>{x.title && `${x.title} `}{x.name}</a> <span class="muted">({x.fed && `${x.fed}, `}{x.games.toLocaleString('en')})</span></>)}
               </p>
             ),
           )}

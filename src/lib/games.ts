@@ -197,22 +197,26 @@ export async function getPlayerPage(slug: string, page: number, color?: 'w' | 'b
   const branch = (side: 'white' | 'black') =>
     `(SELECT ${GAME_COLS} FROM games g ${GAME_JOINS} WHERE g.${side}_id = (SELECT id FROM p) ORDER BY g.date DESC NULLS LAST, g.id DESC LIMIT $2)`;
   const union = color === 'w' ? branch('white') : color === 'b' ? branch('black') : `${branch('white')} UNION ALL ${branch('black')}`;
-  const row = await first<{ player: Player; games: GameRow[] | null; score: { w: number; d: number; l: number } }>(
+  const row = await first<{ player: Player; games: GameRow[] | null; score: { w: number; d: number; l: number; twic: number; uploaded: number } }>(
     `WITH p AS (SELECT * FROM players WHERE slug = $1)
      SELECT row_to_json(p) AS player,
        (SELECT json_agg(t) FROM (SELECT * FROM (${union}) u ORDER BY date DESC NULLS LAST, id DESC LIMIT $3 OFFSET $4) t) AS games,
        (SELECT json_build_object(
           'w', COUNT(*) FILTER (WHERE (white_id = (SELECT id FROM p) AND result = '1-0') OR (black_id = (SELECT id FROM p) AND result = '0-1')),
           'd', COUNT(*) FILTER (WHERE result = '1/2-1/2'),
-          'l', COUNT(*) FILTER (WHERE (white_id = (SELECT id FROM p) AND result = '0-1') OR (black_id = (SELECT id FROM p) AND result = '1-0')))
-        FROM (SELECT white_id, black_id, result FROM games WHERE white_id = (SELECT id FROM p)
-              UNION ALL SELECT white_id, black_id, result FROM games WHERE black_id = (SELECT id FROM p)) s) AS score
+          'l', COUNT(*) FILTER (WHERE (white_id = (SELECT id FROM p) AND result = '0-1') OR (black_id = (SELECT id FROM p) AND result = '1-0')),
+          'twic', COUNT(*) FILTER (WHERE twic > 0),
+          'uploaded', COUNT(*) FILTER (WHERE twic = 0))
+        FROM (SELECT white_id, black_id, result, twic FROM games WHERE white_id = (SELECT id FROM p)
+              UNION ALL SELECT white_id, black_id, result, twic FROM games WHERE black_id = (SELECT id FROM p)) s) AS score
      FROM p`,
     [slug, offset + PAGE_SIZE + 1, PAGE_SIZE + 1, offset],
   );
   if (!row) return null;
   const games = row.games ?? [];
-  return { player: row.player, games: games.slice(0, PAGE_SIZE), hasMore: games.length > PAGE_SIZE, score: row.score };
+  const { twic, uploaded, ...score } = row.score;
+  // Where the player's games come from (TWIC issues and/or organisers' uploads): the page's credit and cache lifetime.
+  return { player: row.player, games: games.slice(0, PAGE_SIZE), hasMore: games.length > PAGE_SIZE, score, sources: { twic, uploaded } };
 }
 
 /** Score summary for a player: [wins, draws, losses] overall. */
@@ -276,11 +280,68 @@ export async function gameMoves(ids: number[]) {
   return new Map(rows.map((r) => [r.id, r.moves]));
 }
 
-export async function searchPlayers(q: string, limit = 30) {
-  const term = slugify(q).replace(/-/g, ' ');
+/** Words of a typed player name, slugified and in any order ("Giri, Anish" -> giri, anish); at most 5. */
+export function nameWords(name: string) {
+  return [...new Set(slugify(name).split('-').filter(Boolean))].slice(0, 5);
+}
+
+/**
+ * SQL for players (column `search`) whose name contains every word, in any order and as any part of a
+ * word ("Giri, Anish", "anish giri" and "A Giri" all find Anish Giri), and an expression that is true
+ * when the name is exactly those words (`exact()`). `arg` adds a parameter and returns its placeholder. Each word is
+ * its own LIKE so the trigram index (players_search) serves them all; `LIKE ALL(array)` scans the table.
+ * The words come from nameWords (only a-z and 0-9), so they need no LIKE escaping.
+ */
+export function nameMatch(words: string[], arg: (v: string | number) => string) {
+  const where = words.map((w) => `search LIKE ${arg(`%${w}%`)}`).join(' AND ');
+  // A function, so its parameters are only added when it is used (an unused parameter has no type).
+  const exact = () => `(length(search) = ${arg(words.join(' ').length)} AND ${words.map((w) => `(' ' || search || ' ') LIKE ${arg(`% ${w} %`)}`).join(' AND ')})`;
+  return { where, exact };
+}
+
+/**
+ * Players whose name contains every typed word, most games first. When nothing matches, the closest
+ * names by trigram word similarity (typos such as "Carlssen"), marked `fuzzy`, from the same statement.
+ */
+export async function searchPlayers(q: string, limit = 30): Promise<(Player & { fuzzy: boolean })[]> {
+  const words = nameWords(q);
+  const term = words.join(' ');
   if (term.length < 2) return [];
-  // Trigram index (players_search) makes the substring match fast.
-  return query<Player>('SELECT * FROM players WHERE search LIKE $1 ORDER BY games DESC LIMIT $2', [`%${term}%`, limit]);
+  const params: (string | number)[] = [];
+  const arg = (v: string | number) => {
+    params.push(v);
+    return `$${params.length}`;
+  };
+  const { where } = nameMatch(words, arg);
+  const t = `${arg(term)}::text`;
+  // The fuzzy branch runs only when the first finds nothing (NOT EXISTS is evaluated once).
+  return query<Player & { fuzzy: boolean }>(
+    `WITH m AS (SELECT *, false AS fuzzy, 1::real AS sim FROM players WHERE ${where} ORDER BY games DESC LIMIT ${arg(limit)})
+     SELECT * FROM m
+     UNION ALL
+     (SELECT *, true, word_similarity(${t}, search) AS sim FROM players WHERE NOT EXISTS (SELECT 1 FROM m) AND ${t} <% search
+      ORDER BY sim DESC, games DESC LIMIT 10)
+     ORDER BY sim DESC, games DESC`,
+    params,
+  );
+}
+
+/** Everything /games/ shows in one statement: recent top games, recent events, the most active players and the totals. */
+export async function getGamesIndex(games = 20, events = 12, players = 24) {
+  const row = await first<{ games: GameRow[] | null; events: EventRow[] | null; players: Player[] | null; meta: Record<string, string> | null }>(
+    `SELECT
+       (SELECT json_agg(x ORDER BY x.date DESC NULLS LAST, x.elo_avg DESC) FROM (${RECENT_TOP_GAMES}) x) AS games,
+       (SELECT json_agg(x ORDER BY x.start_date DESC NULLS LAST) FROM (SELECT * FROM events ORDER BY start_date DESC NULLS LAST LIMIT $2) x) AS events,
+       (SELECT json_agg(x ORDER BY x.games DESC) FROM (SELECT * FROM players ORDER BY games DESC LIMIT $3) x) AS players,
+       (SELECT json_object_agg(key, value) FROM meta) AS meta`,
+    [games, events, players],
+  );
+  return {
+    games: row?.games ?? [],
+    events: row?.events ?? [],
+    players: row?.players ?? [],
+    totals: Object.fromEntries(Object.entries(row?.meta ?? {}).map(([k, v]) => [k, Number(v)])) as Record<string, number>,
+  };
 }
 
 export async function topPlayers(limit = 60) {
@@ -291,14 +352,14 @@ export async function recentEvents(limit = 40) {
   return query<EventRow>('SELECT * FROM events ORDER BY start_date DESC NULLS LAST LIMIT $1', [limit]);
 }
 
+/** Recent games between strong players ($1: how many). */
+const RECENT_TOP_GAMES = `SELECT ${GAME_COLS} FROM games g ${GAME_JOINS}
+     WHERE g.id IN (SELECT id FROM games ORDER BY date DESC NULLS LAST LIMIT 3000) AND g.elo_avg >= 2600
+     ORDER BY g.date DESC NULLS LAST, g.elo_avg DESC LIMIT $1`;
+
 /** Recent games between strong players. */
 export async function recentTopGames(limit = 30) {
-  return query<GameRow>(
-    `SELECT ${GAME_COLS} FROM games g ${GAME_JOINS}
-     WHERE g.id IN (SELECT id FROM games ORDER BY date DESC NULLS LAST LIMIT 3000) AND g.elo_avg >= 2600
-     ORDER BY g.date DESC NULLS LAST, g.elo_avg DESC LIMIT $1`,
-    [limit],
-  );
+  return query<GameRow>(RECENT_TOP_GAMES, [limit]);
 }
 
 /** Head-to-head games between two players, newest first. */

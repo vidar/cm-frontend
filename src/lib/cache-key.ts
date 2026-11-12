@@ -14,6 +14,8 @@ export const KEY_PARAMS = new Set([
   'poll',
   // game search (src/lib/game-search.ts parseSearch)
   'white', 'black', 'any', 'result', 'event', 'opening', 'from', 'to', 'rating', 'minmoves', 'maxmoves', 'sort',
+  // the player pins of game search (namesakes told apart by slug)
+  'wp', 'bp',
 ]);
 
 /** The cache-key URL for a database page: allowed parameters only, sorted, plus the cache version. */

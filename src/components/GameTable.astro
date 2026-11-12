@@ -9,12 +9,20 @@ interface Props {
 }
 const { games, playerId, showEvent = true } = Astro.props;
 const who = (name: string, title: string | null, elo: number | null) => `${title ? `${title} ` : ''}${name}${elo ? ` (${elo})` : ''}`;
+// From the player's point of view: a bare "1" next to a game where the opponent had White would read as "White won".
+const OUTCOME = {
+  '1': { letter: 'W', label: 'Win', cls: 'win' },
+  '½': { letter: 'D', label: 'Draw', cls: 'draw' },
+  '0': { letter: 'L', label: 'Loss', cls: 'loss' },
+  '*': { letter: '*', label: 'Unfinished', cls: '' },
+} as const;
+const outcome = (g: GameRow) => OUTCOME[scoreFor(g, playerId ?? 0) as keyof typeof OUTCOME];
 ---
 
 <table class="games-table">
   <thead>
     <tr>
-      <th>White</th><th>Black</th><th>Result</th>{showEvent && <th>Event</th>}<th>Date</th><th></th>
+      <th>White</th><th>Black</th><th>{playerId ? 'Score' : 'Result'}</th>{showEvent && <th>Event</th>}<th>Date</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -22,7 +30,11 @@ const who = (name: string, title: string | null, elo: number | null) => `${title
       <tr>
         <td class="w">{g.white_id === playerId ? <strong>{who(g.white_name, g.white_title, g.white_elo)}</strong> : <a href={`/players/${g.white_slug}/`}>{who(g.white_name, g.white_title, g.white_elo)}</a>}</td>
         <td class="b">{g.black_id === playerId ? <strong>{who(g.black_name, g.black_title, g.black_elo)}</strong> : <a href={`/players/${g.black_slug}/`}>{who(g.black_name, g.black_title, g.black_elo)}</a>}</td>
-        <td class="res">{playerId ? scoreFor(g, playerId) : resultLabel(g.result)}</td>
+        {playerId ? (
+          <td class:list={['res', outcome(g).cls]}><abbr title={`${outcome(g).label} (${resultLabel(g.result)})`}>{outcome(g).letter}</abbr></td>
+        ) : (
+          <td class="res">{resultLabel(g.result)}</td>
+        )}
         {showEvent && <td class="ev"><a href={`/events/${g.event_slug}/`}>{g.event_name}</a>{g.round && <span class="muted"> · R{g.round}</span>}</td>}
         <td class="date">{g.date}</td>
         <td class="view"><a href={gamePath(g)}>View</a></td>
@@ -35,6 +47,10 @@ const who = (name: string, title: string | null, elo: number | null) => `${title
   .games-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
   .games-table th, .games-table td { text-align: left; padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--border); vertical-align: top; }
   .games-table .res { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+  .games-table .res abbr { text-decoration: none; }
+  .games-table .res.win { color: var(--win); }
+  .games-table .res.loss { color: var(--loss); }
+  .games-table .res.draw { color: var(--muted); }
   .games-table .date { white-space: nowrap; color: var(--muted); }
   .games-table .view a { color: var(--accent); }
   .muted { color: var(--muted); }

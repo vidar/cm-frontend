@@ -10,5 +10,7 @@ CREATE INDEX IF NOT EXISTS events_start ON events (start_date DESC NULLS LAST);
 -- Game search (/games/search/): sort by rating or length without scanning the table.
 CREATE INDEX IF NOT EXISTS games_elo ON games (elo_avg DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS games_plies ON games (plies);
+-- ECO codes and ranges (opening=B90, B90-B99), newest first, instead of filtering a walk of games_date.
+CREATE INDEX IF NOT EXISTS games_eco ON games (eco, date DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS events_name ON events USING gin (lower(name) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS openings_name ON openings USING gin (lower(name) gin_trgm_ops);
