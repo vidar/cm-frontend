@@ -3,9 +3,11 @@
 // Astro's handler is replaced by a stub that answers with the status the test asks for.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-let next = { status: 200, body: 'page' };
+let next: { status: number; body: string; headers?: Record<string, string>; immutable?: boolean } = { status: 200, body: 'page' };
 vi.mock('@astrojs/cloudflare/handler', () => ({
-  handle: vi.fn(async () => new Response(next.body, { status: next.status })),
+  handle: vi.fn(async () =>
+    next.immutable ? Response.redirect('https://chessmoments.com/x/', 301) : new Response(next.body, { status: next.status, headers: next.headers }),
+  ),
 }));
 const { default: worker } = await import('../src/worker');
 
@@ -57,5 +59,25 @@ describe('worker', () => {
     expect(db.headers.get('Retry-After')).toBe('3600');
     expect(await db.text()).toContain('offline for maintenance');
     expect((await call('/puzzle/', env)).status).toBe(200);
+  });
+
+  it('adds the security headers to every response, keeping a page\'s own Referrer-Policy', async () => {
+    const check = (r: Response, referrer = 'strict-origin-when-cross-origin') => {
+      expect(r.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(r.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+      expect(r.headers.get('Referrer-Policy')).toBe(referrer);
+      expect(r.headers.has('Strict-Transport-Security')).toBe(false);
+    };
+    check(await call('/openings/'));
+    check(await call('/games/', { MAINTENANCE: '1' }));
+    next = { status: 500, body: '' };
+    check(await call('/players/x/'));
+    next = { status: 200, body: 'upload', headers: { 'Referrer-Policy': 'same-origin' } };
+    check(await call('/upload/abc/'), 'same-origin');
+    next = { status: 301, body: '', immutable: true };
+    const r = await call('/x');
+    check(r);
+    expect(r.status).toBe(301);
+    expect(r.headers.get('Location')).toBe('https://chessmoments.com/x/');
   });
 });

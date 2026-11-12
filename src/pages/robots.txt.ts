@@ -1,10 +1,12 @@
 import type { APIRoute } from 'astro';
+import { TRAINING_AGENTS, TRAINING_ROBOTS_ONLY } from '../lib/bots';
 
 // AI policy: search and assistant agents (which fetch pages to answer people and cite them) may
 // read everything. AI training crawlers may read the tools, openings and puzzles, but not the TWIC
 // games database: The Week in Chess games are shown here with Mark Crowther's permission, which
-// doesn't extend to AI training. Cloudflare's "Block AI bots" is off so this file decides.
-const TRAINING_BOTS = ['GPTBot', 'ClaudeBot', 'CCBot', 'Google-Extended', 'Applebot-Extended', 'meta-externalagent', 'Bytespider', 'Amazonbot', 'cohere-training-data-crawler'];
+// doesn't extend to AI training. Cloudflare's "Block AI bots" is off so this file decides. The list of
+// training crawlers lives in src/lib/bots.ts, which also paces them if they ignore this file.
+const TRAINING_BOTS = [...TRAINING_ROBOTS_ONLY, ...TRAINING_AGENTS];
 const TWIC_PATHS = ['/games/', '/players/', '/events/', '/sitemaps/'];
 
 export const GET: APIRoute = ({ site }) => {

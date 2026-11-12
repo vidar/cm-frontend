@@ -22,7 +22,7 @@ describe('dbCacheKey', () => {
     expect(key('https://chessmoments.com/games/analysis/1.json?poll=1')).not.toBe(key('https://chessmoments.com/games/analysis/1.json'));
   });
   it('lists every parameter the database pages read', () => {
-    expect([...KEY_PARAMS].sort()).toEqual(['all', 'any', 'black', 'color', 'event', 'from', 'maxmoves', 'minmoves', 'opening', 'page', 'poll', 'q', 'rating', 'result', 'sort', 'to', 'white']);
+    expect([...KEY_PARAMS].sort()).toEqual(['all', 'any', 'black', 'color', 'event', 'from', 'maxmoves', 'minmoves', 'opening', 'page', 'poll', 'q', 'rating', 'result', 'sort', 'to', 'white', 'wp', 'bp', 'year'].sort());
   });
   it("can't be steered by a __build parameter in the request", () => {
     expect(key('https://chessmoments.com/games/1-a/?__build=old')).toBe('https://chessmoments.com/games/1-a/?__build=v1');

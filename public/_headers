@@ -1,2 +1,8 @@
+# Static assets only (Worker responses get the same headers in src/worker.ts; keep them in step).
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: strict-origin-when-cross-origin
+
 /engine/*
   Cache-Control: public, max-age=604800

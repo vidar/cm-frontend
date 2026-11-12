@@ -6,6 +6,7 @@
 // two days drops it). Set it to "0" to reopen the database.
 // When the database fails (an outage: Hyperdrive gives up after 15 s and Astro answers an empty 500), the
 // database routes answer 503 with Retry-After and a short page instead, which search engines retry.
+// Every Worker response gets the security headers below (static assets get them from public/_headers).
 import { handle } from '@astrojs/cloudflare/handler';
 import { isDbRoute, maintenance } from './lib/maintenance';
 
@@ -51,13 +52,36 @@ const unavailable = (request: Request, body: string, retryAfter: number) =>
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Retry-After': String(retryAfter) },
   });
 
+// Keep in step with public/_headers. HSTS is set in the Cloudflare zone, not here; no CSP (inline scripts).
+const SECURITY_HEADERS: [string, string][] = [
+  ['X-Content-Type-Options', 'nosniff'],
+  ['X-Frame-Options', 'SAMEORIGIN'],
+  ['Referrer-Policy', 'strict-origin-when-cross-origin'],
+];
+
+/** The response with the security headers; a header the page set itself (the upload pages' Referrer-Policy) is kept. */
+export function withSecurityHeaders(response: Response): Response {
+  let res = response;
+  for (const [name, value] of SECURITY_HEADERS) {
+    if (res.headers.has(name)) continue;
+    try {
+      res.headers.set(name, value);
+    } catch {
+      // Immutable headers (a fetched response, Response.redirect): copy it once, then set.
+      res = new Response(res.body, res);
+      res.headers.set(name, value);
+    }
+  }
+  return res;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const db = isDbRoute(request.url);
-    if (db && maintenance(env)) return unavailable(request, MAINTENANCE_PAGE, 3600);
+    if (db && maintenance(env)) return withSecurityHeaders(unavailable(request, MAINTENANCE_PAGE, 3600));
     const response = await handle(request, env, ctx);
     // Only 500: the JSON endpoints answer their own 503s (engine busy, budget used up).
-    if (db && response.status === 500) return unavailable(request, DOWN_PAGE, 120);
-    return response;
+    if (db && response.status === 500) return withSecurityHeaders(unavailable(request, DOWN_PAGE, 120));
+    return withSecurityHeaders(response);
   },
 } satisfies ExportedHandler<Env>;
