@@ -19,15 +19,21 @@ Worker (chessmoments.com)
   statement; `postgres` (superuser) only over the local socket.
 - **Secrets stay on the server** (`/etc/cm-db/`, root only): `cm_owner.password`, `cm_web.password`, during
   the move `neon.env`; the tunnel token in `/etc/cloudflared/cm-db.token`. They are never pasted into a chat:
-  you paste them into a terminal on the server or a Cloudflare form.
+  you paste them into a terminal on the server or a Cloudflare form. All of the site's secrets, and how to rotate
+  each: "Secrets" below.
 - **Backups:** nightly full dump at 03:20 UTC (7 daily + 5 weekly kept) and every hour the tables that can't be
   rebuilt from TWIC (analyses, AI notes, uploads; a week kept), in `/var/backups/cm-db/` (root only: TWIC data
   may not be republished in bulk). Each dump is read back in full before it replaces an older one. A restore
-  drill runs on the first Sunday of every month. Off-site copy: see step 10.
+  drill runs on the first Sunday of every month. Off-site copy: see step 10; until it is set up every dump is on
+  this box's own disk, and the only copy off the box is Neon's, as of 21 Oct ("Losing the box").
 - **Health check** every 15 minutes (`cm-db-check`): Postgres up and `cm_web` able to log in the way Hyperdrive
-  does, the site's own way to the database (`SITE_CHECK_URL`, step 10), backups and their off-site copy fresh,
-  disk below 85 % and 5 GB free, tunnel connected, last restore drill passed, no process killed for memory, no
-  lasting memory pressure. Failures go to the journal, and to e-mail if `HC_URL` is set (step 10).
+  does, the site's own way to the database (`SITE_CHECK_URL`, step 10) and not in maintenance for more than 6 hours,
+  backups and their off-site copy fresh (and an off-site copy configured at all), disk below 85 % and 5 GB free,
+  tunnel connected, last restore drill passed, no process killed for memory, no lasting memory pressure; and the
+  rest of what the site needs: the engine answering with a certificate good for 14 more days (`ENGINE_CHECK_URL`),
+  not more than 3 analyses or AI notes failed in a day with none done (a revoked `ANTHROPIC_KEY`, a dead engine),
+  the TWIC data from a build at most 9 days old. Failures go to the journal, and to e-mail if `HC_URL` is set
+  (step 10).
 
 | File | What it is |
 |---|---|
@@ -49,6 +55,14 @@ twice whenever a step asks you to paste something:
 ```sh
 ssh -t vidar@100.120.87.91 'ssh -t hetz-stock'
 ```
+
+**If the Mac mini is unreachable** (a power cut, a macOS update, Tailscale logged out, a trip): hetz-stock is on
+the tailnet itself, so a laptop on Tailscale with its own key in the login user's `~/.ssh/authorized_keys` gets in
+directly (`ssh -t <login user>@hetz-stock`): add that second key now, from the laptop, while the Mac mini still
+works. Without either, the Hetzner Cloud console → server → console button (`>_`, a terminal on the server's screen)
+needs the login user's password: set one now (`sudo passwd <login user>`) and keep it in the password manager.
+Last resort: Hetzner console → server → **Rescue** (enable rescue and power cycle; it shows a root password for a
+rescue system from which the disk can be mounted and `authorized_keys` fixed).
 
 The long steps (3, and any restore) are best run inside `tmux` (`tmux new -s db`; after a dropped connection,
 `tmux attach -t db`), so a broken ssh session doesn't stop them halfway.
@@ -216,20 +230,28 @@ sudo -u postgres psql -d cm_games -c "SELECT a.usename, a.client_addr, s.ssl, s.
 the routes were closed), so the first hours bring crawler traffic to the box: `top` now and then, and
 `journalctl -u cm-db-check` the next day.
 
-**Rollback** (while Neon still exists): the old id `ff39804dfb964a2ca13a9e1d7ec27cbe` back in both `hyperdrive`
-blocks and `placement` back to `aws:eu-central-1`, then deploy. Whatever was written on hetz-stock in between
-(analyses, AI notes, uploads) would be missing on Neon, so approve no uploads until step 11. To move forward
-again after a rollback: maintenance first (`MAINTENANCE` "1" in both `vars` blocks, deployed), so nothing writes to
-Neon; then `sudo -u postgres dropdb --force cm_games && sudo bash ~/cm-db-kit/ops/postgres/install.sh`, step 3, and
-steps 8–9 again. Don't merge hetz-stock's rows into Neon or back with `cm-db-restore --table`: ids given out on
-each side can clash.
+**Rollback** (only in the first days after the move, while Neon still exists). Neon holds the data of 21 Oct: a
+rollback now shows the site without every analysis, AI note and upload written since. For a database problem on
+hetz-stock, restore from its backups instead ("Running it" → Restore); for a lost box, "Losing the box". To roll
+back all the same: the old id `ff39804dfb964a2ca13a9e1d7ec27cbe` back in both `hyperdrive` blocks and `placement`
+back to `aws:eu-central-1`, then deploy, and approve no uploads until step 11. To move forward again after a
+rollback: maintenance first (`MAINTENANCE` "1" in both `vars` blocks, deployed), so nothing writes to Neon; then
+save hetz-stock's own rows (`sudo cm-db-backup small`, and note the file it prints), `sudo -u postgres dropdb
+--force cm_games && sudo bash ~/cm-db-kit/ops/postgres/install.sh`, step 3, then put the saved analyses and notes
+back: `sudo cm-db-restore --table game_analysis <that file>` and the same with `game_annotation` (name the file:
+step 3 makes newer hourly backups, of Neon's rows). They are keyed by game id, which is the same on both sides for
+TWIC games; where both sides have a row, the one step 3 copied from Neon stays. Then steps 8–9 again. Never do
+this for `uploads` or `upload_rounds`, and if an upload was published on either side in between, not at all (ask
+Claude): uploaded ids given out on each side can clash, and a saved analysis would land on another game.
 
 ### 10. Backups off the box, and an alarm
 
 The timers are already running (`systemctl list-timers 'cm-db-*'`; dumps in `/var/backups/cm-db/`; step 3 made
 the first ones). Settings go in `/etc/cm-db/backup.env` (`sudo nano /etc/cm-db/backup.env`). For a copy that
 survives losing the server, pick one (and keep the R2 token or the Mac mini's access somewhere off the server,
-e.g. a password manager: a rebuilt box needs it):
+e.g. a password manager: a rebuilt box needs it). Until one is set up, `cm-db-check` reports "no off-site copy
+configured" and every dump would go with the box. Prefer R2: the Mac mini is already the way in (step 0), and
+one machine at home shouldn't be both the only way in and the only copy.
 
 - **Pull to the Mac mini** (nothing new to sign up for): `BACKUP_GROUP=<the login user on hetz-stock>` in
   `backup.env`, then `sudo cm-db-backup small` once so that user can read the dumps, then on the Mac mini run
@@ -248,16 +270,33 @@ e.g. a password manager: a rebuilt box needs it):
   health check watches them from then on). The bucket keeps what the server keeps (about 8 GB) and is pruned only
   after a new dump is up.
 
+Either way, **Hetzner Cloud Backups** (Hetzner console → server → Backups → enable; about a fifth of the server's
+price, 7 daily images) bring back the whole box in one step, engine and render-svc included (they have no setup in
+this repository: "Losing the box" step 7). Turn them on as the stopgap until the copy above works, and keep them if
+the price is fine. An image holds the database as a power cut would leave it (Postgres recovers by itself on
+start); if it doesn't come up cleanly, the dumps are the copy to restore from.
+
 Alarm: a free check at https://healthchecks.io (period 15 min, grace 1 h) and its ping URL as `HC_URL=`, and
 `SITE_CHECK_URL=https://chessmoments.com/health/db` (the site's own way to the database; while the site is in
-maintenance on purpose it only notes that), both in `backup.env`.
-`sudo cm-db-check` shows at once what it would report. You get an e-mail when Postgres, the site's way to it, the
-backups and their off-site copy, the disk, memory, the drill or the tunnel have a problem.
+maintenance on purpose it only notes that, for 6 hours: `MAINTENANCE_MAX_HOURS`), and
+`ENGINE_CHECK_URL=https://engine.chessmoments.com/healthz` (the engine as the Worker reaches it, and its
+certificate), all in `backup.env` (a `backup.env` from before these settings lacks the last lines of
+`backup.env.example`: add them). `sudo cm-db-check` shows at once what it would report. You get an e-mail when
+Postgres, the site's way to it, the backups and their off-site copy, the disk, memory, the drill, the tunnel, the
+engine, the AI notes (more than 3 failed in a day and none written: the Anthropic key) or the TWIC import (a build
+more than 9 days old, `IMPORT_MAX_DAYS`; 0 turns it off) have a problem. A problem you have accepted for now keeps
+the check failing and hides new ones (healthchecks.io mails once when it goes down): fix it or raise its limit.
+
+This alarm runs on the box: a box that is down sends nothing until healthchecks.io notices the missing pings (the
+grace hour). For a second opinion that doesn't depend on it, a free external uptime monitor (UptimeRobot or
+Better Stack) on `https://chessmoments.com/` and `https://chessmoments.com/health/db`, every
+5 minutes, alarming on anything but 200.
 
 ### 11. Retire Neon (after a week or two)
 
 When the site has run on hetz-stock for a week, there are good nightly dumps, `sudo cm-db-restore --test`
-passed, and the off-box copy is proven. Fetch last night's full dump back into a new, empty directory (never into
+passed, and the off-box copy is proven; **not before**: until then Neon's copy of 21 Oct is the only one off the box
+("Losing the box" step 3). Fetch last night's full dump back into a new, empty directory (never into
 `/var/backups/cm-db`, where a file of the same name already is: rclone would skip it and the test would read the
 local copy) and test that:
 
@@ -268,11 +307,11 @@ sudo cm-db-restore --test /var/tmp/cm-offsite/<that file>; sudo rm -r /var/tmp/c
 ```
 
 (From the Mac mini instead: `scp` the file to your home directory on the server and test it there.) Then delete
-the Neon project (only
-this one), then **Billing → change plan → Free** (deleting projects alone
-doesn't stop the monthly plan), delete the old Hyperdrive config `cm-games` and the Neon credentials on the
-server: `sudo rm /etc/cm-db/neon.env /etc/cm-db/pg_service.conf`. Until then, keep Neon's compute set to scale to
-zero, so the waiting week costs nothing.
+the Neon project (only this one), then **Billing → change plan → Free** (deleting projects alone doesn't stop the
+monthly plan), and delete the old Hyperdrive config `cm-games`. Until then, keep Neon's compute set to scale to
+zero, so the waiting week costs nothing. The Neon credentials on the server needn't wait for this: once step 3
+passed, `sudo rm -f /etc/cm-db/neon.env /etc/cm-db/pg_service.conf` (step 2 makes them again if they are ever
+needed).
 
 ## Running it
 
@@ -328,11 +367,18 @@ zero, so the waiting week costs nothing.
      the Mac mini, `ssh-keygen -R hetz-stock` (and the old IP), then `ssh hetz-stock` once to accept the new host
      key (step 0's command can't ask). Then steps 0 and 1, and pause the backups so none of them saves the empty
      database as the newest: `sudo systemctl stop cm-db-backup.timer cm-db-backup-small.timer`.
+     (With Hetzner Cloud Backups on, step 10, and a box lost rather than compromised: a new server from the newest
+     backup image, Hetzner console → server → Backups, brings back the kit, the secrets, the engine and render-svc
+     at once, with the old secrets: of step 1 then only power the old box off. Then only the site's own tables
+     newer than the image, `cm-db-restore --site-tables` with an off-site hourly dump made after it, and step 6.)
   3. Get the newest full and hourly dumps back. From R2: a new R2 token, `sudo apt install rclone`,
      `/etc/cm-db/rclone.conf` as in step 10, then
      `sudo rclone --config /etc/cm-db/rclone.conf copy r2:cm-db-backups/daily/<file> /var/backups/cm-db/daily/`
      (and `small/<file>` into `/var/backups/cm-db/small/`). From the Mac mini: `scp` both files to the server's
-     home directory; the restore reads them from there.
+     home directory; the restore reads them from there. **No off-site copy yet** (step 10 not done): the only copy
+     off the box is Neon, as of 21 Oct, until step 11 deletes it. Then steps 2–3 (`migrate-from-neon.sh`) instead
+     of this step and the next, and `sudo systemctl start cm-db-backup.timer cm-db-backup-small.timer`; everything
+     written since 21 Oct (analyses, AI notes, uploads) is lost, and the TWIC issues since then need an import.
   4. `sudo cm-db-restore <full dump>`, then the swap it prints, then `sudo cm-db-restore --site-tables <hourly dump>`
      if the hourly dump was made after the full one (a later time in its name; otherwise skip it: the full dump
      holds the newest rows), a TWIC re-import if issues came after the full dump, then
@@ -342,14 +388,53 @@ zero, so the waiting week costs nothing.
      Services → `cm-db-postgres` → edit, or the full `wrangler vpc service update` of step 6 with its tunnel id), and
      the new `cm_web` password in the Hyperdrive config (dashboard → Hyperdrive → `cm-games-hetz` → Settings). The
      dashboard must list only the new box's connector. Then step 10 again (`backup.env`: off-site copy, `HC_URL`,
-     `SITE_CHECK_URL`).
+     `SITE_CHECK_URL`, `ENGINE_CHECK_URL`).
   6. `MAINTENANCE` "0", "Republish all approved", purge the `games-db` cache tag.
+  7. The engine and render-svc died with the box too, and their setup is not in this repository (keep a note here
+     of where it is). "Analyse with Stockfish" needs stockfish-svc behind Caddy on the new box; the DNS-only A
+     record `engine` in the chessmoments.com zone (and AAAA, if there is one) pointed at the new box's address, so
+     Caddy can get its Let's Encrypt certificate; and a new bearer token on the engine and as the Worker secret
+     `STOCKFISH_TOKEN` (Production and Previews; the old box held the old one). Until then the site shows the
+     engine as busy. Check: `curl https://engine.chessmoments.com/healthz` says `"status":"ok"`, then analyse a
+     game. The site itself doesn't call render-svc.
   Only without any dumps: TWIC rebuilt from source (`scripts/twic/README.md`) into the empty database, with the
   site's tables created from `scripts/analysis.pg.sql`, `annotation.pg.sql` and `uploads.pg.sql`.
 - **Settings**: edit the files here and run `install.sh` again: it reloads, restarts Postgres only when a setting
   needs it (and says so), never changes passwords and keeps the Tailscale access. `ALTER SYSTEM` is off. Role
   settings (cm_web's timeouts) apply to new sessions only, and Hyperdrive keeps its sessions open: afterwards end
   them with `sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'cm_web'"`.
+
+## Secrets
+
+What each secret is for and how to replace it, e.g. after a leak or a revoked key. None of them is needed off the
+box to rebuild it (each can be made again) except where the last column says so: keep those in the password
+manager.
+
+| Secret | Where | Used by | To rotate | Off the box |
+|---|---|---|---|---|
+| `cm_web` password | `/etc/cm-db/cm_web.password`, and the Hyperdrive config `cm-games-hetz` | the site | below | — |
+| `cm_owner` password | `/etc/cm-db/cm_owner.password` | only the Tailscale access from the Mac mini (root and imports use the socket) | `sudo rm` the file, rerun `install.sh` | — |
+| Origin CA key | `/etc/ssl/private/cm-origin.key` | Postgres's TLS certificate (step 4) | `sudo rm /etc/ssl/private/cm-origin.key /etc/ssl/cm-origin.csr`, step 4 again, then revoke the old certificate (SSL/TLS → Origin Server) | — |
+| Tunnel token | `/etc/cloudflared/cm-db.token` | `cloudflared-cm-db` | a new tunnel as in "Losing the box" steps 1 and 5 (`tunnel.sh --new-token`, the VPC service pointed at it), then delete the old one | — |
+| Neon owner | `/etc/cm-db/neon.env`, `pg_service.conf` | `migrate-from-neon.sh` only | delete both now (end of step 11); if the box may have been read, also reset `neondb_owner`'s password in the Neon console | the Neon console |
+| R2 token | `/etc/cm-db/rclone.conf` | `cm-db-backup` | R2 → API tokens: a new one into `rclone.conf`, `sudo cm-db-backup small`, delete the old one | password manager |
+| Ping URLs | `/etc/cm-db/backup.env` (`HC_URL`), the Mac mini's pull | the alarms | a new check at healthchecks.io, its URL in place of the old, delete the old check | — |
+| Mac mini's access | its SSH key in the login user's `~/.ssh/authorized_keys` | the way in (step 0), the pull | a new key, its old line removed | — |
+| Login password | the login user on hetz-stock | the Hetzner web console ("If the Mac mini is unreachable") | `sudo passwd <login user>` | password manager |
+| `STOCKFISH_TOKEN` | Worker secret (Production and Previews), and the engine's own configuration on hetz-stock | "Analyse with Stockfish" | a new random token on the engine and in the Worker, one right after the other (in between the site shows the engine as busy) | — |
+| `ANTHROPIC_KEY` | Worker secret (Production and Previews) | "Write notes with AI" | Anthropic Console → API keys: a new key into the Worker, then delete the old one | — |
+| `ADMIN_KEY` | Worker secret | `/upload/admin/` | a new random value in the Worker; the admin page's cookie stops working, enter the new key once | password manager |
+
+**Rotating `cm_web`'s password** without the site failing for more than a moment (the site's open sessions keep
+working; only new ones fail until Hyperdrive has the new password):
+
+1. Dashboard → Hyperdrive → `cm-games-hetz` → Settings: open the form for the origin password, ready to paste.
+2. On the server: `sudo rm /etc/cm-db/cm_web.password && sudo bash ~/cm-db-kit/ops/postgres/install.sh` (it makes
+   and sets a new password), then `sudo cat /etc/cm-db/cm_web.password`.
+3. Paste it into the form and save (Hyperdrive tests the connection).
+4. End the sessions that logged in with the old password, so Hyperdrive opens new ones:
+   `sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'cm_web'"`.
+5. `curl -s https://chessmoments.com/health/db` says `{"ok":true}`, and `sudo cm-db-check` says ok.
 
 ## Troubleshooting
 
@@ -366,7 +451,8 @@ zero, so the waiting week costs nothing.
   and `/var/log/postgresql/postgresql-18-main.log`; "too many connections for role cm_web": lower Hyperdrive's
   origin connection limit (dashboard) or raise the limit in `install.sh` and rerun it.
 - **cm-db-check fails**: `sudo cm-db-check` (or `journalctl -u cm-db-check -n 20`) says what (Postgres, the site's
-  way to it, backup age, disk, tunnel, memory, drill).
+  way to it, backup age, disk, tunnel, memory, drill, the engine, failed analyses or AI notes, the import's age).
+  Failed AI notes with "401" or "authentication" in `error` mean a revoked `ANTHROPIC_KEY` ("Secrets").
 - **If Workers VPC doesn't work at all** (it is in open beta): the same tunnel can carry Hyperdrive's older route,
   a published hostname behind a Cloudflare Access service token. Here Hyperdrive checks the certificate itself and
   the Origin CA isn't publicly trusted, so the config is made with wrangler, which can name a CA (the dashboard

@@ -2,7 +2,9 @@
 
 **Status (2026-10-21):** the site reads PostgreSQL on the Hetzner server hetz-stock (Hyperdrive config
 `cm-games-hetz`), set up and migrated from Neon with [`ops/postgres/`](../ops/postgres/README.md). Neon stays,
-untouched, for a rollback until it is retired (runbook steps 9–11).
+untouched, until it is retired (runbook step 11), but its data is of 21 Oct: a rollback to it is no longer the way
+out of a database problem (restore from the backups instead). Until the off-site copy (step 10) is set up, every
+backup is on hetz-stock's own disk and Neon is the only copy off the box ("Losing the box").
 
 ## Why not Neon
 
@@ -23,9 +25,11 @@ CU-hour), more when crawls push it above the smallest size. Neon's $5 spending a
   of memory); no point-in-time restore (nightly full dumps plus hourly dumps of the tables that can't be rebuilt,
   an off-site copy, and a restore drill every month); security updates are automatic, major upgrades are ours. If
   the box is lost: a new box restored from the off-site copy (newest full dump, then the site's own tables from
-  the newest hourly one, then "Republish all approved"), with new secrets (certificate, Hyperdrive password);
-  the runbook's "Losing the box" has the steps. Only if every dump is gone are the TWIC tables rebuilt from
-  source (hours).
+  the newest hourly one, then "Republish all approved"), with new secrets (certificate, Hyperdrive password,
+  engine token), and the engine set up again (its setup is not in this repository); the runbook's "Losing the box"
+  has the steps, and Hetzner Cloud Backups would bring the whole box back in one. Only if every dump is gone are
+  the TWIC tables rebuilt from source (hours). The way onto the box goes through the Mac mini at home; the runbook
+  has the ways in without it.
 - **No open port:** Postgres listens on localhost; Hyperdrive comes in through a Cloudflare Tunnel (Workers VPC),
   with TLS and a role that can only do what the site does (`scripts/db/grants.sql`).
 
@@ -69,8 +73,11 @@ Measured on the full dataset, connections per uncached request:
 2. **Workers plan**: uploads replay every move of a PGN, which needs more than the 10 ms of CPU a request gets on
    Workers Free. The current Hyperdrive config's connection limit of 60 suggests the account is already on Workers
    Paid; check under Workers & Pages → Plans.
-3. **Off-site backups and an alarm** (`ops/postgres/README.md`, step 10): a nightly pull to the Mac mini or R2, and
-   a free healthchecks.io check.
+3. **Off-site backups and an alarm** (`ops/postgres/README.md`, step 10), first: R2 (preferred) or a nightly pull
+   to the Mac mini, Hetzner Cloud Backups as the stopgap, and a free healthchecks.io check (`HC_URL`, with
+   `SITE_CHECK_URL` and `ENGINE_CHECK_URL`). Until then `cm-db-check` reports "no off-site copy configured".
+   Also: a second SSH key and a console password for when the Mac mini is unreachable, and the Neon credentials
+   off the server (runbook "Secrets").
 4. **Search Console**: watch Crawl Stats after reopening; Google ignores robots `Crawl-delay` (its own form:
    https://developers.google.com/search/docs/crawling-indexing/reduce-crawl-rate); Bing honours it.
 5. **Retire Neon** after a week or two on hetz-stock (step 11).

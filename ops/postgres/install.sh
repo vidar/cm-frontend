@@ -17,7 +17,8 @@
 #   3. adds systemd drop-ins: postgresql@.service (OOM policy, restart) and system-postgresql.slice (CPU
 #      priority over the engine and renders, no swap);
 #   4. creates the roles cm_owner (owns the database; imports) and cm_web (Hyperdrive), with random
-#      passwords kept in /etc/cm-db/<role>.password (root only), and the database cm_games with pg_trgm;
+#      passwords kept in /etc/cm-db/<role>.password (root only), and the database cm_games with pg_trgm
+#      (a deleted password file gets a new password: README "Secrets" rotates cm_web's without an outage);
 #   5. once the tables exist (after migrate-from-neon.sh): the site's own schema scripts (scripts/*.pg.sql,
 #      idempotent: a rerun applies their additions) and scripts/db/grants.sql;
 #   6. installs the backup, health-check and monthly restore-drill timers (cm-db-backup, cm-db-check,
