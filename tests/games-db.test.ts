@@ -1,14 +1,16 @@
-// Integration tests for src/lib/games.ts against the LOCAL Postgres copy of the TWIC games database
-// (postgres://postgres:postgres@localhost:5432/cm_games, or TEST_DATABASE_URL; see tests/db.ts and
-// tests/stubs/cloudflare-workers.ts). Every database suite is wrapped in describe.skipIf so the file
-// passes trivially where there is no database (e.g. CI); only the pure helpers (twicIssueDate) run there.
+// Integration tests for src/lib/games.ts against a Postgres copy of the TWIC games database (TEST_DATABASE_URL;
+// see tests/db.ts and tests/stubs/cloudflare-workers.ts). Every database suite is wrapped in describe.skipIf, so
+// the file passes trivially where there is no database; only the pure helpers (twicIssueDate) run there.
 //
 // Covers getGame, getGamePage, getPlayerPage (both colours, paging), playerGames/playerScore agreeing
 // with getPlayerPage, getEventWithGames, eventRedirect, searchPlayers, topPlayers, recentEvents,
 // recentTopGames, gameMoves, getMeta, headToHead, gamePath and twicIssueDate. Fixtures are real rows
 // (game 3076939 Praggnanandhaa–Rapport, Magnus Carlsen, the 46th Olympiad 2026) and every expected value
-// below (counts, orderings, first rows, scores) was worked out with SQL against the same database first,
-// so the assertions are exact.
+// below (counts, orderings, first rows, scores) was worked out with SQL against one production snapshot
+// (TWIC 920–1664, 3,547,522 games), so the assertions are exact. Those tests (itSnapshot) run only on that
+// snapshot, recognised by its `meta` totals, and say so when they skip; the ones that hold for any database
+// (unknown ids and slugs, empty input) run on every database. After a new import, rework the fixtures with SQL
+// and update SNAPSHOT.
 import { describe, expect, it } from 'vitest';
 import {
   eventRedirect,
@@ -31,9 +33,22 @@ import {
   twicIssueDate,
   type GameRow,
 } from '../src/lib/games';
-import { dbAvailable } from './db';
+import { dbAvailable, metaValue, notice } from './db';
 
-const describeDb = describe.skipIf(!(await dbAvailable()));
+/** `meta` of the production snapshot the fixtures below come from. */
+const SNAPSHOT = { games: '3547522', last_issue: '1664' };
+const db = await dbAvailable();
+const found = db ? { games: await metaValue('games'), last_issue: await metaValue('last_issue') } : null;
+const snapshot = found !== null && found.games === SNAPSHOT.games && found.last_issue === SNAPSHOT.last_issue;
+if (db && !snapshot) {
+  notice(
+    `games-db: skipping the production-snapshot tests: this database is not the snapshot they were written against ` +
+      `(meta games=${found?.games ?? 'none'}, last_issue=${found?.last_issue ?? 'none'}; the snapshot has ${SNAPSHOT.games} and ${SNAPSHOT.last_issue}).`,
+  );
+}
+const describeDb = describe.skipIf(!db);
+/** A test whose expected values are rows of the production snapshot. */
+const itSnapshot = it.skipIf(!snapshot);
 
 // ---- fixtures (values checked with SQL) --------------------------------------------------------
 
@@ -154,7 +169,7 @@ function isNewestFirst(games: Pick<GameRow, 'date' | 'id'>[]) {
 // ---- getGame ----------------------------------------------------------------------------------
 
 describeDb('getGame', () => {
-  it('returns the full row of game 3076939 with player and event names and moves', async () => {
+  itSnapshot('returns the full row of game 3076939 with player and event names and moves', async () => {
     const g = await getGame(GAME_ID);
     expect(g).not.toBeNull();
     expect(g).toMatchObject(GAME_3076939);
@@ -171,7 +186,7 @@ describeDb('getGame', () => {
 // ---- getGamePage ------------------------------------------------------------------------------
 
 describeDb('getGamePage', () => {
-  it('returns the game with the opening name from the openings table', async () => {
+  itSnapshot('returns the game with the opening name from the openings table', async () => {
     const page = await getGamePage(GAME_ID);
     expect(page).not.toBeNull();
     const { game } = page!;
@@ -182,7 +197,7 @@ describeDb('getGamePage', () => {
     expect('h2h' in game).toBe(false);
   });
 
-  it('lists the other games between the same two players in either colour, newest first, without the game itself', async () => {
+  itSnapshot('lists the other games between the same two players in either colour, newest first, without the game itself', async () => {
     const { others } = (await getGamePage(GAME_ID))!;
     const [{ n }] = await query<{ n: number }>(
       `SELECT count(*)::int AS n FROM games
@@ -202,7 +217,7 @@ describeDb('getGamePage', () => {
     expect(others.filter((g) => g.black_id === PRAGG_ID)).toHaveLength(4);
   });
 
-  it('honours the limit on other games', async () => {
+  itSnapshot('honours the limit on other games', async () => {
     const { others } = (await getGamePage(GAME_ID, 3))!;
     expect(ids(others)).toEqual(H2H_IDS.filter((id) => id !== GAME_ID).slice(0, 3));
   });
@@ -215,7 +230,7 @@ describeDb('getGamePage', () => {
 // ---- getPlayerPage ----------------------------------------------------------------------------
 
 describeDb('getPlayerPage', () => {
-  it('returns the player row, the first page of games newest first and the overall score', async () => {
+  itSnapshot('returns the player row, the first page of games newest first and the overall score', async () => {
     const page = await getPlayerPage('magnus-carlsen', 1);
     expect(page).not.toBeNull();
     const { player, games, hasMore, score } = page!;
@@ -231,7 +246,7 @@ describeDb('getPlayerPage', () => {
     expect(score.w + score.d + score.l).toBe(player.games);
   });
 
-  it("restricts to the player's games as White with color 'w'", async () => {
+  itSnapshot("restricts to the player's games as White with color 'w'", async () => {
     const { games, hasMore, score } = (await getPlayerPage('magnus-carlsen', 1, 'w'))!;
     expect(games).toHaveLength(50);
     expect(hasMore).toBe(true);
@@ -242,14 +257,14 @@ describeDb('getPlayerPage', () => {
     expect(score).toEqual(CARLSEN_SCORE);
   });
 
-  it("restricts to the player's games as Black with color 'b'", async () => {
+  itSnapshot("restricts to the player's games as Black with color 'b'", async () => {
     const { games } = (await getPlayerPage('magnus-carlsen', 1, 'b'))!;
     expect(games).toHaveLength(50);
     for (const g of games) expect(g.black_id).toBe(CARLSEN_ID);
     expect(isNewestFirst(games)).toBe(true);
   });
 
-  it('continues on page 2 exactly where page 1 stopped, without overlap', async () => {
+  itSnapshot('continues on page 2 exactly where page 1 stopped, without overlap', async () => {
     const [p1, p2] = await Promise.all([getPlayerPage('magnus-carlsen', 1), getPlayerPage('magnus-carlsen', 2)]);
     expect(p2!.games).toHaveLength(50);
     expect(p2!.hasMore).toBe(true);
@@ -268,7 +283,7 @@ describeDb('getPlayerPage', () => {
 // ---- playerGames / playerScore ----------------------------------------------------------------
 
 describeDb('playerGames and playerScore', () => {
-  it('playerGames gives the same page as getPlayerPage', async () => {
+  itSnapshot('playerGames gives the same page as getPlayerPage', async () => {
     const [page, both, white] = await Promise.all([
       getPlayerPage('magnus-carlsen', 1),
       playerGames(CARLSEN_ID, 1),
@@ -280,12 +295,12 @@ describeDb('playerGames and playerScore', () => {
     expect(ids(white.games)).toEqual(ids(pageWhite!.games));
   });
 
-  it('playerGames page 2 matches getPlayerPage page 2', async () => {
+  itSnapshot('playerGames page 2 matches getPlayerPage page 2', async () => {
     const [page, games] = await Promise.all([getPlayerPage('magnus-carlsen', 2), playerGames(CARLSEN_ID, 2)]);
     expect(ids(games.games)).toEqual(ids(page!.games));
   });
 
-  it('playerScore gives the same score as getPlayerPage', async () => {
+  itSnapshot('playerScore gives the same score as getPlayerPage', async () => {
     const [page, score] = await Promise.all([getPlayerPage('magnus-carlsen', 1), playerScore(CARLSEN_ID)]);
     expect(score).toEqual(CARLSEN_SCORE);
     expect(score).toEqual(page!.score);
@@ -299,7 +314,7 @@ describeDb('playerGames and playerScore', () => {
 // ---- getEventWithGames ------------------------------------------------------------------------
 
 describeDb('getEventWithGames', () => {
-  it('returns the 46th Olympiad with all 4480 games ordered by id and opening names joined', async () => {
+  itSnapshot('returns the 46th Olympiad with all 4480 games ordered by id and opening names joined', async () => {
     const res = await getEventWithGames('46th-olympiad-2026');
     expect(res).not.toBeNull();
     const { event, games } = res!;
@@ -323,7 +338,7 @@ describeDb('getEventWithGames', () => {
 // ---- eventRedirect ----------------------------------------------------------------------------
 
 describeDb('eventRedirect', () => {
-  it('maps an old slug in event_redirects to the current slug of its event', async () => {
+  itSnapshot('maps an old slug in event_redirects to the current slug of its event', async () => {
     // event_redirects: '10th-balagne-rapid-ko-2013-2' -> event 886, whose slug is '10th-balagne-rapid-ko-2013'.
     expect(await eventRedirect('10th-balagne-rapid-ko-2013-2')).toBe('10th-balagne-rapid-ko-2013');
   });
@@ -337,7 +352,7 @@ describeDb('eventRedirect', () => {
 // ---- searchPlayers / topPlayers ---------------------------------------------------------------
 
 describeDb('searchPlayers', () => {
-  it("finds every player whose search text contains 'carlsen', most games first", async () => {
+  itSnapshot("finds every player whose search text contains 'carlsen', most games first", async () => {
     const players = await searchPlayers('carlsen');
     // SELECT slug FROM players WHERE search LIKE '%carlsen%' -> 7 rows.
     expect(players).toHaveLength(7);
@@ -355,12 +370,12 @@ describeDb('searchPlayers', () => {
     for (let i = 1; i < players.length; i++) expect(players[i].games).toBeLessThanOrEqual(players[i - 1].games);
   });
 
-  it('is case-insensitive and matches on the slugified term', async () => {
+  itSnapshot('is case-insensitive and matches on the slugified term', async () => {
     expect(ids(await searchPlayers('CARLSEN'))).toEqual(ids(await searchPlayers('carlsen')));
     expect((await searchPlayers('magnus carlsen'))[0].slug).toBe('magnus-carlsen');
   });
 
-  it('honours the limit', async () => {
+  itSnapshot('honours the limit', async () => {
     const players = await searchPlayers('carlsen', 2);
     expect(players.map((p) => p.slug)).toEqual(['magnus-carlsen', 'henrik-carlsen']);
   });
@@ -373,7 +388,7 @@ describeDb('searchPlayers', () => {
 });
 
 describeDb('topPlayers', () => {
-  it('returns the players with the most games, most first', async () => {
+  itSnapshot('returns the players with the most games, most first', async () => {
     const players = await topPlayers(3);
     expect(players.map((p) => [p.id, p.slug, p.games])).toEqual([
       [1, 'hikaru-nakamura', 9331],
@@ -386,7 +401,7 @@ describeDb('topPlayers', () => {
 // ---- recentEvents / recentTopGames ------------------------------------------------------------
 
 describeDb('recentEvents', () => {
-  it('returns the latest events by start date, newest first', async () => {
+  itSnapshot('returns the latest events by start date, newest first', async () => {
     const events = await recentEvents(5);
     expect(events).toHaveLength(5);
     expect(events.map((e) => e.start_date)).toEqual(['2026-09-27', '2026-09-26', '2026-09-25', '2026-09-25', '2026-09-24']);
@@ -401,7 +416,7 @@ describeDb('recentEvents', () => {
 });
 
 describeDb('recentTopGames', () => {
-  it('returns the most recent games with an average rating of at least 2600, strongest first on a day', async () => {
+  itSnapshot('returns the most recent games with an average rating of at least 2600, strongest first on a day', async () => {
     const games = await recentTopGames(5);
     expect(games).toHaveLength(5);
     // The 3000 most recent games cover every game of the last date (905 on 2026-09-27), so this is exact.
@@ -419,7 +434,7 @@ describeDb('recentTopGames', () => {
 // ---- gameMoves / getMeta ----------------------------------------------------------------------
 
 describeDb('gameMoves', () => {
-  it('returns the moves of the requested games keyed by id', async () => {
+  itSnapshot('returns the moves of the requested games keyed by id', async () => {
     const moves = await gameMoves([GAME_ID, 1000]);
     expect(moves.size).toBe(2);
     expect(moves.get(GAME_ID)).toBe(MOVES_3076939);
@@ -427,7 +442,7 @@ describeDb('gameMoves', () => {
     expect(moves.get(1000)!.split(' ')).toHaveLength(117); // plies of game 1000
   });
 
-  it('leaves out ids that do not exist and returns an empty map for no ids', async () => {
+  itSnapshot('leaves out ids that do not exist and returns an empty map for no ids', async () => {
     expect((await gameMoves([999999999])).size).toBe(0);
     const mixed = await gameMoves([999999999, 1000]);
     expect([...mixed.keys()]).toEqual([1000]);
@@ -436,7 +451,7 @@ describeDb('gameMoves', () => {
 });
 
 describeDb('getMeta', () => {
-  it('returns the totals from the meta table as numbers', async () => {
+  itSnapshot('returns the totals from the meta table as numbers', async () => {
     const meta = await getMeta();
     expect(meta.games).toBe(3547522);
     expect(meta.players).toBe(120492);
@@ -449,20 +464,20 @@ describeDb('getMeta', () => {
 // ---- headToHead -------------------------------------------------------------------------------
 
 describeDb('headToHead', () => {
-  it('returns all games between two players newest first, in either colour, including the fixture game', async () => {
+  itSnapshot('returns all games between two players newest first, in either colour, including the fixture game', async () => {
     const games = await headToHead(PRAGG_ID, RAPPORT_ID);
     expect(ids(games)).toEqual(H2H_IDS);
     expect(games).toHaveLength(10);
     expect(games.find((g) => g.id === GAME_ID)).toMatchObject({ white_name: 'Praggnanandhaa R', black_name: 'Richard Rapport', result: '0-1' });
   });
 
-  it('is symmetric in the order of its arguments', async () => {
+  itSnapshot('is symmetric in the order of its arguments', async () => {
     const [ab, ba] = await Promise.all([headToHead(PRAGG_ID, RAPPORT_ID), headToHead(RAPPORT_ID, PRAGG_ID)]);
     expect(ids(ba)).toEqual(ids(ab));
     expect(ba).toEqual(ab);
   });
 
-  it('honours the limit', async () => {
+  itSnapshot('honours the limit', async () => {
     expect(ids(await headToHead(RAPPORT_ID, PRAGG_ID, 3))).toEqual(H2H_IDS.slice(0, 3));
   });
 
@@ -474,12 +489,12 @@ describeDb('headToHead', () => {
 // ---- gamePath ---------------------------------------------------------------------------------
 
 describeDb('gamePath', () => {
-  it('builds the canonical path of game 3076939 from its row', async () => {
+  itSnapshot('builds the canonical path of game 3076939 from its row', async () => {
     const g = await getGame(GAME_ID);
     expect(gamePath(g!)).toBe('/games/3076939-r-vs-rapport-2nd-uzchess-cup-masters-2025/');
   });
 
-  it('does not repeat the year when the event name already has it', async () => {
+  itSnapshot('does not repeat the year when the event name already has it', async () => {
     const { games } = (await getEventWithGames('46th-olympiad-2026'))!;
     expect(gamePath({ ...games[0], date: games[0].date })).toBe('/games/3531411-christie-vs-abdusattorov-46th-olympiad-2026/');
   });

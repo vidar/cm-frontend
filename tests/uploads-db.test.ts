@@ -4,9 +4,11 @@
 // games with ids from UPLOAD_ID_BASE, slugs, FIDE-ID matching), publishing straight away once approved
 // (new rounds, replaced rounds and their engine analyses), reject, approving again and republishAll (which also
 // takes down uploaded events no approved upload points to, as after a restore from an older backup).
-// Needs the local Postgres copy of the games database (tests/db.ts; the suite skips itself without it).
+// Needs a test database with the schema (tests/db.ts; the suite skips itself without one, and refuses cm_games).
 // Everything written is marked "Vitest" (names, slugs) and removed in afterAll; real rows (ids below
 // UPLOAD_ID_BASE) are never touched: players are matched by a fake FIDE ID or by names no TWIC player has.
+// republishAll() and createUpload() act site-wide, though (every approved upload, old pending ones, orphaned
+// analyses of uploaded ids), which is why this runs on a test database only, one file at a time (vitest.config.ts).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { query, slugify } from '../src/lib/games';
 import type { ParsedGame } from '../src/lib/pgn';
@@ -30,7 +32,7 @@ import {
   UPLOAD_ID_BASE,
   type Upload,
 } from '../src/lib/uploads';
-import { dbAvailable } from './db';
+import { writableDbAvailable } from './db';
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -237,7 +239,7 @@ function expectUpload(u: Upload | null): asserts u is Upload {
 
 // ---- the flow ---------------------------------------------------------------------------------
 
-describe.skipIf(!(await dbAvailable()))('uploads (local database)', () => {
+describe.skipIf(!(await writableDbAvailable()))('uploads (local database)', () => {
   // Shared state, filled in as the flow progresses (vitest runs the tests of a file in order).
   let tokenA: string;
   let tokenB: string;

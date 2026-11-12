@@ -1,5 +1,14 @@
-# Unit tests on every push and pull request. Integration tests that need the games database skip
-# themselves here (no TEST_DATABASE_URL); run them locally against a Postgres copy.
+# Tests on every push and pull request, and the build that Workers Builds will run.
+#
+# test: the whole suite, with the database tests against a PostgreSQL 18 service (the server's version) made from the
+# repository's own schema scripts, applied twice to prove they are idempotent, plus a few seeded games
+# (tests/fixtures/create-test-db.sh). The tests connect as cm_web with exactly the rights in scripts/db/grants.sql, so
+# a write the grants don't cover fails here before it fails on the site. The upload and analysis tests run in full;
+# games-db and game-search-db run their database-independent tests and skip, saying so, the ones whose expected
+# values are rows of the production snapshot or of the 14-issue sample (run those locally against those copies).
+# TEST_DATABASE_URL is set, so a database that can't be reached fails the job instead of skipping the tests.
+#
+# build: npm run build and a wrangler dry run, as CLAUDE.md asks before every push.
 name: Tests
 on:
   push:
@@ -7,6 +16,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      TEST_DATABASE_URL: postgres://cm_web:cm_web@localhost:5432/cm_games_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -14,4 +40,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Create the test database from the schema scripts
+        run: bash tests/fixtures/create-test-db.sh cm_games_test
       - run: npm test
+  build:
+    runs-on: ubuntu-latest
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx wrangler deploy --dry-run

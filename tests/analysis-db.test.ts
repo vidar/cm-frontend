@@ -4,20 +4,24 @@
 // retry pause after a failed annotation, the per-client daily limits, an engine job the engine stops answering
 // for, and an AI outage (nothing stored). No engine or model is ever called: ENGINE_URL and the Anthropic
 // base URL point at a closed port, and most annotated games have no analysis, so generate() stops before the call.
-// Needs the local Postgres copy (tests/db.ts; skips itself without it). Writes only game_analysis and
-// game_annotation rows, for games that had none and for ids above any real game, and removes them in afterAll.
+// Needs a test database with at least five games (tests/db.ts; skips itself without one). Writes only game_analysis
+// and game_annotation rows, for games that had none and for ids FAKE..FAKE_END that no game has, and removes them in
+// afterAll. Those ids are below UPLOAD_ID_BASE (and far above any TWIC id), so the upload tests, which check and drop
+// rows of uploaded ids without a game, never see them.
 import { env } from 'cloudflare:workers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CLIENT_DAILY_LIMIT as ENGINE_CLIENT_LIMIT, DAILY_LIMIT as ENGINE_DAILY_LIMIT, getAnalysis, queueAnalysis, requesterId } from '../src/lib/analysis';
 import { CLIENT_DAILY_LIMIT as AI_CLIENT_LIMIT, createAnnotation, DAILY_LIMIT as AI_DAILY_LIMIT, getAnnotation, UNAVAILABLE } from '../src/lib/annotate';
 import { query } from '../src/lib/games';
-import { dbAvailable } from './db';
+import { UPLOAD_ID_BASE } from '../src/lib/uploads';
+import { writableDbAvailable } from './db';
 
 const vars = env as unknown as Record<string, string | undefined>;
 const saved = { ENGINE_URL: vars.ENGINE_URL, STOCKFISH_TOKEN: vars.STOCKFISH_TOKEN, ANTHROPIC_KEY: vars.ANTHROPIC_KEY };
 const savedBase = process.env.ANTHROPIC_BASE_URL;
-/** Ids no game has (int4 still holds them): filler rows for the daily-limit tests. */
-const FAKE = 2_100_000_000;
+/** Ids no game has, between the TWIC ids (a few million) and UPLOAD_ID_BASE: filler rows for the daily-limit tests. */
+const FAKE = UPLOAD_ID_BASE - 10_000_000;
+const FAKE_END = FAKE + 1_000_000;
 /** Real games without analyses or notes, picked in beforeAll. */
 let ids: number[] = [];
 
@@ -28,11 +32,11 @@ const annotationRow = async (id: number) =>
 const cleanup = async () => {
   if (!ids.length) return;
   const list = `{${ids.join(',')}}`;
-  await query('DELETE FROM game_analysis WHERE game_id = ANY($1::int[]) OR game_id >= $2', [list, FAKE]);
-  await query('DELETE FROM game_annotation WHERE game_id = ANY($1::int[]) OR game_id >= $2', [list, FAKE]);
+  await query('DELETE FROM game_analysis WHERE game_id = ANY($1::int[]) OR (game_id >= $2 AND game_id < $3)', [list, FAKE, FAKE_END]);
+  await query('DELETE FROM game_annotation WHERE game_id = ANY($1::int[]) OR (game_id >= $2 AND game_id < $3)', [list, FAKE, FAKE_END]);
 };
 
-describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against the database', () => {
+describe.skipIf(!(await writableDbAvailable()))('engine analysis and AI notes against the database', () => {
   beforeAll(async () => {
     // A closed local port: every engine call fails at once, as when the VPS is down.
     vars.ENGINE_URL = 'http://127.0.0.1:9';
@@ -42,10 +46,11 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
     process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9';
     ids = (
       await query<{ id: number }>(
-        `SELECT id FROM games g WHERE id < 100000000
+        `SELECT id FROM games g WHERE id < $1
            AND NOT EXISTS (SELECT 1 FROM game_analysis a WHERE a.game_id = g.id)
            AND NOT EXISTS (SELECT 1 FROM game_annotation n WHERE n.game_id = g.id)
          ORDER BY id LIMIT 5`,
+        [FAKE],
       )
     ).map((r) => r.id);
     expect(ids).toHaveLength(5);
@@ -104,7 +109,7 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
       await query(`INSERT INTO game_analysis (game_id, status, error) SELECT $1::int + i, 'failed', 'filler' FROM generate_series(1, $2::int) AS i`, [FAKE, ENGINE_DAILY_LIMIT]);
       expect(await queueAnalysis(ids[2])).toEqual({ refused: 'The daily limit for engine analysis is reached. Please try again tomorrow.', code: 503 });
       expect(await analysisRow(ids[2])).toBeNull();
-      await query('DELETE FROM game_analysis WHERE game_id >= $1', [FAKE]);
+      await query('DELETE FROM game_analysis WHERE game_id >= $1 AND game_id < $2', [FAKE, FAKE_END]);
     });
 
     it('refuses a client that has used its own daily limit, but not other clients', async () => {
@@ -113,7 +118,7 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
       expect(await analysisRow(ids[2])).toBeNull();
       expect(await queueAnalysis(ids[2], 'other-client')).toEqual({ status: 'failed', error: 'engine unreachable' });
       expect((await query<{ requester: string }>('SELECT requester FROM game_analysis WHERE game_id = $1', [ids[2]]))[0].requester).toBe('other-client');
-      await query('DELETE FROM game_analysis WHERE game_id >= $1', [FAKE]);
+      await query('DELETE FROM game_analysis WHERE game_id >= $1 AND game_id < $2', [FAKE, FAKE_END]);
     });
 
     it('keeps a job through a short engine fault, then fails it so it can be retried', async () => {
@@ -170,7 +175,7 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
       await query(`INSERT INTO game_annotation (game_id, status, requester) SELECT $1::int + i, 'done', 'busy-client' FROM generate_series(1, $2::int) AS i`, [FAKE, AI_CLIENT_LIMIT]);
       expect(await createAnnotation(ids[4], { requester: 'busy-client' })).toEqual({ refused: 'You have asked for AI notes on many games today. Please try again tomorrow.', code: 429 });
       expect(await annotationRow(ids[4])).toBeNull();
-      await query('DELETE FROM game_annotation WHERE game_id >= $1', [FAKE]);
+      await query('DELETE FROM game_annotation WHERE game_id >= $1 AND game_id < $2', [FAKE, FAKE_END]);
     });
 
     it('does not take over a run that is still going, but reclaims one left running too long', async () => {
@@ -182,8 +187,11 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
     });
 
     it('refuses once the daily budget is used, also for parallel requests', async () => {
-      // With the row of ids[3] from the tests above, two slots are left; five requests at once: the lock lets exactly two claim.
-      await query(`INSERT INTO game_annotation (game_id, status) SELECT $1::int + i, 'done' FROM generate_series(1, $2::int - 3) AS i`, [FAKE, AI_DAILY_LIMIT]);
+      // Fill the day's budget up to two slots (counting the row of ids[3] from the tests above and any other row of the
+      // day); five requests at once: the lock lets exactly two claim.
+      const [{ used }] = await query<{ used: number }>(`SELECT count(*)::int AS used FROM game_annotation WHERE requested_at > now() - interval '1 day'`);
+      expect(used).toBeLessThanOrEqual(AI_DAILY_LIMIT - 2);
+      await query(`INSERT INTO game_annotation (game_id, status) SELECT $1::int + i, 'done' FROM generate_series(1, $2::int) AS i`, [FAKE, AI_DAILY_LIMIT - 2 - used]);
       const results = await Promise.all([ids[0], ids[1], ids[2], FAKE + 500_001, FAKE + 500_002].map((id) => createAnnotation(id)));
       const refused = results.filter((r) => 'refused' in r);
       expect(refused).toHaveLength(3);
