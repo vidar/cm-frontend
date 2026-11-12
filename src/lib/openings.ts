@@ -1,4 +1,5 @@
 import { Chess } from 'chess.js';
+import { formatMovesFrom } from './chess/notation';
 
 // lichess-org/chess-openings (CC0), see src/data/README.md.
 const files = import.meta.glob('../data/openings/*.tsv', { query: '?raw', import: 'default', eager: true }) as Record<
@@ -14,6 +15,13 @@ export interface Opening {
   family: string;
   /** Variation part after ":" (may be empty). */
   variation: string;
+  /**
+   * For a name that several lines share: the last moves that tell this line apart from the others,
+   * e.g. "6. Bg5 e6". Undefined when the name is unique.
+   */
+  tail?: string;
+  /** The name, plus the tail in brackets when the name is shared: unique, for titles, headings and links. */
+  title: string;
   pgn: string;
   /** SAN moves without move numbers. */
   moves: string[];
@@ -44,7 +52,9 @@ export function getOpenings(): Opening[] {
     }
   }
 
-  // Some names cover several move orders; give each a unique slug.
+  // Some names cover several move orders; give each a unique slug. The slugs (-2, -3… in file and row
+  // order) are URLs and must not change: scripts/twic/build.py tags games with them and
+  // tests/openings.test.ts pins them.
   const nameCounts = new Map<string, number>();
   for (const r of rows) nameCounts.set(r.name, (nameCounts.get(r.name) ?? 0) + 1);
   const used = new Map<string, number>();
@@ -67,14 +77,39 @@ export function getOpenings(): Opening[] {
       name,
       family: family.trim(),
       variation: rest.join(':').trim(),
+      title: name,
       pgn,
       moves: history.map((m) => m.san),
       fen: chess.fen(),
       lastMove: [last.from, last.to] as [string, string],
     };
   });
+  addTails(cache);
   return cache;
 }
+
+/**
+ * Gives every line whose name is shared the shortest tail of its moves (at least a full move) that no
+ * other line of that name ends with at the same ply, so titles and links tell them apart.
+ */
+function addTails(all: Opening[]) {
+  const groups = new Map<string, Opening[]>();
+  for (const o of all) groups.set(o.name, [...(groups.get(o.name) ?? []), o]);
+  const tailKey = (o: Opening, k: number) => `${o.moves.length}:${o.moves.slice(-k).join(' ')}`;
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    for (const o of group) {
+      const len = o.moves.length;
+      let k = Math.min(2, len);
+      while (k < len && group.some((p) => p !== o && tailKey(p, k) === tailKey(o, k))) k++;
+      o.tail = formatMovesFrom(o.moves.slice(len - k), len - k);
+      o.title = `${o.name} (${o.tail})`;
+    }
+  }
+}
+
+/** Short link text for a line among its family: the variation (or name) and, for shared names, the tail. */
+export const lineLabel = (o: Opening) => `${o.variation || o.name}${o.tail ? ` (${o.tail})` : ''}`;
 
 export { formatMoves } from './chess/notation';
 

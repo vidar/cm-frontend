@@ -78,6 +78,14 @@ export function publishedDates(now = new Date()): string[] {
   return dates.reverse();
 }
 
+/** The archive's entries for every published date, newest first: read from the data without replaying moves. */
+export function listPuzzles(now = new Date()): { number: number; date: string; rating: number; themes: string[] }[] {
+  return publishedDates(now).map((date) => {
+    const i = indexFor(date);
+    return { number: i + 1, date, rating: PUZZLES[i].rating, themes: PUZZLES[i].themes };
+  });
+}
+
 /** Seconds until the next UTC midnight (when the daily puzzle changes). */
 export const secondsUntilNextPuzzle = (now = new Date()) =>
   Math.max(60, Math.floor((Math.floor(now.getTime() / DAY + 1) * DAY - now.getTime()) / 1000));

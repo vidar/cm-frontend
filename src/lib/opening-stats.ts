@@ -4,7 +4,7 @@
 import statsData from '../data/opening-stats.json';
 import evalsData from '../data/opening-evals.json';
 import masterData from '../data/opening-master-games.json';
-import { Chess } from 'chess.js';
+import { Chess, type Square } from 'chess.js';
 import type { Opening } from './openings';
 
 export type Wdb = [number, number, number]; // white wins, draws, black wins
@@ -47,13 +47,19 @@ export const bands = statsData.bands as string[];
 export const getStats = (o: Opening): LineStats | undefined => lines[o.moves.join(' ')];
 export const getEval = (o: Opening): EngineEval | undefined => evals[o.moves.join(' ')] ?? undefined;
 
+// The Lichess evaluations write castling as king takes rook (e1h1); chess.js wants the king's square.
+const CASTLING: Record<string, string> = { e1h1: 'g1', e1a1: 'c1', e8h8: 'g8', e8a8: 'c8' };
+
 /** Converts the first `max` moves of a UCI line to SAN from the opening's position. */
-export function pvToSan(o: Opening, pv: string[], max = 6): string[] {
+export function pvToSan(o: Pick<Opening, 'fen'>, pv: string[], max = 6): string[] {
   const chess = new Chess(o.fen);
   const san: string[] = [];
   for (const uci of pv.slice(0, max)) {
+    const from = uci.slice(0, 2);
+    const castle = CASTLING[uci.slice(0, 4)];
+    const to = castle && chess.get(from as Square)?.type === 'k' ? castle : uci.slice(2, 4);
     try {
-      san.push(chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }).san);
+      san.push(chess.move({ from, to, promotion: uci[4] }).san);
     } catch {
       break;
     }

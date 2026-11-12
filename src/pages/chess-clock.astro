@@ -37,8 +37,9 @@ const presets = [
   </div>
 
   <form id="settings" class="settings">
-    <fieldset>
+    <fieldset id="settings-fields">
       <legend>Time control</legend>
+      <p class="hint" id="settings-hint" hidden>Reset the clock to change the time control.</p>
       <div class="presets">
         {presets.map(([tc, kind]) => <button type="button" data-preset={tc} title={kind}>{tc}</button>)}
       </div>
@@ -104,6 +105,8 @@ const presets = [
   .presets button.selected { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .custom { display: flex; flex-wrap: wrap; gap: 0.75rem; }
   .custom input { width: 5rem; }
+  .hint { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.9rem; }
+  #reset.confirm { background: var(--loss); border-color: var(--loss); color: #fff; }
 </style>
 
 <script>
@@ -114,17 +117,23 @@ const presets = [
   const bonusEl = $<HTMLInputElement>('bonus');
   const modeEl = $<HTMLSelectElement>('mode');
   const pauseBtn = $<HTMLButtonElement>('pause');
+  const resetBtn = $<HTMLButtonElement>('reset');
+  const settingsEl = $<HTMLFieldSetElement>('settings-fields');
 
   let base = 300_000, bonus = 0, mode: 'fischer' | 'delay' = 'fischer';
   let remaining: Record<Side, number> = { w: base, b: base };
   let moves: Record<Side, number> = { w: 0, b: 0 };
   let active: Side | null = null;
   let turnStart = 0; // performance.now() when the active turn (re)started
+  let turnStartWall = 0; // Date.now() then: performance.now() may stand still while the device sleeps
   let spentBefore = 0; // remaining ms of the active side at turnStart
   let paused = false;
   let flagged: Side | null = null;
   let raf = 0;
-  let wakeLock: { release(): Promise<void> } | null = null;
+  type Sentinel = { released: boolean; release(): Promise<void>; addEventListener(t: 'release', f: () => void): void };
+  let wakeLock: Sentinel | null = null;
+  let wakeLockPending = false;
+  let confirmTimer = 0; // while set, the next tap on Reset resets a game in progress
 
   const fmt = (ms: number) => {
     const t = Math.max(0, ms);
@@ -136,7 +145,7 @@ const presets = [
 
   function current(side: Side) {
     if (side !== active || paused) return remaining[side];
-    const elapsed = performance.now() - turnStart;
+    const elapsed = Math.max(performance.now() - turnStart, Date.now() - turnStartWall);
     const counted = mode === 'delay' ? Math.max(0, elapsed - bonus * 1000) : elapsed;
     return spentBefore - counted;
   }
@@ -154,6 +163,11 @@ const presets = [
     pauseBtn.textContent = paused ? 'Resume' : 'Pause';
     pauseBtn.disabled = !active || !!flagged;
     clock.dataset.state = flagged ? 'flagged' : !active ? 'ready' : paused ? 'paused' : 'running';
+    // A game in progress keeps its time control: a stray tap on a preset mustn't wipe it.
+    const playing = !!active && !flagged;
+    settingsEl.disabled = playing;
+    $('settings-hint').hidden = !playing;
+    if (!playing) disarmReset();
   }
 
   function tick() {
@@ -171,6 +185,7 @@ const presets = [
     active = side;
     spentBefore = remaining[side];
     turnStart = performance.now();
+    turnStartWall = Date.now();
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(tick);
     void requestWakeLock();
@@ -188,7 +203,15 @@ const presets = [
     startTurn(other);
   }
 
+  function disarmReset() {
+    clearTimeout(confirmTimer);
+    confirmTimer = 0;
+    resetBtn.classList.remove('confirm');
+    resetBtn.textContent = 'Reset';
+  }
+
   function reset() {
+    disarmReset();
     cancelAnimationFrame(raf);
     base = Math.round(Math.max(0.25, Number(minutesEl.value) || 5) * 60_000);
     bonus = Math.max(0, Number(bonusEl.value) || 0);
@@ -206,10 +229,22 @@ const presets = [
     render();
   }
 
+  const running = () => !!active && !paused && !flagged;
   async function requestWakeLock() {
+    // The browser releases the lock whenever the page is hidden: a released one is requested again.
+    if ((wakeLock && !wakeLock.released) || wakeLockPending || !('wakeLock' in navigator)) return;
+    wakeLockPending = true;
     try {
-      if (!wakeLock && 'wakeLock' in navigator) wakeLock = await (navigator as any).wakeLock.request('screen');
-    } catch {}
+      const lock: Sentinel = await (navigator as any).wakeLock.request('screen');
+      lock.addEventListener('release', () => {
+        if (wakeLock === lock) wakeLock = null;
+      });
+      wakeLock = lock;
+      if (!running()) releaseWakeLock(); // paused, flagged or reset while it was being granted
+    } catch {
+    } finally {
+      wakeLockPending = false;
+    }
   }
   function releaseWakeLock() {
     void wakeLock?.release().catch(() => {});
@@ -236,7 +271,13 @@ const presets = [
       render();
     }
   });
-  $('reset').addEventListener('click', reset);
+  resetBtn.addEventListener('click', () => {
+    // During a game, Reset asks for a second tap within 3 seconds.
+    if (!active || flagged || confirmTimer) return reset();
+    resetBtn.classList.add('confirm');
+    resetBtn.textContent = 'Tap again to reset';
+    confirmTimer = window.setTimeout(disarmReset, 3000);
+  });
   $('fullscreen').addEventListener('click', () => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void clock.requestFullscreen?.();

@@ -3,7 +3,7 @@ import Layout from '../../../layouts/Layout.astro';
 import BoardDiagram from '../../../components/BoardDiagram.astro';
 import '../../../styles/board.css';
 import ResultBar from '../../../components/ResultBar.astro';
-import { getFamilies, formatMoves } from '../../../lib/openings';
+import { getFamilies, formatMoves, lineLabel } from '../../../lib/openings';
 import { getStats, sumWdb } from '../../../lib/opening-stats';
 
 export function getStaticPaths() {
@@ -34,7 +34,7 @@ const ecoRange = ecos.length > 1 ? `${ecos[0]}–${ecos[ecos.length - 1]}` : eco
         const st = getStats(o);
         return (
           <tr>
-            <td><a href={`/openings/${o.slug}/`}>{o.variation || o.name}</a><br /><span class="muted">{o.eco} · {formatMoves(o.moves)}</span></td>
+            <td><a href={`/openings/${o.slug}/`}>{lineLabel(o)}</a><br /><span class="muted">{o.eco} · {formatMoves(o.moves)}</span></td>
             <td>{st ? st.n.toLocaleString('en') : '–'}</td>
             <td>{st && <ResultBar wdb={sumWdb(st.r)} />}</td>
           </tr>

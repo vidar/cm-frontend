@@ -1,12 +1,13 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getPuzzle, publishedDates, themeLabel, todayUtc } from '../../lib/puzzles';
+import { listPuzzles, secondsUntilNextPuzzle, themeLabel, todayUtc } from '../../lib/puzzles';
 
 export const prerender = false;
-Astro.response.headers.set('Cache-Control', 'public, max-age=300');
+// The list changes at 00:00 UTC: the edge keeps it until then.
+Astro.response.headers.set('Cache-Control', `public, max-age=300, s-maxage=${secondsUntilNextPuzzle()}`);
 
 const today = todayUtc();
-const puzzles = publishedDates().map((d) => getPuzzle(d)!);
+const puzzles = listPuzzles();
 ---
 
 <Layout title="Daily chess puzzle archive" description="Every past chess moments daily puzzle, with ratings and themes.">

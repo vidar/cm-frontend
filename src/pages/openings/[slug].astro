@@ -3,7 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import BoardDiagram from '../../components/BoardDiagram.astro';
 import ResultBar from '../../components/ResultBar.astro';
 import '../../styles/board.css';
-import { getOpenings, getByMoves, formatMoves, parentLine, continuations, familySlug, type Opening } from '../../lib/openings';
+import { getOpenings, getByMoves, formatMoves, parentLine, continuations, familySlug, lineLabel, type Opening } from '../../lib/openings';
 import { formatMovesFrom, formatEval } from '../../lib/chess/notation';
 import { getStats, getEval, getMasterGames, pvToSan, sumWdb, percents, bands, sample, statsSource, masterSource } from '../../lib/opening-stats';
 
@@ -37,6 +37,8 @@ const nextMoves = (stats?.next ?? []).map(([san, n, w, d, b]) => ({
   line: getByMoves([...opening.moves, san].join(' ')),
 }));
 const fmtN = (n: number) => n.toLocaleString('en');
+// Every game of the database whose opening name contains this one (its sub-variations too).
+const searchUrl = `/games/search/?${new URLSearchParams({ opening: opening.name })}`;
 const sampleSize = `${(sample.gamesCounted / 1e6).toFixed(1)} million`;
 const titled = (name: string, title: string | null) => (title ? `${title} ${name}` : name);
 const description = stats
@@ -44,9 +46,9 @@ const description = stats
   : `${opening.name} (ECO ${opening.eco}): ${moves}. Board diagram, FEN and related lines.`;
 ---
 
-<Layout title={`${opening.name} – ${opening.eco}`} description={description} og={{ fen: opening.fen, lastMove: opening.lastMove, kicker: `Opening · ${opening.eco}`, title: opening.name, subtitle: moves, footer: `${sideToMove} to move` }}>
+<Layout title={`${opening.title} – ${opening.eco}`} description={description} og={{ fen: opening.fen, lastMove: opening.lastMove, kicker: `Opening · ${opening.eco}`, title: opening.name, subtitle: moves, footer: `${sideToMove} to move` }}>
   <nav class="crumbs"><a href="/openings/">Openings</a> › <a href={`/openings/family/${familySlug(opening.family)}/`}>{opening.family}</a></nav>
-  <h1>{opening.name}</h1>
+  <h1>{opening.title}</h1>
   <p class="moves"><strong>{moves}</strong></p>
 
   <BoardDiagram fen={opening.fen} highlight={opening.lastMove} title={`${opening.name} after ${moves}`} />
@@ -112,7 +114,7 @@ const description = stats
             <tr>
               <td>
                 <strong>{formatMovesFrom([m.san], ply)}</strong>
-                {m.line && <><br /><a class="small" href={`/openings/${m.line.slug}/`}>{m.line.variation || m.line.name}</a></>}
+                {m.line && <><br /><a class="small" href={`/openings/${m.line.slug}/`}>{lineLabel(m.line)}</a></>}
               </td>
               <td>{fmtN(m.n)} <span class="muted small">({m.share}%)</span></td>
               <td><ResultBar wdb={m.wdb} /></td>
@@ -138,6 +140,7 @@ const description = stats
           </li>
         ))}
       </ul>
+      <p class="small"><a href={searchUrl} rel="nofollow">Search all games of the {opening.name} and its sub-variations</a></p>
     </section>
   )}
 
@@ -158,7 +161,7 @@ const description = stats
   {parent && (
     <section>
       <h2>Comes from</h2>
-      <p><a href={`/openings/${parent.slug}/`}>{parent.name}</a> <span class="muted">{formatMoves(parent.moves)}</span></p>
+      <p><a href={`/openings/${parent.slug}/`}>{parent.title}</a> <span class="muted">{formatMoves(parent.moves)}</span></p>
     </section>
   )}
 
@@ -167,7 +170,7 @@ const description = stats
       <h2>Continuations</h2>
       <ul>
         {next.map((o) => (
-          <li><a href={`/openings/${o.slug}/`}>{o.name}</a> <span class="muted">{o.eco} · {formatMoves(o.moves)}</span></li>
+          <li><a href={`/openings/${o.slug}/`}>{o.title}</a> <span class="muted">{o.eco} · {formatMoves(o.moves)}</span></li>
         ))}
       </ul>
     </section>
@@ -177,7 +180,7 @@ const description = stats
     <section>
       <h2>More {opening.family} lines <a class="small" href={`/openings/family/${familySlug(opening.family)}/`}>(all)</a></h2>
       <ul>
-        {siblings.map((o) => <li><a href={`/openings/${o.slug}/`}>{o.name}</a> <span class="muted">{o.eco}</span></li>)}
+        {siblings.map((o) => <li><a href={`/openings/${o.slug}/`}>{o.title}</a> <span class="muted">{o.eco}</span></li>)}
       </ul>
     </section>
   )}
