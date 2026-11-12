@@ -16,6 +16,8 @@ describe('nameWords', () => {
     expect(nameWords('Kaan Kaan')).toEqual(['kaan']);
     expect(nameWords('a b c d e f g')).toEqual(['a', 'b', 'c', 'd', 'e']);
     expect(nameWords(' - , ')).toEqual([]);
+    expect(nameWords('Карлсен Магнус')).toEqual(['karlsen', 'magnus']);
+    expect(nameWords('Παπαδόπουλος')).toEqual(['papadopoulos']);
   });
 });
 

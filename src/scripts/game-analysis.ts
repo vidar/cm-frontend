@@ -1,6 +1,7 @@
 import { Chess } from 'chess.js';
 import { classify, fmtEval as fmt, LABEL, type Ev } from '../lib/chess/classify';
 import { mountGameAnnotation } from './game-annotation';
+import { replayGame } from './game-viewer';
 
 // Engine analysis panel on game pages: shows a stored Stockfish analysis (eval graph, mistakes,
 // best moves) or a button to queue one, then polls until the engine is done. Talks to
@@ -19,15 +20,8 @@ interface State {
 export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
   const id = panel.dataset.analysis!;
   const result = panel.dataset.result ?? '*';
-  const sans = (viewer.dataset.moves ?? '').split(' ').filter(Boolean);
-  const chess = new Chess();
-  const fens = [chess.fen()];
-  const ucis: string[] = [];
-  for (const san of sans) {
-    const m = chess.move(san);
-    ucis.push(m.from + m.to + (m.promotion ?? ''));
-    fens.push(chess.fen());
-  }
+  // Shared with the viewer (one replay per page).
+  const { sans, fens, ucis } = replayGame(viewer);
   const parts = {
     none: panel.querySelector<HTMLElement>('[data-part=none]')!,
     pending: panel.querySelector<HTMLElement>('[data-part=pending]')!,

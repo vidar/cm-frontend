@@ -585,6 +585,31 @@ describe('contextFromAnalysis', () => {
     });
   });
 
+  describe('team knockout', () => {
+    // Semi-finals Alpha 1½–½ Bravo and Charlie 0–2 Delta, final Alpha 1½–½ Delta (type 'team-k.o.').
+    const ko = () => [teamEvent()[0], teamEvent()[1], teamEvent()[2], teamEvent()[3], teamGame(9, 1, 7, '1/2-1/2', '2.1', 'Alpha', 'Delta'), teamGame(10, 8, 2, '0-1', '2.1', 'Delta', 'Alpha')];
+    it('names the knockout stage and who went through instead of giving match-point standings', () => {
+      const games = ko();
+      const text = contextFromAnalysis(games.find((g) => g.id === 1)!, analyseEvent(games, 'team-k.o.'))!;
+      expect(text).toContain('Team knockout, Semi-finals.');
+      expect(text).toContain('Who went through (known only after the match; for the postamble): Alpha.');
+      expect(text).not.toContain('Team standings');
+      expect(text).not.toContain(KEY_FACTS);
+    });
+  });
+
+  describe('Swiss with a thin round', () => {
+    it('says the standings are approximate', () => {
+      const games = swiss();
+      const a = { ...analyseEvent(games, null), thinRounds: [2] }; // as analyseEvent() marks a half-published round
+      expect(a.format).toBe('swiss');
+      expect(a.complete).toBe(true);
+      expect(contextFromAnalysis(games.find((g) => g.id === 6)!, a)!.split('\n')[2]).toBe(
+        'Round 2 is only partly in the database, so the standings below count only the games there are and may differ from the official ones; treat them as approximate.',
+      );
+    });
+  });
+
   describe('match', () => {
     it('gives the match score before and after a middle game', () => {
       expect(context(match(), 2)).toBe(

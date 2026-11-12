@@ -7,7 +7,8 @@ export const prerender = false;
 
 const { date = '' } = Astro.params;
 const puzzle = getPuzzle(date);
-if (!puzzle) return new Response('Puzzle not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+// Unknown and future dates get the site's not-found page (404.astro).
+if (!puzzle) return Astro.rewrite('/404');
 // Past puzzles never change; today's page is also served at /puzzle/.
 Astro.response.headers.set('Cache-Control', date < todayUtc() ? 'public, max-age=86400' : 'public, max-age=60');
 const side = puzzle.solverColor === 'w' ? 'White' : 'Black';

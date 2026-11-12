@@ -23,8 +23,12 @@ const { title, description = 'Daily chess puzzles, opening explorer and free che
 const ld = jsonLd ? JSON.stringify({ '@context': 'https://schema.org', ...(Array.isArray(jsonLd) ? { '@graph': jsonLd } : jsonLd) }).replace(/</g, '\\u003c') : null;
 const ogCard: OgCard = og ?? { fen: START_FEN, title, subtitle: description.length > 150 ? `${description.slice(0, 147).trimEnd()}…` : description };
 const ogImage = new URL(ogUrl(ogCard), Astro.site);
-const canonical = new URL(Astro.url.pathname, Astro.site);
 const path = Astro.url.pathname.replace(/\/?$/, '/');
+// Built from the slash-normalised path: on-demand pages answer slash-less URLs with a 301 anyway.
+const canonical = new URL(path.replace(/^\/+/, '/'), Astro.site);
+// /upload/<token>/ holds the organiser's secret in its path, which the analytics beacon would report.
+// Checked on the path that was asked for, so the not-found page of an invalid link (a rewrite) is covered too.
+const analytics = !/^\/upload\/(?!admin\/?$)[^/]+/.test(Astro.originPathname || Astro.url.pathname);
 
 // Menu is driven by the "Show in menu" and "Menu order" fields in the CMS.
 const menuPages = (await getCollection('pages', ({ data }) => data.showInMenu)).sort(
@@ -111,6 +115,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     {ld && <script is:inline type="application/ld+json" set:html={ld} />}
   </head>
   <body>
+    <a class="skip-link" href="#main">Skip to content</a>
     <header class:list={{ wide }}>
       <nav aria-label="Main">
         <a class="brand" href="/" aria-current={path === '/' ? 'page' : undefined}>{SITE_NAME}</a>
@@ -151,7 +156,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
         }
       });
     </script>
-    <main class:list={{ wide }}>
+    <main id="main" tabindex="-1" class:list={{ wide }}>
       <slot />
     </main>
     <footer class:list={{ wide }}>
@@ -160,13 +165,15 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
       </p>
       <BoardStyle />
     </footer>
-    <!-- Cloudflare Web Analytics. Automatic injection doesn't reach Worker-served assets, so it's
-    added manually; beacons from other hostnames (previews, dev) are rejected by Cloudflare. -->
-    <script
-      is:inline
-      type="module"
-      src="https://static.cloudflareinsights.com/beacon.min.js"
-      data-cf-beacon='{"token": "ee0b49e2b84b4e4b95f420090a14dd33"}'></script>
+    {/* Cloudflare Web Analytics. Automatic injection doesn't reach Worker-served assets, so it's
+    added manually; beacons from other hostnames (previews, dev) are rejected by Cloudflare. */}
+    {analytics && (
+      <script
+        is:inline
+        type="module"
+        src="https://static.cloudflareinsights.com/beacon.min.js"
+        data-cf-beacon='{"token": "ee0b49e2b84b4e4b95f420090a14dd33"}'></script>
+    )}
   </body>
 </html>
 
@@ -384,6 +391,22 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
   :where(td, main li, .crumbs) a:not(.ev-r):hover {
     color: var(--accent);
     text-decoration-color: currentColor;
+  }
+  .skip-link {
+    position: absolute;
+    left: 0.5rem;
+    top: -3rem;
+    z-index: 100;
+    padding: 0.5rem 0.8rem;
+    background: var(--accent-fill);
+    color: #fff;
+    border-radius: 6px;
+  }
+  .skip-link:focus {
+    top: 0.5rem;
+  }
+  main:focus {
+    outline: none;
   }
   .crumbs {
     font-size: 0.88rem;

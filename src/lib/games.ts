@@ -3,6 +3,7 @@
 import { env } from 'cloudflare:workers';
 import postgres from 'postgres';
 import { maintenance } from './maintenance';
+import { translit } from './pgn';
 import type { EventGame } from './event';
 
 export interface Player {
@@ -141,8 +142,36 @@ export async function getGame(id: number): Promise<FullGame | null> {
 }
 
 /** Everything the game page needs in one statement: the game with its opening name, and the other games between the two players (newest first). */
-export async function getGamePage(id: number, others = 20): Promise<{ game: FullGame & { opening_name: string | null }; others: GameRow[] } | null> {
-  const row = await first<FullGame & { opening_name: string | null; h2h: GameRow[] | null }>(
+/** Stored AI notes of a game (status done), as getGamePage() returns them; `notes` is parsed and checked. */
+export interface StoredAnnotation {
+  model: string;
+  preamble: string;
+  summary: string;
+  notes: { ply: number; text: string }[];
+  postamble: string;
+}
+
+function parseAnnotation(a: { model: string | null; preamble: string | null; summary: string | null; notes: string | null; postamble: string | null } | null): StoredAnnotation | null {
+  if (!a) return null;
+  let notes: { ply: number; text: string }[] = [];
+  try {
+    const raw: unknown = JSON.parse(a.notes ?? '[]');
+    if (Array.isArray(raw)) notes = raw.filter((n) => n && Number.isInteger(n.ply) && typeof n.text === 'string');
+  } catch {
+    // A malformed row shows the summary without notes rather than breaking the page.
+  }
+  return { model: a.model ?? '', preamble: a.preamble ?? '', summary: a.summary ?? '', notes, postamble: a.postamble ?? '' };
+}
+
+/**
+ * Everything a game page shows in one statement: the game, the other games between the two players and the
+ * stored AI notes (only finished ones; primary-key lookup), so the notes are in the HTML without JavaScript.
+ */
+export async function getGamePage(
+  id: number,
+  others = 20,
+): Promise<{ game: FullGame & { opening_name: string | null }; others: GameRow[]; annotation: StoredAnnotation | null } | null> {
+  const row = await first<FullGame & { opening_name: string | null; h2h: GameRow[] | null; annotation: Parameters<typeof parseAnnotation>[0] }>(
     `WITH gm AS (
        SELECT ${GAME_COLS}, g.moves, e.site AS event_site, o.name AS opening_name
        FROM games g ${GAME_JOINS} LEFT JOIN openings o ON o.slug = g.opening WHERE g.id = $1)
@@ -150,13 +179,15 @@ export async function getGamePage(id: number, others = 20): Promise<{ game: Full
        SELECT json_agg(h) FROM (
          SELECT ${GAME_COLS} FROM games g ${GAME_JOINS}
          WHERE ((g.white_id = gm.white_id AND g.black_id = gm.black_id) OR (g.white_id = gm.black_id AND g.black_id = gm.white_id)) AND g.id <> gm.id
-         ORDER BY g.date DESC NULLS LAST LIMIT $2) h) AS h2h
+         ORDER BY g.date DESC NULLS LAST LIMIT $2) h) AS h2h,
+       (SELECT json_build_object('model', a.model, 'preamble', a.preamble, 'summary', a.summary, 'notes', a.notes, 'postamble', a.postamble)
+        FROM game_annotation a WHERE a.game_id = gm.id AND a.status = 'done') AS annotation
      FROM gm`,
     [id, others],
   );
   if (!row) return null;
-  const { h2h, ...game } = row;
-  return { game, others: h2h ?? [] };
+  const { h2h, annotation, ...game } = row;
+  return { game, others: h2h ?? [], annotation: parseAnnotation(annotation) };
 }
 
 export async function getPlayer(slug: string) {
@@ -282,7 +313,8 @@ export async function gameMoves(ids: number[]) {
 
 /** Words of a typed player name, slugified and in any order ("Giri, Anish" -> giri, anish); at most 5. */
 export function nameWords(name: string) {
-  return [...new Set(slugify(name).split('-').filter(Boolean))].slice(0, 5);
+  // Transliterated like the search column of uploaded players, so Cyrillic and Greek queries match.
+  return [...new Set(slugify(translit(name)).split('-').filter(Boolean))].slice(0, 5);
 }
 
 /**

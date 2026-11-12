@@ -172,6 +172,7 @@ const jsonLd = [
     {R.length > 0 && <span>{R.length} {a.format === 'match' ? 'games' : 'rounds'}</span>}
     {a.avgElo && <span>average rating {a.avgElo}</span>}
     {a.category && <span>category {a.category}</span>}
+    <span><a href={`/games/search/?${new URLSearchParams({ event: event.name })}`} rel="nofollow">Search these games</a></span>
   </p>
 
   {podium.length > 0 && (

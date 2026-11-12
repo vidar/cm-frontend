@@ -9,6 +9,7 @@ import { parseRound } from '../../lib/event';
 import { getGamePage, gamePath, resultLabel, twicIssueUrl } from '../../lib/games';
 import { isUploaded } from '../../lib/uploads';
 import { idParam } from '../../lib/client';
+import { MODEL_NAMES } from '../../scripts/game-annotation';
 
 export const prerender = false;
 
@@ -22,10 +23,11 @@ if (!data) {
   if (Astro.request.method === 'GET') res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=3600');
   return res;
 }
-const { game, others } = data;
+const { game, others, annotation } = data;
 const canonical = gamePath(game);
 if (Astro.url.pathname !== canonical) return new Response(null, { status: 301, headers: { Location: canonical, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });
-// The page itself never changes (analysis and notes load separately): a month at the edge. Uploaded
+// The page changes only when AI notes are first written (they are in the HTML, and the client loads them
+// anyway until the cached page catches up): a month at the edge. Uploaded
 // games can be replaced or taken down by the organiser or the site owner, so theirs is 5 minutes.
 Astro.response.headers.set('Cache-Control', isUploaded(game.id) ? 'public, max-age=60, s-maxage=300' : 'public, max-age=86400, s-maxage=2592000');
 
@@ -42,7 +44,9 @@ const opening = game.opening_name ? { name: game.opening_name } : null;
 const roundN = parseRound(game.round).n;
 const who = (name: string, title: string | null) => `${title ? `${title} ` : ''}${name}`;
 const year = game.date?.slice(0, 4);
-const title = `${game.white_name} vs ${game.black_name}, ${game.event_name}${year && !game.event_name.includes(year) ? ` ${year}` : ''}`;
+// The round keeps titles unique when two players meet more than once at one event.
+const roundText = roundN && game.round ? `, round ${game.round.trim()}` : '';
+const title = `${game.white_name} vs ${game.black_name}, ${game.event_name}${year && !game.event_name.includes(year) ? ` ${year}` : ''}${roundText}`;
 const movesText = sans.map((m, i) => (i % 2 === 0 ? `${i / 2 + 1}. ${m}` : m)).join(' ');
 const pgn = [
   `[Event "${game.event_name}"]`,
@@ -61,6 +65,15 @@ const pgn = [
 ]
   .filter((l) => l !== null)
   .join('\n');
+// Stored AI notes, server-rendered so they are in the page without JavaScript (game-annotation.ts takes over).
+const notesByRow = new Map<number, { ply: number; text: string }[]>();
+for (const n of annotation?.notes ?? []) {
+  if (n.ply < 1 || n.ply > sans.length) continue;
+  const row = Math.ceil(n.ply / 2) - 1;
+  notesByRow.set(row, [...(notesByRow.get(row) ?? []), n].sort((a, b) => a.ply - b.ply));
+}
+const moveNo = (ply: number) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '…'}`;
+const paragraphs = (t: string) => t.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 const description = `${title}: ${resultLabel(game.result)} in ${Math.ceil(game.plies / 2)} moves${opening ? `, ${opening.name}` : ''}. Replay the game move by move and analyse it with Stockfish.`;
 
 // Structured data: where the page sits (breadcrumbs) and what it is about (the players and the event).
@@ -128,11 +141,16 @@ const jsonLd = [
     <div class="side">
       <div class="moves" role="list">
         {Array.from({ length: Math.ceil(sans.length / 2) }, (_, i) => (
-          <div class="row" role="listitem">
-            <span class="num">{i + 1}.</span>
-            <span class="mv" data-ply={2 * i + 1}>{sans[2 * i]}</span>
-            {sans[2 * i + 1] ? <span class="mv" data-ply={2 * i + 2}>{sans[2 * i + 1]}</span> : <span></span>}
-          </div>
+          <>
+            <div class="row" role="listitem">
+              <span class="num">{i + 1}.</span>
+              <span class="mv" data-ply={2 * i + 1}>{sans[2 * i]}</span>
+              {sans[2 * i + 1] ? <span class="mv" data-ply={2 * i + 2}>{sans[2 * i + 1]}</span> : <span></span>}
+            </div>
+            {(notesByRow.get(i) ?? []).map((n) => (
+              <div class="note" data-note-ply={n.ply}><b>{`${moveNo(n.ply)}${sans[n.ply - 1]} `}</b>{n.text}</div>
+            ))}
+          </>
         ))}
         <div class="row result">{game.result}</div>
       </div>
@@ -145,6 +163,16 @@ const jsonLd = [
       </details>
     </div>
   </div>
+
+  {annotation && (
+    <section class="ai-static" data-ai-static>
+      <h2>Notes</h2>
+      {annotation.preamble && <div class="ai-context"><span class="label">Before the game</span><p>{annotation.preamble}</p></div>}
+      <div class="ai-summary">{paragraphs(annotation.summary).map((p) => <p>{p}</p>)}</div>
+      {annotation.postamble && <div class="ai-context"><span class="label">After the round</span><p>{annotation.postamble}</p></div>}
+      <p class="muted small">Written by {MODEL_NAMES[annotation.model] ?? 'Claude'} from the Stockfish analysis; notes appear under their moves. AI can get things wrong.</p>
+    </section>
+  )}
 
   <section class="engine" data-analysis={game.id} data-result={game.result} hidden aria-live="polite">
     <h2>Engine analysis</h2>
@@ -259,10 +287,11 @@ const jsonLd = [
   .engine .now-note { margin: -0.4rem 0 0.6rem; font-size: 0.92rem; }
   .engine .ai { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.25rem; }
   .engine .ai h3 { margin: 0.6rem 0 0.4rem; font-size: 1.1rem; }
-  .engine .ai-summary { max-width: 48rem; }
-  .engine .ai-context { max-width: 48rem; background: var(--accent-soft); border-radius: var(--radius); padding: 0.55rem 0.8rem; margin: 0.75rem 0; }
-  .engine .ai-context p { margin: 0.15rem 0 0; }
-  .engine .ai-context .label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
+  .engine .ai-summary, .ai-static .ai-summary { max-width: 48rem; }
+  .ai-static { margin-top: 1.5rem; }
+  .engine .ai-context, .ai-static .ai-context { max-width: 48rem; background: var(--accent-soft); border-radius: var(--radius); padding: 0.55rem 0.8rem; margin: 0.75rem 0; }
+  .engine .ai-context p, .ai-static .ai-context p { margin: 0.15rem 0 0; }
+  .engine .ai-context .label, .ai-static .ai-context .label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); }
   @media (prefers-reduced-motion: no-preference) { .engine .writing { animation: pulse 1.6s ease-in-out infinite; } }
   @keyframes pulse { 50% { opacity: 0.45; } }
   .moves :global(.note) { font-size: 0.85rem; line-height: 1.4; color: var(--muted); padding: 0.15rem 0.3rem 0.35rem 2.5rem; cursor: pointer; border-radius: 3px; }

@@ -16,7 +16,7 @@ interface State {
   error?: string;
 }
 
-const MODEL_NAMES: Record<string, string> = { 'claude-haiku-5-5': 'Claude Haiku 5.5', 'claude-sonnet-5-5': 'Claude Sonnet 5.5' };
+export const MODEL_NAMES: Record<string, string> = { 'claude-haiku-5-5': 'Claude Haiku 5.5', 'claude-sonnet-5-5': 'Claude Sonnet 5.5' };
 const moveNo = (ply: number) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '…'}`;
 
 export function mountGameAnnotation(panel: HTMLElement, viewer: HTMLElement) {
@@ -89,7 +89,9 @@ export function mountGameAnnotation(panel: HTMLElement, viewer: HTMLElement) {
     byPly = new Map((state.notes ?? []).map((n) => [n.ply, n.text]));
 
     // Notes under their moves in the move list (after the move's row), clickable.
+    // Replaces what the server rendered (notes stored when the page was cached): the moves' notes and the static block.
     for (const el of viewer.querySelectorAll('.note')) el.remove();
+    document.querySelector('[data-ai-static]')?.remove();
     for (const [ply, text] of byPly) {
       const row = viewer.querySelector(`[data-ply="${ply}"]`)?.closest('.row');
       if (!row) continue;

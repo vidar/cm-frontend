@@ -7,7 +7,8 @@ import { getPuzzle, todayUtc, secondsUntilNextPuzzle } from '../../lib/puzzles';
 export const prerender = false;
 
 const puzzle = getPuzzle(todayUtc());
-if (!puzzle) return new Response('No puzzle today', { status: 404 });
+// Only after the puzzle set runs out (see src/lib/puzzles.ts): the site's not-found page.
+if (!puzzle) return Astro.rewrite('/404');
 Astro.response.headers.set('Cache-Control', `public, max-age=60, s-maxage=${Math.min(3600, secondsUntilNextPuzzle())}`);
 const side = puzzle.solverColor === 'w' ? 'White' : 'Black';
 ---

@@ -12,7 +12,7 @@ import { env } from 'cloudflare:workers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CLIENT_DAILY_LIMIT as ENGINE_CLIENT_LIMIT, DAILY_LIMIT as ENGINE_DAILY_LIMIT, getAnalysis, queueAnalysis, requesterId } from '../src/lib/analysis';
 import { CLIENT_DAILY_LIMIT as AI_CLIENT_LIMIT, createAnnotation, DAILY_LIMIT as AI_DAILY_LIMIT, getAnnotation, UNAVAILABLE } from '../src/lib/annotate';
-import { query } from '../src/lib/games';
+import { getGamePage, query } from '../src/lib/games';
 import { UPLOAD_ID_BASE } from '../src/lib/uploads';
 import { writableDbAvailable } from './db';
 
@@ -70,6 +70,23 @@ describe.skipIf(!(await writableDbAvailable()))('engine analysis and AI notes ag
       expect(await requesterId('2001:db8:1:2:bbbb::9')).toBe(a);
       expect(await requesterId('2001:db8:1:3::1')).not.toBe(a);
       expect(await requesterId('192.0.2.1')).not.toBe(await requesterId('192.0.2.2'));
+    });
+  });
+
+  describe('getGamePage with stored notes', () => {
+    it('returns finished notes in its one statement, and nothing for unfinished or malformed ones', async () => {
+      const id = ids[4];
+      expect((await getGamePage(id))!.annotation).toBeNull();
+      await query(`INSERT INTO game_annotation (game_id, status) VALUES ($1, 'running')`, [id]);
+      expect((await getGamePage(id))!.annotation).toBeNull();
+      await query(
+        `UPDATE game_annotation SET status = 'done', model = 'claude-haiku-5-5', preamble = 'Before.', summary = 'One.\n\nTwo.', notes = $2, postamble = '' WHERE game_id = $1`,
+        [id, JSON.stringify([{ ply: 1, text: 'A first move.' }, { ply: 'x', text: 'junk' }])],
+      );
+      expect((await getGamePage(id))!.annotation).toEqual({ model: 'claude-haiku-5-5', preamble: 'Before.', summary: 'One.\n\nTwo.', notes: [{ ply: 1, text: 'A first move.' }], postamble: '' });
+      await query(`UPDATE game_annotation SET notes = 'not json' WHERE game_id = $1`, [id]);
+      expect((await getGamePage(id))!.annotation?.notes).toEqual([]);
+      await query('DELETE FROM game_annotation WHERE game_id = $1', [id]);
     });
   });
 

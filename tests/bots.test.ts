@@ -75,7 +75,7 @@ describe('robots.txt', () => {
   it('lets everyone else read the database pages but not the private routes', async () => {
     const all = (await groups()).find((g) => g.startsWith('User-agent: *'))!;
     expect(all).toContain('Allow: /\n');
-    for (const p of ['/upload/', '/health/', '/games/analysis/', '/games/annotation/', '/players/*?', '/games/search/?']) expect(all).toContain(`Disallow: ${p}\n`);
+    for (const p of ['/upload/', '/health/', '/games/analysis/', '/games/annotation/', '/players/*?', '/games/search/?', '/events/?q=', '/events/?*&q=']) expect(all).toContain(`Disallow: ${p}\n`);
     expect(all).not.toContain('Disallow: /games/\n');
     expect(await robots()).toContain('Sitemap: https://chessmoments.com/sitemaps/index.xml');
   });

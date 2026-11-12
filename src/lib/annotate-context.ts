@@ -128,7 +128,12 @@ export function contextFromAnalysis(
       `This game was played in round ${n}. The event was still going on: the database has ${total === 1 ? 'one round' : `${total} rounds`} of it so far and more may follow, so don't say how many rounds it has, which round is the last or how it ended.`,
     );
   else out.push(n === total ? `This game was played in round ${n}, the last round.` : `This game was played in round ${n} of ${total}.`);
-  if (!a.complete && a.format !== 'knockout' && a.format !== 'match') out.push('Not every game of the event is in the database, so the standings below may be incomplete; treat them as approximate.');
+  if (!a.complete && a.format !== 'knockout' && a.format !== 'match' && !(a.teams && (a.teams.knockout || a.teams.partial)))
+    out.push('Not every game of the event is in the database, so the standings below may be incomplete; treat them as approximate.');
+  if (a.complete && a.thinRounds.length)
+    out.push(
+      `${a.thinRounds.length > 1 ? `Rounds ${a.thinRounds.join(', ')} are` : `Round ${a.thinRounds[0]} is`} only partly in the database, so the standings below count only the games there are and may differ from the official ones; treat them as approximate.`,
+    );
 
   if (a.format === 'match' || a.format === 'knockout') {
     const ko = a.knockout?.flatMap((r) => r.matches.map((m) => ({ r, m }))).find(({ m }) => m.games.some((g) => g.id === game.id));
@@ -168,17 +173,34 @@ export function contextFromAnalysis(
         `Final score of the team match (known only after the round; for the postamble): ${safeName(match.home)} ${pts(match.homePts)}, ${safeName(match.away)} ${pts(match.awayPts)}.`,
       );
     }
-    const keep = (l: TeamLine) => l.team === wt || l.team === bt;
-    const before = prev ? t.standingsAfter(prev.n) : null;
-    const after = t.standingsAfter(n);
-    if (before) out.push(`Team standings going into round ${n}:`, table(before, teamText, keep));
-    out.push(`Team standings after round ${n}:`, table(after, teamText, keep));
-    out.push(
-      facts(before, after, (l) => l.mp, (l) => safeName(l.team), (l) => `${l.mp} match points`, [
-        { label: `${safeName(wt)} (${white}'s team)`, is: (l) => l.team === wt },
-        { label: `${safeName(bt)} (${black}'s team)`, is: (l) => l.team === bt },
-      ]),
-    );
+    const ko = t.knockout?.flatMap((r) => r.matches.map((m) => ({ r, m }))).find(({ m }) => m.match === match);
+    if (t.knockout) {
+      // A team knockout: the match decides who goes through; a table of match points would mean little.
+      if (ko) {
+        const { r, m } = ko;
+        out.push(`Team knockout, ${r.name}${m.replay ? ' (the tiebreak of a level match)' : ''}.`);
+        // Known from the score, the tiebreak games or a later round in the database: all after the game.
+        const through = m.winner;
+        if (through)
+          out.push(
+            `Who went through (known only after the match; for the postamble): ${safeName(through)}${m.how === 'tiebreak' && m.tiebreak ? `, after tiebreak games (${pts(m.tiebreak[0])}–${pts(m.tiebreak[1])})` : ''}.`,
+          );
+      } else out.push('Team knockout.');
+    } else if (t.partial) {
+      out.push('Only some of the team matches are in the database, so no team standings are given; do not describe the teams\' places.');
+    } else {
+      const keep = (l: TeamLine) => l.team === wt || l.team === bt;
+      const before = prev ? t.standingsAfter(prev.n) : null;
+      const after = t.standingsAfter(n);
+      if (before) out.push(`Team standings going into round ${n}:`, table(before, teamText, keep));
+      out.push(`Team standings after round ${n}:`, table(after, teamText, keep));
+      out.push(
+        facts(before, after, (l) => l.mp, (l) => safeName(l.team), (l) => `${l.mp} match points`, [
+          { label: `${safeName(wt)} (${white}'s team)`, is: (l) => l.team === wt },
+          { label: `${safeName(bt)} (${black}'s team)`, is: (l) => l.team === bt },
+        ]),
+      );
+    }
     for (const [id, name] of [
       [W, white],
       [B, black],

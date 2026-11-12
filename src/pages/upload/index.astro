@@ -47,7 +47,7 @@ else if (Astro.request.method === 'POST') {
     <label>Format
       <select name="format">{Object.entries(FORMATS).map(([v, l]) => <option value={v} selected={values.format === v}>{l}</option>)}</select>
     </label>
-    <label>Your name or email <span class="muted">(optional, only for us, in case we have a question)</span>
+    <label>Your name or email <span class="muted">(optional, only for us, in case we have a question; see our <a href="/privacy/">privacy notice</a>)</span>
       <input name="contact" maxlength="200" value={values.contact} />
     </label>
     <label class="check"><input type="checkbox" name="rights" value="1" required /> I organise this tournament or have permission to publish its games.</label>

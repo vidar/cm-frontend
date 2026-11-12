@@ -18,7 +18,15 @@ Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
 const token = Astro.params.token ?? '';
 const upload = await findUpload(token);
-if (!upload) return new Response('This link is not valid.', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+// An invalid link gets the site's not-found page, kept out of caches and indexes; its path still holds what was
+// typed as a token, so it sends no referrer (it has no forms posting to itself) and no analytics (Layout.astro).
+if (!upload) {
+  const res = await Astro.rewrite('/404');
+  res.headers.set('Cache-Control', 'private, no-store');
+  res.headers.set('Referrer-Policy', 'no-referrer');
+  res.headers.set('X-Robots-Tag', 'noindex');
+  return res;
+}
 
 let message = '';
 let error = '';
