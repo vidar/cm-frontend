@@ -1,6 +1,6 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
-import { analysisEnabled, engineBusy, getAnalysis, queueAnalysis, type AnalysisState } from '../../../lib/analysis';
+import { analysisEnabled, engineBusy, getAnalysis, queueAnalysis, requesterId, type AnalysisState } from '../../../lib/analysis';
 import { idParam, limiterKey, sameSite } from '../../../lib/client';
 import { isUploaded } from '../../../lib/uploads';
 
@@ -34,6 +34,6 @@ export const POST: APIRoute = async ({ params, request, url, clientAddress }) =>
   const current = await getAnalysis(id);
   if (current.status !== 'none' && current.status !== 'failed') return json(current);
   if (await engineBusy()) return json({ error: 'The engine is busy right now. Please try again in a few minutes.' }, 503);
-  const r = await queueAnalysis(id);
+  const r = await queueAnalysis(id, await requesterId(clientAddress));
   return 'refused' in r ? json({ error: r.refused }, r.code) : json(r);
 };

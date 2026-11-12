@@ -17,4 +17,6 @@ CREATE TABLE IF NOT EXISTS game_annotation (
 ALTER TABLE game_annotation ADD COLUMN IF NOT EXISTS preamble TEXT;
 ALTER TABLE game_annotation ADD COLUMN IF NOT EXISTS postamble TEXT;
 CREATE INDEX IF NOT EXISTS game_annotation_requested ON game_annotation (requested_at);
+-- Added later: who asked (a hash, src/lib/analysis.ts requesterId(); no addresses), for the per-client daily limit.
+ALTER TABLE game_annotation ADD COLUMN IF NOT EXISTS requester TEXT;
 -- The site's role (cm_web) writes annotations: its rights are in scripts/db/grants.sql.

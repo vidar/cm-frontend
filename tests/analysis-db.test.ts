@@ -1,19 +1,21 @@
 // Integration tests for the claim logic of on-demand engine analysis (queueAnalysis/getAnalysis in
 // src/lib/analysis.ts) and AI notes (createAnnotation in src/lib/annotate.ts): a game that doesn't exist,
 // an engine that can't be reached, a row left queued by an interrupted submit, the daily limits, and the
-// retry pause after a failed annotation. No engine or model is ever called: ENGINE_URL points at a closed
-// port, and the annotated game has no analysis, so generate() stops before the API call.
+// retry pause after a failed annotation, the per-client daily limits, an engine job the engine stops answering
+// for, and an AI outage (nothing stored). No engine or model is ever called: ENGINE_URL and the Anthropic
+// base URL point at a closed port, and most annotated games have no analysis, so generate() stops before the call.
 // Needs the local Postgres copy (tests/db.ts; skips itself without it). Writes only game_analysis and
 // game_annotation rows, for games that had none and for ids above any real game, and removes them in afterAll.
 import { env } from 'cloudflare:workers';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DAILY_LIMIT as ENGINE_DAILY_LIMIT, getAnalysis, queueAnalysis } from '../src/lib/analysis';
-import { createAnnotation, DAILY_LIMIT as AI_DAILY_LIMIT, getAnnotation } from '../src/lib/annotate';
+import { CLIENT_DAILY_LIMIT as ENGINE_CLIENT_LIMIT, DAILY_LIMIT as ENGINE_DAILY_LIMIT, getAnalysis, queueAnalysis, requesterId } from '../src/lib/analysis';
+import { CLIENT_DAILY_LIMIT as AI_CLIENT_LIMIT, createAnnotation, DAILY_LIMIT as AI_DAILY_LIMIT, getAnnotation, UNAVAILABLE } from '../src/lib/annotate';
 import { query } from '../src/lib/games';
 import { dbAvailable } from './db';
 
 const vars = env as unknown as Record<string, string | undefined>;
 const saved = { ENGINE_URL: vars.ENGINE_URL, STOCKFISH_TOKEN: vars.STOCKFISH_TOKEN, ANTHROPIC_KEY: vars.ANTHROPIC_KEY };
+const savedBase = process.env.ANTHROPIC_BASE_URL;
 /** Ids no game has (int4 still holds them): filler rows for the daily-limit tests. */
 const FAKE = 2_100_000_000;
 /** Real games without analyses or notes, picked in beforeAll. */
@@ -36,20 +38,34 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
     vars.ENGINE_URL = 'http://127.0.0.1:9';
     vars.STOCKFISH_TOKEN = 'test-token';
     vars.ANTHROPIC_KEY = 'test-key';
+    // The Anthropic SDK reads its base URL from here: a closed port too, so no test ever reaches the API.
+    process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9';
     ids = (
       await query<{ id: number }>(
         `SELECT id FROM games g WHERE id < 100000000
            AND NOT EXISTS (SELECT 1 FROM game_analysis a WHERE a.game_id = g.id)
            AND NOT EXISTS (SELECT 1 FROM game_annotation n WHERE n.game_id = g.id)
-         ORDER BY id LIMIT 4`,
+         ORDER BY id LIMIT 5`,
       )
     ).map((r) => r.id);
-    expect(ids).toHaveLength(4);
+    expect(ids).toHaveLength(5);
   });
 
   afterAll(async () => {
     await cleanup();
     Object.assign(vars, saved);
+    if (savedBase === undefined) delete process.env.ANTHROPIC_BASE_URL;
+    else process.env.ANTHROPIC_BASE_URL = savedBase;
+  });
+
+  describe('requesterId', () => {
+    it('hashes the client key: the same for one /64, different for other clients, no address in it', async () => {
+      const a = await requesterId('2001:db8:1:2:aaaa::1');
+      expect(a).toMatch(/^[0-9a-f]{24}$/);
+      expect(await requesterId('2001:db8:1:2:bbbb::9')).toBe(a);
+      expect(await requesterId('2001:db8:1:3::1')).not.toBe(a);
+      expect(await requesterId('192.0.2.1')).not.toBe(await requesterId('192.0.2.2'));
+    });
   });
 
   describe('queueAnalysis', () => {
@@ -90,13 +106,37 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
       expect(await analysisRow(ids[2])).toBeNull();
       await query('DELETE FROM game_analysis WHERE game_id >= $1', [FAKE]);
     });
+
+    it('refuses a client that has used its own daily limit, but not other clients', async () => {
+      await query(`INSERT INTO game_analysis (game_id, status, error, requester) SELECT $1::int + i, 'failed', 'filler', 'busy-client' FROM generate_series(1, $2::int) AS i`, [FAKE, ENGINE_CLIENT_LIMIT]);
+      expect(await queueAnalysis(ids[2], 'busy-client')).toEqual({ refused: 'You have asked for many analyses today. Please try again tomorrow.', code: 429 });
+      expect(await analysisRow(ids[2])).toBeNull();
+      expect(await queueAnalysis(ids[2], 'other-client')).toEqual({ status: 'failed', error: 'engine unreachable' });
+      expect((await query<{ requester: string }>('SELECT requester FROM game_analysis WHERE game_id = $1', [ids[2]]))[0].requester).toBe('other-client');
+      await query('DELETE FROM game_analysis WHERE game_id >= $1', [FAKE]);
+    });
+
+    it('keeps a job through a short engine fault, then fails it so it can be retried', async () => {
+      // The engine (a closed port here) doesn't answer for a job it was given: a tunnel fault, a bad token, a hung engine.
+      await query(`INSERT INTO game_analysis (game_id, status, job_id) VALUES ($1, 'running', 'j_1')`, [ids[4]]);
+      expect(await getAnalysis(ids[4])).toEqual({ status: 'running', done: 0, total: 0 });
+      expect(await analysisRow(ids[4])).toMatchObject({ status: 'running', job_id: 'j_1' });
+      await query(`UPDATE game_analysis SET updated_at = now() - interval '31 minutes' WHERE game_id = $1`, [ids[4]]);
+      expect(await getAnalysis(ids[4])).toEqual({ status: 'failed', error: 'the engine is not answering' });
+      expect(await analysisRow(ids[4])).toMatchObject({ status: 'failed', error: 'the engine is not answering' });
+      // Failed rows are claimed again by the next click.
+      expect(await queueAnalysis(ids[4])).toEqual({ status: 'failed', error: 'engine unreachable' });
+    });
   });
 
   describe('createAnnotation', () => {
     it('claims the row and records the failure on that same run', async () => {
       // No analysis for this game, so generate() gives up before calling the model.
-      expect(await createAnnotation(ids[3])).toEqual({ status: 'failed', error: 'the game has no engine analysis yet' });
+      const waited: Promise<unknown>[] = [];
+      expect(await createAnnotation(ids[3], { waitUntil: (p) => waited.push(p) })).toEqual({ status: 'failed', error: 'the game has no engine analysis yet' });
       expect(await annotationRow(ids[3])).toMatchObject({ status: 'failed', error: 'the game has no engine analysis yet' });
+      // The run was handed to waitUntil, so it goes on if the visitor leaves.
+      expect(waited).toHaveLength(1);
     });
 
     it('pauses retries of a failed annotation (each attempt is a paid call)', async () => {
@@ -106,6 +146,31 @@ describe.skipIf(!(await dbAvailable()))('engine analysis and AI notes against th
       await query(`UPDATE game_annotation SET updated_at = now() - interval '11 minutes' WHERE game_id = $1`, [ids[3]]);
       expect(await createAnnotation(ids[3])).toEqual({ status: 'failed', error: 'the game has no engine analysis yet' });
       expect((await annotationRow(ids[3]))!.requested_at).not.toBe(before);
+    });
+
+    it('shows an old failure to later visitors as no notes yet, not as an error', async () => {
+      await query(`UPDATE game_annotation SET updated_at = now() - interval '11 minutes' WHERE game_id = $1`, [ids[3]]);
+      expect(await getAnnotation(ids[3])).toEqual({ status: 'none' });
+      await query(`UPDATE game_annotation SET updated_at = now() WHERE game_id = $1`, [ids[3]]);
+      expect(await getAnnotation(ids[3])).toEqual({ status: 'failed', error: 'the game has no engine analysis yet' });
+    });
+
+    it('stores nothing for an AI outage, so the game can be tried again at once', async () => {
+      // A finished analysis (all evals 0), so generate() calls the API, at a closed port: a network failure.
+      const [{ plies }] = await query<{ plies: number }>('SELECT plies FROM games WHERE id = $1', [ids[4]]);
+      const evals = JSON.stringify({ e: Array(plies + 1).fill(0), b: Array(plies + 1).fill(null) });
+      await query(`UPDATE game_analysis SET status = 'done', depth = 18, evals = $2, error = NULL WHERE game_id = $1`, [ids[4], evals]);
+      expect(process.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:9');
+      expect(await createAnnotation(ids[4])).toEqual({ refused: UNAVAILABLE, code: 503 });
+      expect(await annotationRow(ids[4])).toBeNull();
+      expect(await getAnnotation(ids[4])).toEqual({ status: 'none' });
+    });
+
+    it('refuses a client that has used its own daily limit', async () => {
+      await query(`INSERT INTO game_annotation (game_id, status, requester) SELECT $1::int + i, 'done', 'busy-client' FROM generate_series(1, $2::int) AS i`, [FAKE, AI_CLIENT_LIMIT]);
+      expect(await createAnnotation(ids[4], { requester: 'busy-client' })).toEqual({ refused: 'You have asked for AI notes on many games today. Please try again tomorrow.', code: 429 });
+      expect(await annotationRow(ids[4])).toBeNull();
+      await query('DELETE FROM game_annotation WHERE game_id >= $1', [FAKE]);
     });
 
     it('does not take over a run that is still going, but reclaims one left running too long', async () => {

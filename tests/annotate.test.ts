@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Evals } from '../src/lib/analysis';
 import { buildPrompt, plyOf } from '../src/lib/annotate';
-import { contextFromAnalysis, safeName } from '../src/lib/annotate-context';
+import { contextFromAnalysis, eventFinished, safeName } from '../src/lib/annotate-context';
 import { analyseEvent, type EventGame } from '../src/lib/event';
 import type { FullGame } from '../src/lib/games';
 
@@ -256,15 +256,16 @@ describe('buildPrompt', () => {
         'No tournament information is available for this game.',
         '',
         "Starting eval: +0.30. Evals are in pawns from White's point of view (+ White better, - Black better, #n mate).",
+        'The material balance after each move counts pawns 1, knights and bishops 3, rooks 5, queens 9.',
         '',
         'Moves:',
-        '1.e4  eval +0.20',
-        '1...e5  eval +0.25',
-        '2.Bc4  eval +0.30',
-        '2...Nc6  eval +1.13  ?! inaccuracy; engine preferred 2...Nf6 3.Nc3 (eval +0.30)',
-        '3.Qh5  eval -0.25  ? mistake; engine preferred 3.Nf3 Nf6 4.Nc3 (eval +1.13)',
-        '3...Nf6  eval #1  ?? blunder; engine preferred 3...g6 4.Qf3 Nf6 (eval -0.25)',
-        '4.Qxf7#  eval –',
+        '1.e4  eval +0.20  material equal',
+        '1...e5  eval +0.25  material equal',
+        '2.Bc4  eval +0.30  material equal',
+        '2...Nc6  eval +1.13  material equal  ?! inaccuracy; engine preferred 2...Nf6 3.Nc3 (eval +0.30)',
+        '3.Qh5  eval -0.25  material equal  ? mistake; engine preferred 3.Nf3 Nf6 4.Nc3 (eval +1.13)',
+        '3...Nf6  eval #1  material equal  ?? blunder; engine preferred 3...g6 4.Qf3 Nf6 (eval -0.25)',
+        '4.Qxf7#  eval –  material White +1',
       ].join('\n'),
     );
   });
@@ -339,25 +340,25 @@ describe('buildPrompt', () => {
   it('gives an unflagged move only its eval', () => {
     const lines = buildPrompt(fullGame(), null, EVALS).split('\n');
     const e4 = lines.find((l) => l.startsWith('1.e4'));
-    expect(e4).toBe('1.e4  eval +0.20');
+    expect(e4).toBe('1.e4  eval +0.20  material equal');
     expect(e4).not.toContain('engine preferred');
     expect(lines.filter((l) => l.includes('engine preferred')).map((l) => l.split('  ')[0])).toEqual(['2...Nc6', '3.Qh5', '3...Nf6']);
   });
 
   it('uses the best move alone when the analysis has no engine lines', () => {
     const prompt = buildPrompt(fullGame(), null, { e: EVALS.e, b: EVALS.b });
-    expect(prompt).toContain('2...Nc6  eval +1.13  ?! inaccuracy; engine preferred 2...Nf6 (eval +0.30)');
-    expect(prompt).toContain('3.Qh5  eval -0.25  ? mistake; engine preferred 3.Nf3 (eval +1.13)');
-    expect(prompt).toContain('3...Nf6  eval #1  ?? blunder; engine preferred 3...g6 (eval -0.25)');
+    expect(prompt).toContain('2...Nc6  eval +1.13  material equal  ?! inaccuracy; engine preferred 2...Nf6 (eval +0.30)');
+    expect(prompt).toContain('3.Qh5  eval -0.25  material equal  ? mistake; engine preferred 3.Nf3 (eval +1.13)');
+    expect(prompt).toContain('3...Nf6  eval #1  material equal  ?? blunder; engine preferred 3...g6 (eval -0.25)');
   });
 
   it('writes "?" when the engine preferred nothing usable', () => {
     const b = [...EVALS.b];
     b[5] = null;
-    expect(buildPrompt(fullGame(), null, { e: EVALS.e, b })).toContain('3...Nf6  eval #1  ?? blunder; engine preferred ? (eval -0.25)');
+    expect(buildPrompt(fullGame(), null, { e: EVALS.e, b })).toContain('3...Nf6  eval #1  material equal  ?? blunder; engine preferred ? (eval -0.25)');
     const p = [...EVALS.p!];
     p[5] = 'e1e2 a7a6'; // illegal first move: the line stops before it
-    expect(buildPrompt(fullGame(), null, { e: EVALS.e, b: EVALS.b, p })).toContain('3...Nf6  eval #1  ?? blunder; engine preferred ? (eval -0.25)');
+    expect(buildPrompt(fullGame(), null, { e: EVALS.e, b: EVALS.b, p })).toContain('3...Nf6  eval #1  material equal  ?? blunder; engine preferred ? (eval -0.25)');
   });
 
   it('cuts an engine line at its first illegal move', () => {
@@ -370,13 +371,34 @@ describe('buildPrompt', () => {
     const b = [...EVALS.b];
     b[5] = 'g8f6'; // the blunder was the engine's own choice
     const prompt = buildPrompt(fullGame(), null, { e: EVALS.e, b });
-    expect(prompt).toContain('\n3...Nf6  eval #1\n');
+    expect(prompt).toContain('\n3...Nf6  eval #1  material equal\n');
   });
 
   it('formats a mate eval and the final position', () => {
     const lines = buildPrompt(fullGame(), null, EVALS).split('\n');
     expect(lines.at(-2)).toContain('eval #1');
-    expect(lines.at(-1)).toBe('4.Qxf7#  eval –');
+    expect(lines.at(-1)).toBe('4.Qxf7#  eval –  material White +1');
+  });
+
+  // The model can't see the board, so each line carries the material balance (P 1, N/B 3, R 5, Q 9).
+  it('gives the material balance after every move, counted by hand', () => {
+    const zero = (n: number): Evals => ({ e: Array(n + 1).fill(0), b: Array(n + 1).fill(null) });
+    // 1.e4 d5 2.Nc3 dxe4: Black takes a pawn.
+    const black = buildPrompt(fullGame({ moves: 'e4 d5 Nc3 dxe4', result: '*' }), null, zero(4)).split('\n').slice(-4);
+    expect(black).toEqual(['1.e4  eval 0.00  material equal', '1...d5  eval 0.00  material equal', '2.Nc3  eval 0.00  material equal', '2...dxe4  eval 0.00  material Black +1']);
+    // 1.e4 f5 2.exf5 (+1) g5 3.fxg6 e.p. (+2) Nf6 4.gxh7 (+3) Rg8 5.hxg8=Q: a rook taken (+5) and a pawn made a queen (+8).
+    const promo = buildPrompt(fullGame({ moves: 'e4 f5 exf5 g5 fxg6 Nf6 gxh7 Rg8 hxg8=Q', result: '*' }), null, zero(9)).split('\n').slice(-9);
+    expect(promo.map((l) => l.split('  ').at(-1))).toEqual([
+      'material equal',
+      'material equal',
+      'material White +1',
+      'material White +1',
+      'material White +2',
+      'material White +2',
+      'material White +3',
+      'material White +3',
+      'material White +16',
+    ]);
   });
 
   it('writes a game without moves as headers only', () => {
@@ -569,10 +591,10 @@ describe('contextFromAnalysis', () => {
         [
           'Tournament: Test Open, match, 4 rounds, 2 players.',
           'This game was played in round 2 of 4.',
-          'Match between Alice and Bob, 4 games in all.',
+          'Match between Alice and Bob.',
           'This was game 2 of the match. Score before it: Alice 1, Bob 0.',
-          'Score after it: Alice 1½, Bob ½.',
-          '2 more game(s) followed in the match.',
+          'Score after it (known only after the game; for the postamble): Alice 1½, Bob ½.',
+          'The match went on after this game (for the postamble).',
         ].join('\n'),
       );
     });
@@ -580,8 +602,8 @@ describe('contextFromAnalysis', () => {
     it('starts from 0-0 in the first game', () => {
       const lines = context(match(), 1)!.split('\n');
       expect(lines[3]).toBe('This was game 1 of the match. Score before it: Alice 0, Bob 0.');
-      expect(lines[4]).toBe('Score after it: Alice 1, Bob 0.');
-      expect(lines[5]).toBe('3 more game(s) followed in the match.');
+      expect(lines[4]).toBe('Score after it (known only after the game; for the postamble): Alice 1, Bob 0.');
+      expect(lines[5]).toBe('The match went on after this game (for the postamble).');
     });
 
     it('knows the last game of the match', () => {
@@ -589,10 +611,10 @@ describe('contextFromAnalysis', () => {
         [
           'Tournament: Test Open, match, 4 rounds, 2 players.',
           'This game was played in round 4, the last round.',
-          'Match between Alice and Bob, 4 games in all.',
+          'Match between Alice and Bob.',
           'This was game 4 of the match. Score before it: Alice 2, Bob 1.',
-          'Score after it: Alice 3, Bob 1.',
-          'This was the last game of the match.',
+          'Score after it (known only after the game; for the postamble): Alice 3, Bob 1.',
+          'This was the last game of the match (known only afterwards; for the postamble).',
         ].join('\n'),
       );
     });
@@ -604,10 +626,10 @@ describe('contextFromAnalysis', () => {
         [
           'Tournament: Test Open, knockout, 2 rounds, 4 players.',
           'This game was played in round 1 of 2.',
-          'Knockout stage: Semi-finals between Carol and Dave, 2 games in all.',
+          'Knockout stage: Semi-finals between Carol and Dave.',
           'This was game 1 of the match. Score before it: Carol 0, Dave 0.',
-          'Score after it: Carol 0, Dave 1.',
-          '1 more game(s) followed in the match.',
+          'Score after it (known only after the game; for the postamble): Carol 0, Dave 1.',
+          'The match went on after this game (for the postamble).',
         ].join('\n'),
       );
     });
@@ -617,12 +639,68 @@ describe('contextFromAnalysis', () => {
         [
           'Tournament: Test Open, knockout, 2 rounds, 4 players.',
           'This game was played in round 2, the last round.',
-          'Knockout stage: Final between Alice and Dave, 2 games in all.',
+          'Knockout stage: Final between Alice and Dave.',
           'This was game 2 of the match. Score before it: Alice 1, Dave 0.',
-          'Score after it: Alice 1½, Dave ½.',
-          'This was the last game of the match.',
+          'Score after it (known only after the game; for the postamble): Alice 1½, Dave ½.',
+          'This was the last game of the match (known only afterwards; for the postamble).',
         ].join('\n'),
       );
+    });
+  });
+
+  // While an event runs (TWIC brings it in two parts, uploads come round by round), the latest round in the
+  // database need not be the last: no total, no "last round", no "last game of the match".
+  describe('event still running', () => {
+    const RUNNING = (n: number, total: number) =>
+      `This game was played in round ${n}. The event was still going on: the database has ${total} rounds of it so far and more may follow, so don't say how many rounds it has, which round is the last or how it ended.`;
+
+    it('gives no total and never calls the latest round the last', () => {
+      const games = roundRobin();
+      const text = contextFromAnalysis(games[5], analyseEvent(games, null), false)!;
+      const lines = text.split('\n');
+      expect(lines[0]).toBe('Tournament: Test Open, round robin, 4 players.');
+      expect(lines[1]).toBe(RUNNING(3, 3));
+      expect(text).not.toContain('last round');
+      expect(text).not.toContain('3 rounds,');
+      // The standings are the same as for a finished event.
+      expect(lines.slice(2)).toEqual(context(games, 6)!.split('\n').slice(2));
+    });
+
+    it('says the same about a middle round', () => {
+      const games = roundRobin();
+      expect(contextFromAnalysis(games[3], analyseEvent(games, null), false)!.split('\n')[1]).toBe(RUNNING(2, 3));
+    });
+
+    it('treats an uploaded (ongoing) event as running by default', () => {
+      const games = teamEvent();
+      const lines = contextFromAnalysis(games[8], analyseEvent(games, null, { ongoing: true }))!.split('\n');
+      expect(lines[0]).toBe('Tournament: Test Open, team event.');
+      expect(lines[1]).toBe(RUNNING(3, 3));
+    });
+
+    it('does not call the latest game of a match the last one', () => {
+      const games = match();
+      expect(contextFromAnalysis(games[3], analyseEvent(games, null), false)).toBe(
+        [
+          'Tournament: Test Open, match, 2 players.',
+          RUNNING(4, 4),
+          'Match between Alice and Bob.',
+          'This was game 4 of the match. Score before it: Alice 2, Bob 1.',
+          'Score after it (known only after the game; for the postamble): Alice 3, Bob 1.',
+        ].join('\n'),
+      );
+      // An earlier game was followed by others whatever happens next.
+      expect(contextFromAnalysis(games[1], analyseEvent(games, null), false)!.split('\n').at(-1)).toBe('The match went on after this game (for the postamble).');
+    });
+  });
+
+  describe('eventFinished', () => {
+    it('calls an event finished three weeks after its end (as eventCacheControl)', () => {
+      const now = new Date('2024-01-23T12:00:00Z');
+      expect(eventFinished({ end_date: '2024-01-01', start_date: '2023-12-20' }, now)).toBe(true);
+      expect(eventFinished({ end_date: '2024-01-03', start_date: '2023-12-20' }, now)).toBe(false);
+      expect(eventFinished({ end_date: null, start_date: '2023-12-20' }, now)).toBe(true);
+      expect(eventFinished({ end_date: null, start_date: null }, now)).toBe(false);
     });
   });
 

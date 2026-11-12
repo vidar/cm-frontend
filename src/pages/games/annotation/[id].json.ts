@@ -1,12 +1,12 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
-import { getAnalysis } from '../../../lib/analysis';
+import { getAnalysis, requesterId } from '../../../lib/analysis';
 import { annotationEnabled, createAnnotation, getAnnotation, type AnnotationState } from '../../../lib/annotate';
 import { idParam, limiterKey, sameSite } from '../../../lib/client';
 import { isUploaded } from '../../../lib/uploads';
 
 // AI annotation of an analysed game: GET the state, POST to write it (takes 10-30 s; the response
-// carries the result).
+// carries the result, and waitUntil keeps the work going for a while if the visitor leaves first).
 export const prerender = false;
 
 const json = (body: AnnotationState | { error: string }, status = 200, cache = 'no-store') =>
@@ -23,7 +23,7 @@ export const GET: APIRoute = async ({ params, url }) => {
   return json(state, 200, cache);
 };
 
-export const POST: APIRoute = async ({ params, request, url, clientAddress }) => {
+export const POST: APIRoute = async ({ params, request, url, clientAddress, locals }) => {
   const id = idParam(params.id);
   if (!id) return json({ error: 'bad game id' }, 400);
   if (!annotationEnabled()) return json({ status: 'unavailable' });
@@ -34,6 +34,7 @@ export const POST: APIRoute = async ({ params, request, url, clientAddress }) =>
   const current = await getAnnotation(id);
   if (current.status !== 'none' && current.status !== 'failed') return json(current);
   if ((await getAnalysis(id)).status !== 'done') return json({ error: 'Analyse the game with Stockfish first.' }, 409);
-  const r = await createAnnotation(id);
+  const cf = (locals as { cfContext?: { waitUntil(p: Promise<unknown>): void } }).cfContext;
+  const r = await createAnnotation(id, { requester: await requesterId(clientAddress), waitUntil: cf ? (p) => cf.waitUntil(p) : undefined });
   return 'refused' in r ? json({ error: r.refused }, r.code) : json(r);
 };

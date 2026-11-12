@@ -11,4 +11,8 @@ CREATE TABLE IF NOT EXISTS game_analysis (
   requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Added later: who asked (a hash, src/lib/analysis.ts requesterId(); no addresses), for the per-client
+-- daily limit, and the index the daily counts use.
+ALTER TABLE game_analysis ADD COLUMN IF NOT EXISTS requester TEXT;
+CREATE INDEX IF NOT EXISTS game_analysis_requested ON game_analysis (requested_at);
 -- The site's role (cm_web) writes analyses: its rights are in scripts/db/grants.sql.

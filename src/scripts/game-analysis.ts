@@ -42,10 +42,16 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
   let current = sans.length;
   // The first look may come from the edge cache; after we queue work, poll the live state (?poll=1).
   let polling = false;
+  // Polling stops after a few minutes (each poll costs a query and an engine call); a button checks again.
+  const POLL_MS = 5 * 60_000;
+  let pollingSince = 0;
 
   async function load(method: 'GET' | 'POST' = 'GET') {
     clearTimeout(timer);
-    if (method === 'POST') polling = true;
+    if (method === 'POST') {
+      polling = true;
+      pollingSince = Date.now();
+    }
     let state: State;
     try {
       const res = await fetch(`/games/analysis/${id}.json${polling && method === 'GET' ? '?poll=1' : ''}`, { method, headers: { Accept: 'application/json' } });
@@ -64,6 +70,8 @@ export function mountGameAnalysis(panel: HTMLElement, viewer: HTMLElement) {
     bar.style.width = `${pct}%`;
     text.textContent = state.status === 'running' && state.total ? `Analysing… ${state.done} of ${state.total} positions` : 'Queued, waiting for the engine…';
     showPart('pending');
+    if (!pollingSince) pollingSince = Date.now();
+    if (Date.now() - pollingSince > POLL_MS) return fail('The engine is taking longer than usual. The analysis is saved for everyone when it is done: check again later.', true);
     timer = window.setTimeout(() => load(), 2500);
   }
 

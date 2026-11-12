@@ -3,13 +3,21 @@
 // (scripts/analysis.pg.sql), through the site's Hyperdrive binding (its role may insert/update
 // that table only). Only import from on-demand routes.
 import { env } from 'cloudflare:workers';
+import { limiterKey } from './client';
 import { getGame, query } from './games';
 
 export const DEPTH = 18;
 /** At most this many games sent to the engine per day across the site (the VPS has a fixed capacity). */
 export const DAILY_LIMIT = 1000;
+/** At most this many new analyses per client (address, IPv6 /64) per day, so one client can't use up DAILY_LIMIT. */
+export const CLIENT_DAILY_LIMIT = 30;
 /** A queued row that never got its engine job (the submit failed or the Worker was cut off) can be retried after this long. */
 const STALE_MINUTES = 5;
+/**
+ * A job still queued or running this long after its last change (or that the engine keeps answering
+ * with an error: a bad token, a tunnel fault, a hung engine) is marked failed, so it can be retried.
+ */
+const JOB_MINUTES = 30;
 
 interface Env {
   ENGINE_URL?: string;
@@ -22,6 +30,16 @@ export const analysisEnabled = () => !!(cfg().ENGINE_URL && cfg().STOCKFISH_TOKE
 
 const aquery = query;
 
+/**
+ * Who asked, for the per-client daily limits (here and in src/lib/annotate.ts): the client's limiterKey()
+ * (address, IPv6 by /64), hashed with a secret so the database holds no addresses.
+ */
+export async function requesterId(clientAddress: string | null | undefined) {
+  const data = new TextEncoder().encode(`requester:${cfg().STOCKFISH_TOKEN ?? ''}:${limiterKey(clientAddress)}`);
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return Array.from(hash.slice(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 interface Row {
   game_id: number;
   status: 'queued' | 'running' | 'done' | 'failed';
@@ -30,6 +48,7 @@ interface Row {
   evals: string | null;
   error: string | null;
   stale: boolean;
+  expired: boolean;
 }
 
 /**
@@ -72,6 +91,7 @@ async function submit(gameId: number): Promise<{ jobId: string } | { error: stri
     body: JSON.stringify({ pgn: pgnOf(game.moves, game.result), depth: DEPTH }),
   });
   if (r.status === 202 && r.body.job_id) return { jobId: r.body.job_id };
+  console.error('Engine analysis: submit refused', { game: gameId, status: r.status, error: r.body.error?.code ?? null });
   return { error: r.body.error?.code ?? `engine ${r.status}` };
 }
 
@@ -104,7 +124,9 @@ export async function getAnalysis(gameId: number): Promise<AnalysisState> {
   if (!analysisEnabled()) return { status: 'unavailable' };
   // now() keeps Hyperdrive from caching the row: its status changes while a job runs.
   const [row] = await aquery<Row>(
-    `SELECT game_id, status, job_id, depth, evals, error, updated_at < now() - interval '${STALE_MINUTES} minutes' AS stale FROM game_analysis WHERE game_id = $1`,
+    `SELECT game_id, status, job_id, depth, evals, error, updated_at < now() - interval '${STALE_MINUTES} minutes' AS stale,
+       updated_at < now() - interval '${JOB_MINUTES} minutes' AS expired
+     FROM game_analysis WHERE game_id = $1`,
     [gameId],
   );
   if (!row) return { status: 'none' };
@@ -113,9 +135,9 @@ export async function getAnalysis(gameId: number): Promise<AnalysisState> {
   // No job yet: being submitted, or the submit never finished (then it can be retried like a failure).
   if (!row.job_id) return row.stale ? { status: 'failed', error: 'interrupted' } : { status: 'queued', done: 0, total: 0 };
 
-  const job = await engine<{ status?: string; progress?: { done: number; total: number }; result?: { results: EngineResult[] }; error?: { code: string; message: string } }>(
-    `/jobs/${encodeURIComponent(row.job_id)}`,
-  );
+  type Job = { status?: string; progress?: { done: number; total: number }; result?: { results: EngineResult[] }; error?: { code: string; message: string } };
+  // A network failure counts as an unexpected answer (status 0) below.
+  const job = await engine<Job>(`/jobs/${encodeURIComponent(row.job_id)}`).catch(() => ({ status: 0, body: {} as Job }));
   if (job.status === 404 || job.body.error?.code === 'restarted') {
     // The job expired or the engine restarted: post it again (finished positions come from its cache).
     const again = await trySubmit(gameId);
@@ -134,6 +156,16 @@ export async function getAnalysis(gameId: number): Promise<AnalysisState> {
     await touch(gameId, `status = 'failed', error = $2`, [err]);
     return { status: 'failed', error: err };
   }
+  // Anything but a 2xx answer (a bad token, a tunnel or engine fault, an HTML error page): logged for the
+  // site owner; the job keeps its state until JOB_MINUTES have passed, so a short fault doesn't fail it.
+  const ok = job.status >= 200 && job.status < 300;
+  if (!ok) console.error('Engine analysis: unexpected answer', { game: gameId, job: row.job_id, status: job.status, error: job.body.error?.code ?? null });
+  if (row.expired) {
+    const err = ok ? 'the engine took too long' : 'the engine is not answering';
+    await touch(gameId, `status = 'failed', error = $2`, [err]);
+    return { status: 'failed', error: err };
+  }
+  if (!ok) return { status: row.status === 'running' ? 'running' : 'queued', done: 0, total: 0 };
   const p = job.body.progress ?? { done: 0, total: 0 };
   if (s === 'running' && row.status !== 'running') await touch(gameId, `status = 'running'`, []);
   return { status: s === 'running' ? 'running' : 'queued', done: p.done, total: p.total };
@@ -142,30 +174,35 @@ export async function getAnalysis(gameId: number): Promise<AnalysisState> {
 /** Why queueAnalysis() didn't queue a game, with the HTTP status for it. */
 export interface Refused {
   refused: string;
-  code: 404 | 503;
+  code: 404 | 429 | 503;
 }
 
-/** Queue a game (once; a failed or interrupted analysis can be retried). Returns the new state. */
-export async function queueAnalysis(gameId: number): Promise<AnalysisState | Refused> {
+/**
+ * Queue a game (once; a failed or interrupted analysis can be retried). Returns the new state.
+ * `requester` (requesterId() of the client) also limits each client to CLIENT_DAILY_LIMIT games a day.
+ */
+export async function queueAnalysis(gameId: number, requester: string | null = null): Promise<AnalysisState | Refused> {
   if (!analysisEnabled()) return { status: 'unavailable' };
   // Claim the row first so concurrent clicks submit only one job; in the same statement, only for a
-  // game that exists and while the site is under its daily limit (a retry re-dates its row).
-  const [c] = await aquery<{ game: boolean; over: boolean; claimed: boolean }>(
-    `WITH ok AS (
-       SELECT EXISTS (SELECT 1 FROM games WHERE id = $1) AS game,
-              (SELECT count(*) FROM game_analysis WHERE requested_at > now() - interval '1 day') >= $2 AS over
+  // game that exists and while the site and the client are under their daily limits (a retry re-dates its row).
+  const [c] = await aquery<{ game: boolean; over: boolean; mine: boolean; claimed: boolean }>(
+    `WITH day AS (
+       SELECT count(*) AS n, count(*) FILTER (WHERE requester = $3) AS mine FROM game_analysis WHERE requested_at > now() - interval '1 day'
+     ), ok AS (
+       SELECT EXISTS (SELECT 1 FROM games WHERE id = $1) AS game, (SELECT n FROM day) >= $2 AS over, (SELECT mine FROM day) >= $4 AS mine
      ), c AS (
-       INSERT INTO game_analysis (game_id, status) SELECT $1, 'queued' FROM ok WHERE game AND NOT over
-       ON CONFLICT (game_id) DO UPDATE SET status = 'queued', job_id = NULL, error = NULL, requested_at = now(), updated_at = now()
+       INSERT INTO game_analysis (game_id, status, requester) SELECT $1, 'queued', $3 FROM ok WHERE game AND NOT over AND NOT mine
+       ON CONFLICT (game_id) DO UPDATE SET status = 'queued', job_id = NULL, error = NULL, requester = $3, requested_at = now(), updated_at = now()
          WHERE game_analysis.status = 'failed'
             OR (game_analysis.status = 'queued' AND game_analysis.job_id IS NULL AND game_analysis.updated_at < now() - interval '${STALE_MINUTES} minutes')
        RETURNING game_id
      )
-     SELECT game, over, EXISTS (SELECT 1 FROM c) AS claimed FROM ok`,
-    [gameId, DAILY_LIMIT],
+     SELECT game, over, mine, EXISTS (SELECT 1 FROM c) AS claimed FROM ok`,
+    [gameId, DAILY_LIMIT, requester, CLIENT_DAILY_LIMIT],
   );
   if (!c.game) return { refused: 'No such game.', code: 404 };
   if (!c.claimed && c.over) return { refused: 'The daily limit for engine analysis is reached. Please try again tomorrow.', code: 503 };
+  if (!c.claimed && c.mine) return { refused: 'You have asked for many analyses today. Please try again tomorrow.', code: 429 };
   if (!c.claimed) return getAnalysis(gameId);
   const r = await trySubmit(gameId);
   if ('jobId' in r) {

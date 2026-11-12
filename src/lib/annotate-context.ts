@@ -4,7 +4,7 @@
 // on-demand routes.
 import { FORMAT_LABEL, parseRound, pts, whiteScore, type EventAnalysis, type EventGame, type Line, type TeamLine } from './event';
 import { loadEvent } from './event-page';
-import type { FullGame } from './games';
+import type { EventRow, FullGame } from './games';
 
 const TOP = 8;
 
@@ -84,15 +84,34 @@ function scoreBefore(a: EventAnalysis, id: number, n: number) {
   return { points, games };
 }
 
+/**
+ * Is the event over, so that its last round in the database is its last round? The test of
+ * eventCacheControl() (src/lib/event-view.ts): it ended more than three weeks ago. TWIC often brings an
+ * event in two issues, and uploads come round by round, so a running event may have more rounds to come.
+ */
+export function eventFinished(event: Pick<EventRow, 'end_date' | 'start_date'>, now = new Date()) {
+  const end = event.end_date ?? event.start_date;
+  return !!end && Date.parse(end) < now.getTime() - 21 * 86_400_000;
+}
+
 /** The tournament context as prompt text, or null when there's none worth giving (no rounds, too few games). */
 export async function tournamentContext(game: FullGame): Promise<string | null> {
   if (!parseRound(game.round).n) return null;
   const data = await loadEvent(game.event_slug);
-  return data ? contextFromAnalysis(game, data.a) : null;
+  // Uploaded tournaments are never called finished (the organiser may add rounds), like their standings.
+  return data ? contextFromAnalysis(game, data.a, !data.a.ongoing && eventFinished(data.event)) : null;
 }
 
-/** The pure part: the context text from the event's analysis (null when the game isn't in a round of it). */
-export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event_name' | 'white_id' | 'black_id' | 'white_name' | 'black_name'>, a: EventAnalysis): string | null {
+/**
+ * The pure part: the context text from the event's analysis (null when the game isn't in a round of it).
+ * `finished`: the event is over. While it runs, the rounds in the database may not be all of them, so the
+ * text gives no total and never calls a round or a match game the last.
+ */
+export function contextFromAnalysis(
+  game: Pick<FullGame, 'id' | 'round' | 'event_name' | 'white_id' | 'black_id' | 'white_name' | 'black_name'>,
+  a: EventAnalysis,
+  finished = !a.ongoing,
+): string | null {
   const n = parseRound(game.round).n;
   if (!n) return null;
   const eg: EventGame | undefined = a.rounds.find((r) => r.n === n)?.games.find((g) => g.id === game.id);
@@ -103,8 +122,12 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
   const B = game.black_id;
   const white = safeName(game.white_name);
   const black = safeName(game.black_name);
-  const out: string[] = [`Tournament: ${safeName(game.event_name, 100)}, ${FORMAT_LABEL[a.format].toLowerCase()}, ${total} rounds${a.format !== 'team' ? `, ${a.players.size} players` : ''}.`];
-  out.push(n === total ? `This game was played in round ${n}, the last round.` : `This game was played in round ${n} of ${total}.`);
+  const out: string[] = [`Tournament: ${safeName(game.event_name, 100)}, ${FORMAT_LABEL[a.format].toLowerCase()}${finished ? `, ${total} rounds` : ''}${a.format !== 'team' ? `, ${a.players.size} players` : ''}.`];
+  if (!finished)
+    out.push(
+      `This game was played in round ${n}. The event was still going on: the database has ${total === 1 ? 'one round' : `${total} rounds`} of it so far and more may follow, so don't say how many rounds it has, which round is the last or how it ended.`,
+    );
+  else out.push(n === total ? `This game was played in round ${n}, the last round.` : `This game was played in round ${n} of ${total}.`);
   if (!a.complete && a.format !== 'knockout' && a.format !== 'match') out.push('Not every game of the event is in the database, so the standings below may be incomplete; treat them as approximate.');
 
   if (a.format === 'match' || a.format === 'knockout') {
@@ -120,11 +143,14 @@ export function contextFromAnalysis(game: Pick<FullGame, 'id' | 'round' | 'event
       const sA = safeName(m.a.name);
       const sB = safeName(m.b.name);
       const upto = [...before, eg];
+      // How many games a match ran to (tiebreaks) wasn't known when the game was played: only the score
+      // before it goes with the preamble; what came after is marked for the postamble.
+      const last = upto.length === m.games.length;
       out.push(
-        `${a.format === 'match' ? 'Match' : `Knockout stage: ${r.name}`} between ${sA} and ${sB}, ${m.games.length} games in all.`,
+        `${a.format === 'match' ? 'Match' : `Knockout stage: ${r.name}`} between ${sA} and ${sB}.`,
         `This was game ${before.length + 1} of the match. Score before it: ${sA} ${pts(score(before, m.a.id))}, ${sB} ${pts(score(before, m.b.id))}.`,
-        `Score after it: ${sA} ${pts(score(upto, m.a.id))}, ${sB} ${pts(score(upto, m.b.id))}.`,
-        upto.length === m.games.length ? `This was the last game of the match.` : `${m.games.length - upto.length} more game(s) followed in the match.`,
+        `Score after it (known only after the game; for the postamble): ${sA} ${pts(score(upto, m.a.id))}, ${sB} ${pts(score(upto, m.b.id))}.`,
+        ...(!last ? ['The match went on after this game (for the postamble).'] : finished ? ['This was the last game of the match (known only afterwards; for the postamble).'] : []),
       );
     }
     return out.join('\n');
