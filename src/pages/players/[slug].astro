@@ -12,7 +12,13 @@ const q = Astro.url.searchParams;
 const page = Math.min(10_000, Math.max(1, Number.parseInt(q.get('page') ?? '1', 10) || 1));
 const color = q.get('color') === 'w' || q.get('color') === 'b' ? (q.get('color') as 'w' | 'b') : undefined;
 const data = await getPlayerPage(Astro.params.slug ?? '', page, color);
-const notFound = () => new Response('Player not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
+// Missing players get the site's not-found page (404.astro), cached at the edge too: crawlers retry them and
+// each costs a query. Not for HEAD, whose body is empty: GET and HEAD share one edge cache entry.
+const notFound = async () => {
+  const res = await Astro.rewrite('/404');
+  if (Astro.request.method === 'GET') res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=3600');
+  return res;
+};
 if (!data) return notFound();
 const { player, games, hasMore, score, sources } = data;
 // Pages past the last game don't exist (or crawlers could walk an endless list of empty pages).

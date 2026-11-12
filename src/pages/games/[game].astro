@@ -15,8 +15,13 @@ export const prerender = false;
 // Ids are int4: anything longer or larger can't exist (and would make Postgres fail).
 const id = idParam(Astro.params.game);
 const data = id ? await getGamePage(id) : null;
-// Missing games and old URLs are cached at the edge too: crawlers retry them and each costs a query.
-if (!data) return new Response('Game not found', { status: 404, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'public, max-age=300, s-maxage=3600' } });
+// Missing games get the site's not-found page (404.astro), cached at the edge too: crawlers retry them and each
+// costs a query. Not for HEAD, whose body is empty: GET and HEAD share one edge cache entry.
+if (!data) {
+  const res = await Astro.rewrite('/404');
+  if (Astro.request.method === 'GET') res.headers.set('Cache-Control', 'public, max-age=300, s-maxage=3600');
+  return res;
+}
 const { game, others } = data;
 const canonical = gamePath(game);
 if (Astro.url.pathname !== canonical) return new Response(null, { status: 301, headers: { Location: canonical, 'Cache-Control': 'public, max-age=86400, s-maxage=604800' } });

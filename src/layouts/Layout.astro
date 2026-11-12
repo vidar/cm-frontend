@@ -156,7 +156,7 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     </main>
     <footer class:list={{ wide }}>
       <p>
-        &copy; {new Date().getFullYear()} {SITE_NAME} · <a href="/credits/">Credits</a> · <a href="/llms.txt">llms.txt</a>
+        &copy; {new Date().getFullYear()} {SITE_NAME} · <a href="/privacy/">Privacy</a> · <a href="/credits/">Credits</a> · <a href="/llms.txt">llms.txt</a>
       </p>
       <BoardStyle />
     </footer>
@@ -210,6 +210,10 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
   }
   * {
     box-sizing: border-box;
+  }
+  /* The display rules below (buttons are inline-flex) would otherwise show elements marked hidden. */
+  [hidden] {
+    display: none !important;
   }
   body {
     margin: 0;
@@ -269,6 +273,9 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
   pre {
     font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     font-size: 0.88em;
+  }
+  pre {
+    overflow-x: auto;
   }
   kbd {
     border: 1px solid var(--border-strong);
@@ -531,6 +538,22 @@ const pages = menuPages.map((page) => ({ href: `/${page.id}/`, label: page.data.
     display: block;
     font-size: 0.8rem;
     color: var(--muted);
+  }
+  /* Touch screens: taller tap targets (24 px and more, with room between stacked links) for the menu and
+     for links in tables and breadcrumbs, which are most of the site's links. Mouse layouts stay as they are. */
+  @media (pointer: coarse) {
+    .nav-group > summary,
+    .menu .plain {
+      display: inline-block;
+      padding-block: 0.4rem;
+    }
+    :where(td, .crumbs) a {
+      display: inline-block;
+      padding-block: 0.3rem;
+    }
+    :where(td) a.ev-r {
+      padding-block: 0.25rem;
+    }
   }
   @media (max-width: 30rem) {
     nav {

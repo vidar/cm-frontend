@@ -41,7 +41,8 @@ collections:
       - label: Title
         name: title
         widget: string
-        hint: The URL is made from the title when the page is created (e.g. "Contact Us" → /contact-us/). Avoid names already used by the site: admin, images, puzzle, openings, analysis, engine, games, players, events, upload, health, sitemaps, chess-clock, coordinates-trainer, board-image, credits.
+        # Quoted: a plain YAML value can't contain ": ", and the CMS refuses a config it can't parse.
+        hint: 'The URL is made from the title when the page is created (e.g. "Contact Us" → /contact-us/). Avoid names already used by the site: admin, images, puzzle, openings, analysis, engine, games, players, events, upload, health, sitemaps, chess-clock, coordinates-trainer, board-image, about, credits, privacy, licences, 404.'
       - { label: Description (search engines), name: description, widget: text, required: false }
       - { label: Show in menu, name: showInMenu, widget: boolean, default: true }
       - { label: Menu order, name: menuOrder, widget: number, value_type: int, default: 10, hint: Lower numbers appear first. }

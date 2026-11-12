@@ -1,0 +1,51 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// On demand, so that the database pages can answer a missing game, player, event or round with this page
+// (Astro.rewrite('/404'), which can't reach a prerendered page from an on-demand one); they set the edge
+// cache lifetime of their own 404s. Unknown paths land here too.
+export const prerender = false;
+
+Astro.response.status = 404;
+// The path that was asked for, also after a rewrite from a database page.
+const path = Astro.originPathname || Astro.url.pathname;
+const what = /^\/games\/\d/.test(path)
+  ? 'Game'
+  : /^\/players\/./.test(path)
+    ? 'Player'
+    : /^\/events\/[^/]+\/round-/.test(path)
+      ? 'Round'
+      : /^\/events\/./.test(path)
+        ? 'Event'
+        : 'Page';
+const db = what !== 'Page';
+---
+
+<Layout title={`${what} not found`} description="This page doesn't exist on chessmoments." noindex>
+  <h1>{what} not found</h1>
+  <p>
+    {db
+      ? `This ${what.toLowerCase()} isn't in the games database, or its address has changed. Search for the player, or browse the latest tournaments.`
+      : "There's no page at this address. The link may be mistyped, or the page may have moved."}
+  </p>
+
+  <form class="find" action="/players/" method="get" role="search">
+    <input type="search" name="q" placeholder="Player name, e.g. Carlsen" aria-label="Player name" required />
+    <button type="submit" class="primary">Find player</button>
+  </form>
+
+  <ul class="links">
+    <li><a href="/games/">Games database</a></li>
+    <li><a href="/events/">Events</a></li>
+    <li><a href="/games/search/">Search games</a></li>
+    <li><a href="/puzzle/">Daily puzzle</a></li>
+    <li><a href="/openings/">Openings</a></li>
+    <li><a href="/">Home</a></li>
+  </ul>
+</Layout>
+
+<style>
+  .find { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1.5rem 0; max-width: 32rem; }
+  .find input { flex: 1 1 14rem; }
+  .links { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; list-style: none; padding: 0; margin: 0; }
+</style>

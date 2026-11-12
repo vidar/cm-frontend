@@ -7,7 +7,14 @@
     <title>Content Manager</title>
   </head>
   <body>
-    <!-- Sveltia CMS; reads ./config.yml -->
-    <script src="https://unpkg.com/@sveltia/cms/dist/sveltia-cms.js" type="module"></script>
+    <!-- Sveltia CMS; reads ./config.yml. Pinned to one release with its SRI hash: the editor's GitHub token
+    lives on this origin, so a new release runs only after it is checked and pinned here. To update:
+    npm pack @sveltia/cms@<version>, then
+    openssl dgst -sha384 -binary package/dist/sveltia-cms.js | openssl base64 -A -->
+    <script
+      src="https://unpkg.com/@sveltia/cms@0.253.2/dist/sveltia-cms.js"
+      integrity="sha384-b3NfLhuFjiXL+mJgdgGU9YvgmJVl+BSiNNuK4Exr/Eg4CgvWVt4BhYSI5rJ5TtgA"
+      crossorigin="anonymous"
+      type="module"></script>
   </body>
 </html>
