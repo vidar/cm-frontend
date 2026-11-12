@@ -315,10 +315,16 @@ needed).
 
 ## Running it
 
-- **TWIC import** (new issues; `scripts/twic/README.md`, which also says what a `--reset` needs), on the server
-  with the SQLite build copied there, not between 03:20 and about 03:40 UTC (the nightly backup):
-  `sudo DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql' python3 ~/cm-db-kit/scripts/twic/import_pg.py --db twic.sqlite`
-  (needs `psql`, which the server has). Then purge the edge cache tag `games-db`.
+- **TWIC import** (the weekly update; `scripts/twic/README.md`, which also says what a `--reset` needs). Where the
+  builds are made, keep the SQLite file that is loaded now as `twic-live.sqlite` and build the new one against it,
+  so ids only append and analyses and notes stay with their games:
+  `build.py --dir <zips> --fide players_list.zip --previous twic-live.sqlite --out twic.sqlite`, then
+  `remap_events.py --old twic-live.sqlite --new twic.sqlite` (it refuses a build that would renumber anything).
+  Copy `twic.sqlite` to the server and load it there, not between 03:20 and about 03:40 UTC (the nightly backup):
+  `sudo DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql' python3 ~/cm-db-kit/scripts/twic/import_pg.py --db twic.sqlite --patch`
+  (needs `psql`, which the server has). Then purge the edge cache tag `games-db` and keep `twic.sqlite` as the
+  new `twic-live.sqlite`. A plain `import_pg.py` without `--patch` only resumes an interrupted load of the same
+  build.
 - **Restore** (`cm-db-restore`, with sudo; whatever comes out of a dump runs as `cm_owner`, never as a superuser):
   - `sudo cm-db-restore [file.dump]` restores a full backup (the newest by default) into a separate
     `cm_games_restore`, brings its schema up to date, shows row counts next to the live ones and prints the steps

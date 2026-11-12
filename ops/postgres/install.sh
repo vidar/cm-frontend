@@ -20,7 +20,8 @@
 #      passwords kept in /etc/cm-db/<role>.password (root only), and the database cm_games with pg_trgm
 #      (a deleted password file gets a new password: README "Secrets" rotates cm_web's without an outage);
 #   5. once the tables exist (after migrate-from-neon.sh): the site's own schema scripts (scripts/*.pg.sql,
-#      idempotent: a rerun applies their additions) and scripts/db/grants.sql;
+#      idempotent: a rerun applies their additions), scripts/db/grants.sql and the games indexes
+#      (scripts/twic/indexes.pg.sql; a busy games table only warns);
 #   6. installs the backup, health-check and monthly restore-drill timers (cm-db-backup, cm-db-check,
 #      cm-db-restore-test) and the restore command cm-db-restore.
 # Postgres listens on localhost (and the Tailscale IP when given): there is no firewall on this box,
@@ -50,7 +51,7 @@ TAILNET_CLIENTS=${TAILNET_CLIENTS:-${saved_clients:-100.120.87.91}}   # tailnet 
 say() { printf '\n== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = 0 ] || die "run as root (sudo)"
-for f in db/grants.sql analysis.pg.sql annotation.pg.sql uploads.pg.sql; do
+for f in db/grants.sql analysis.pg.sql annotation.pg.sql uploads.pg.sql twic/indexes.pg.sql; do
   [ -f "$KIT/scripts/$f" ] || die "scripts/$f not found next to the kit ($KIT)"
 done
 if [ -n "$TAILSCALE_IP" ]; then
@@ -241,6 +242,15 @@ if [ "$(psql_su -d "$DB" -Atc "SELECT count(*) FROM pg_tables WHERE schemaname =
   an import or a restore holds it): run install.sh again in a few minutes."
   done
   echo "applied scripts/analysis.pg.sql, annotation.pg.sql, uploads.pg.sql and scripts/db/grants.sql"
+  # The games indexes (CREATE INDEX IF NOT EXISTS; the TWIC importer runs the same file), so a new index arrives
+  # with a kit update. Building one blocks writes to its table (not reads) for a few minutes. A busy games table
+  # (an import's swap, an upload publish, the nightly dump) doesn't fail the run: it says to rerun later.
+  if PGOPTIONS='-c client_min_messages=warning -c lock_timeout=10s' psql -X -q -v ON_ERROR_STOP=1 -p "$PORT" -d "dbname=$DB user=cm_owner" \
+      -f "$KIT/scripts/twic/indexes.pg.sql"; then
+    echo "applied scripts/twic/indexes.pg.sql"
+  else
+    echo "warning: scripts/twic/indexes.pg.sql did not apply (the error is above; \"lock timeout\" means the games table is busy): rerun install.sh later"
+  fi
 else
   echo "no tables yet: migrate-from-neon.sh applies them after the restore"
 fi

@@ -9,6 +9,8 @@
 # TEST_DATABASE_URL is set, so a database that can't be reached fails the job instead of skipping the tests.
 #
 # build: npm run build and a wrangler dry run, as CLAUDE.md asks before every push.
+#
+# python: the TWIC importer's tests (scripts/twic/tests, unittest), the import test against a scratch database it wipes.
 name: Tests
 on:
   push:
@@ -56,3 +58,27 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx wrangler deploy --dry-run
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: twic_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TWIC_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/twic_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install chess
+      - run: python3 -m unittest discover -s scripts/twic/tests

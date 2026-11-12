@@ -17,7 +17,8 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 │   ├── layouts/
 │   │   └── Layout.astro # shared page shell (menu built from pages, footer, styles)
 │   └── pages/
-│       ├── robots.txt.ts # /robots.txt (points crawlers at the sitemap)
+│       ├── robots.txt.ts # /robots.txt (crawler policy and sitemaps)
+│       ├── 404.astro    # the not-found page (on demand; database pages rewrite to it)
 │       ├── index.astro  # / (renders src/content/home.md)
 │       └── [slug].astro # /<slug>/ for each file in src/content/pages
 ├── astro.config.mjs     # Astro config (Cloudflare adapter)
@@ -35,6 +36,8 @@ An [Astro](https://astro.build) site deployed to [Cloudflare Workers](https://de
 | `/board-image/` | FEN/PGN → diagram tool; image API at `/board.svg?fen=…` (on-demand) |
 | `/chess-clock/` | Client-side chess clock |
 | `/coordinates-trainer/` | Client-side coordinates game |
+| `/upload/` | Organisers upload a tournament's PGN round by round (secret link `/upload/<token>/`; published after approval at `/upload/admin/`) |
+| `/privacy/`, `/licences/`, `/credits/`, `/about/` | CMS pages: privacy notice (what is stored, removal requests), full licence texts, credits |
 | `/llms.txt` | Summary of tools and endpoints for AI agents |
 
 Data sources and licences: `src/data/README.md` and `/credits/`.
@@ -55,7 +58,9 @@ Contents read/write on this repo. You can also edit the Markdown files directly.
 ## SEO
 
 `/sitemap-index.xml` is generated at build time by `@astrojs/sitemap` from every page, so
-new CMS pages are included automatically. `/robots.txt` allows everything except `/admin/`.
+new CMS pages are included automatically; database pages are listed in `/sitemaps/index.xml`. `/robots.txt`
+keeps crawlers off private and utility routes and off search-result variants, and AI training crawlers off the
+TWIC database paths (`src/pages/robots.txt.ts`).
 Each page has a canonical link to its chessmoments.com URL, so preview copies aren't indexed
 as duplicates.
 
@@ -69,7 +74,7 @@ as duplicates.
 | `npm run preview`        | Build and preview locally in the Workers runtime         |
 | `npm run deploy`         | Build and deploy to Cloudflare (`wrangler deploy`)       |
 | `npm run generate-types` | Generate types for bindings in `wrangler.jsonc`          |
-| `npm test`               | Run the tests (vitest; database tests need a local copy)  |
+| `npm test`               | Run the tests (vitest; database tests need `cm_games_test`, see below) |
 
 ## Deploying
 
@@ -82,5 +87,17 @@ The build command is required: `wrangler deploy` uses the server entry point tha
 
 Pushes to `main` deploy to production at https://chessmoments.com.
 
+Other branches deploy as previews. Previews use the production Hyperdrive config, engine and AI key, so
+their POST endpoints (analysis, AI notes, uploads and upload approval) write to the production database.
+
 Bindings (Hyperdrive, KV, D1, R2, env vars, etc.) are configured in `wrangler.jsonc`. Local secrets go in
 `.dev.vars` (git-ignored).
+
+## Tests
+
+`npm test` runs vitest. The database tests (`tests/*-db.test.ts`) use
+`postgres://postgres:postgres@localhost:5432/cm_games_test` (or `TEST_DATABASE_URL`) and skip without it. Make
+that database from a local copy (`createdb -T cm_games cm_games_test`) or from the schema scripts and a few seeded
+games (`bash tests/fixtures/create-test-db.sh cm_games_test`); the writing suites refuse to run on `cm_games`
+itself. The TWIC importer has Python tests: `pip install chess`, then
+`python3 -m unittest discover -s scripts/twic/tests`.
