@@ -4,7 +4,21 @@
 // no query(), createUpload(), saveRounds(), approve() or the like. Fixtures are hand-built and the
 // expected standings are worked out by hand.
 import { describe, expect, it } from 'vitest';
-import { FORMATS, isBusy, isUploaded, LIMITS, previewAnalysis, sameName, UPLOAD_ID_BASE, type Upload, type UploadFormat, type UploadRound } from '../src/lib/uploads';
+import {
+  conflictingFides,
+  FORMATS,
+  isBusy,
+  isUploaded,
+  LIMITS,
+  previewAnalysis,
+  sameName,
+  slugName,
+  taggedRounds,
+  UPLOAD_ID_BASE,
+  type Upload,
+  type UploadFormat,
+  type UploadRound,
+} from '../src/lib/uploads';
 import { gamePath, resultLabel, scoreFor, slugify } from '../src/lib/games';
 import { parsePgn, type ParsedGame } from '../src/lib/pgn';
 
@@ -44,7 +58,7 @@ const pgnGame = (s: Spec) => {
 function round(n: number, specs: Spec[]): UploadRound {
   const { games, problems } = parsePgn(specs.map(pgnGame).join('\n'));
   if (problems.length) throw new Error(`fixture PGN problems: ${JSON.stringify(problems)}`);
-  return { round: n, games, uploaded_at: '2026-03-01 12:00:00' };
+  return { round: n, games, uploaded_at: '2026-03-01 12:00:00', bytes: 0 };
 }
 
 const upload = (format: UploadFormat, name = 'Spring Open'): Upload => ({
@@ -145,8 +159,19 @@ describe('FORMATS', () => {
 });
 
 describe('LIMITS', () => {
-  it('caps file size, games per round and tournament, moves per file, rounds, pending and new uploads', () => {
-    expect(LIMITS).toEqual({ bytes: 2_000_000, gamesPerRound: 600, rounds: 40, games: 2_000, plies: 150_000, pending: 50, perDay: 200 });
+  it('caps file size, stored bytes, games per round and tournament, moves per file, rounds, pending and new uploads (also per address)', () => {
+    expect(LIMITS).toEqual({
+      bytes: 2_000_000,
+      stored: 10_000_000,
+      gamesPerRound: 600,
+      rounds: 40,
+      games: 2_000,
+      plies: 60_000,
+      pending: 50,
+      perDay: 200,
+      clientPending: 5,
+      clientPerDay: 10,
+    });
   });
 });
 
@@ -486,6 +511,8 @@ describe('sameName (FIDE-ID linking)', () => {
     expect(sameName('Gukesh D', 'Gukesh Dommaraju')).toBe(true);
     expect(sameName('Jóhann Hjartarson', 'Johann Hjartarson')).toBe(true); // accents are dropped by slugify
     expect(sameName('Hikaru Nakamura', 'Hikaru Kenji Nakamura')).toBe(true); // a middle name more
+    expect(sameName('Carlsen, Magnus', 'Carlsen, M.')).toBe(true); // the initial on either side
+    expect(sameName('Carlsen, M.', 'Carlsen, Magnus')).toBe(true);
   });
   it('refuses another person or a name with nothing in full', () => {
     expect(sameName('John Doe', 'Hikaru Nakamura')).toBe(false);
@@ -493,5 +520,53 @@ describe('sameName (FIDE-ID linking)', () => {
     expect(sameName('H. N.', 'Hikaru Nakamura')).toBe(false);
     expect(sameName('', 'Hikaru Nakamura')).toBe(false);
     expect(sameName('Nakamura Nakamura', 'Hikaru Nakamura')).toBe(false); // each part matches its own part
+  });
+  it('compares Cyrillic and Greek names in Latin letters, other scripts only as written', () => {
+    expect(sameName('Иванов, Иван', 'Иванов, Иван')).toBe(true);
+    expect(sameName('Иванов, И.', 'Иван Иванов')).toBe(true);
+    expect(sameName('Ivanov, Ivan', 'Иванов Иван')).toBe(true);
+    expect(sameName('Иванов, Иван', 'Петров, Иван')).toBe(false);
+    expect(sameName('Παπαδόπουλος, Γιώργος', 'Papadopoulos, G.')).toBe(true);
+    expect(sameName('王浩', '王浩')).toBe(true);
+    expect(sameName('王浩', '王 浩')).toBe(false);
+    expect(sameName('王浩', '丁立人')).toBe(false);
+    expect(sameName('王浩', 'Wang Hao')).toBe(false);
+  });
+});
+
+describe('slugName', () => {
+  it('slugs Cyrillic and Greek in Latin letters', () => {
+    expect(slugName('Чемпионат клуба 2026')).toBe('chempionat-kluba-2026');
+    expect(slugName('Шевченко, Юрій')).toBe('shevchenko-yuriy');
+    expect(slugName('Подъячев')).toBe('podyachev');
+    expect(slugName('Παπαδόπουλος, Γιώργος')).toBe('papadopoulos-giorgos');
+    expect(slugName('Müller, Jörg')).toBe('muller-jorg');
+  });
+  it('leaves nothing of other scripts (publish() then falls back to "player-<id>" or "event-<id>")', () => {
+    expect(slugName('王浩')).toBe('');
+    expect(slugName('中国象棋 2026')).toBe('2026');
+  });
+});
+
+const fideGame = (white: string, whiteFide: number | null, black: string, blackFide: number | null) =>
+  ({ ...parsePgn('[White "A"]\n[Black "B"]\n\n1. e4 *').games[0], white, whiteFide, black, blackFide }) as ParsedGame;
+
+describe('conflictingFides', () => {
+  it('finds an ID the games give to players whose names disagree', () => {
+    const games = [fideGame('Rvup, Anna', 7, 'Rvup, Bob', 7), fideGame('Carlsen, Magnus', 9, 'X, Y', null), fideGame('Carlsen, M.', 9, 'Magnus Carlsen', 9)];
+    expect([...conflictingFides(games)]).toEqual([7]);
+  });
+  it('is empty when every ID has one person', () => {
+    expect(conflictingFides([fideGame('A, B', 1, 'C, D', 2), fideGame('C, D', 2, 'a, b', 1)]).size).toBe(0);
+    expect(conflictingFides([]).size).toBe(0);
+  });
+});
+
+describe('taggedRounds', () => {
+  it('lists the distinct round numbers of the Round tags, in order', () => {
+    const g = (round?: string) => `[White "A"]\n[Black "B"]\n${round === undefined ? '' : `[Round "${round}"]\n`}\n1. e4 *`;
+    expect(taggedRounds([g('3.1'), g('1.2'), g('1.1'), g('2'), g('?'), g()])).toEqual([1, 2, 3]);
+    expect(taggedRounds([g('5.1'), g('5.2')])).toEqual([5]);
+    expect(taggedRounds([g(), g('-')])).toEqual([]);
   });
 });

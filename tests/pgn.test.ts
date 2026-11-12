@@ -4,7 +4,7 @@
 // hand-written games with expected values worked out by hand.
 import { Chess } from 'chess.js';
 import { describe, expect, it } from 'vitest';
-import { MAX_PLIES, normDate, parseGame, parsePgn, roundOf, splitPgn, type ParsedGame } from '../src/lib/pgn';
+import { decodePgn, MAX_PLIES, normDate, parseGame, parsePgn, roundOf, splitPgn, translit, type ParsedGame } from '../src/lib/pgn';
 
 const WHITE = 'Carlsen, Magnus';
 const BLACK = 'Nakamura, Hikaru';
@@ -440,5 +440,56 @@ describe('parseGame limits and clean names', () => {
   it('drops angle brackets and control characters from tag values', () => {
     const g = parseGame('[White "<img src=x onerror=alert(1)>"]\n[Black "Doe,\u0007 Jane"]\n[WhiteTeam "<b>Club</b>"]\n\n1. e4 e5 *');
     expect(g).toMatchObject({ white: 'img src=x onerror=alert(1)', black: 'Doe, Jane', whiteTeam: 'b Club /b' });
+  });
+  it('drops invisible format characters (bidi overrides, zero-width spaces) from names', () => {
+    const g = parseGame('[White "Car\u200blsen,\u202e Magnus"]\n[Black "\ufeffDoe"]\n\n1. e4 *');
+    expect(g).toMatchObject({ white: 'Carlsen, Magnus', black: 'Doe' });
+  });
+  it('never cuts a name in the middle of an emoji, and drops lone surrogates', () => {
+    const g = parseGame(`[White "${'a'.repeat(99)}😀😀"]\n[Black "B\ud83d"]\n\n1. e4 *`);
+    expect(g).toMatchObject({ white: `${'a'.repeat(99)}😀`, black: 'B' });
+    expect(JSON.stringify(g)).not.toMatch(/\\ud83d/);
+  });
+  it('counts every replayed move in cost.plies, also those of a game that then fails', () => {
+    const cost = { plies: 0 };
+    expect(typeof parseGame(`[White "A"]\n[Black "B"]\n\n${knights(996)} Ke5 *`, cost)).toBe('string');
+    expect(cost.plies).toBe(997);
+    expect(parseGame('[White "A"]\n[Black "B"]\n\n1. e4 e5 *', cost)).toMatchObject({ plies: 2 });
+    expect(cost.plies).toBe(999);
+    // Refused before replaying: nothing counted.
+    expect(parseGame(`[White "A"]\n[Black "B"]\n\n${knights(MAX_PLIES + 1)} *`, cost)).toBe('longer than 500 moves');
+    expect(cost.plies).toBe(999);
+  });
+});
+
+describe('decodePgn', () => {
+  const bytes = (...xs: (number | string)[]) => new Uint8Array(xs.flatMap((x) => (typeof x === 'string' ? [...x].map((c) => c.charCodeAt(0)) : [x])));
+  it('reads UTF-8, with or without a byte order mark', () => {
+    expect(decodePgn(new TextEncoder().encode('[White "Müller, Jörg"]'))).toEqual({ text: '[White "Müller, Jörg"]', encoding: 'UTF-8' });
+    expect(decodePgn(bytes(0xef, 0xbb, 0xbf, '[A]'))).toEqual({ text: '[A]', encoding: 'UTF-8' });
+    expect(decodePgn(new Uint8Array())).toEqual({ text: '', encoding: 'UTF-8' });
+  });
+  it('reads bytes that are not UTF-8 as Windows-1252 (Latin-1 for every letter)', () => {
+    // "Müller, Jörg" and "Ødegård" in Latin-1, a Windows-1252 en dash and Š.
+    expect(decodePgn(bytes('M', 0xfc, 'ller, J', 0xf6, 'rg ', 0xd8, 'deg', 0xe5, 'rd ', 0x96, ' ', 0x8a, 0x81))).toEqual({
+      text: 'Müller, Jörg Ødegård – Š\x81',
+      encoding: 'Windows-1252',
+    });
+  });
+  it('reads UTF-16 by its byte order mark, or by the NUL byte next to the first character', () => {
+    expect(decodePgn(bytes(0xff, 0xfe, '[', 0, 0xfc, 0, 0x3d, 0xd8, 0x00, 0xde))).toEqual({ text: '[ü😀', encoding: 'UTF-16' });
+    expect(decodePgn(bytes(0xfe, 0xff, 0, '[', 0, 0xfc))).toEqual({ text: '[ü', encoding: 'UTF-16' });
+    expect(decodePgn(bytes('[', 0, 'W', 0))).toEqual({ text: '[W', encoding: 'UTF-16' });
+    expect(decodePgn(bytes(0, '[', 0, 'W'))).toEqual({ text: '[W', encoding: 'UTF-16' });
+  });
+});
+
+describe('translit', () => {
+  it('writes Cyrillic and Greek in lower-case Latin letters and keeps the rest', () => {
+    expect(translit('Чемпионат клуба')).toBe('chempionat kluba');
+    expect(translit('Щукин, Ёж')).toBe('shchukin, ezh');
+    expect(translit('Їжак Йосип')).toBe('yizhak yosip');
+    expect(translit('Παπαδόπουλος')).toBe('papadopoulos');
+    expect(translit('Müller 王浩')).toBe('müller 王浩');
   });
 });

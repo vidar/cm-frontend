@@ -1,16 +1,33 @@
 ---
-// Site owner's review of uploaded tournaments: approve (publishes), reject (takes down), preview.
+// Site owner's review of uploaded tournaments: approve (publishes), reject (takes down), delete (for good, e.g. on a
+// privacy request), preview.
 // Needs the Worker secret ADMIN_KEY: log in once with it (POST, rate-limited); the page then keeps an
 // HttpOnly session cookie (a digest of the key) for 30 days. The key never goes in a URL.
 import { env } from 'cloudflare:workers';
 import Layout from '../../layouts/Layout.astro';
 import UploadPreview from '../../components/upload/UploadPreview.astro';
 import { limiterKey } from '../../lib/client';
-import { adminConfigured, adminSession, approve, BUSY, FORMATS, getRounds, getUpload, isAdmin, isAdminSession, isBusy, listUploads, reject, republishAll } from '../../lib/uploads';
+import {
+  adminConfigured,
+  adminSession,
+  approve,
+  BUSY,
+  deleteUpload,
+  FORMATS,
+  getRounds,
+  getUpload,
+  isAdmin,
+  isAdminSession,
+  isBusy,
+  listUploads,
+  reject,
+  republishAll,
+} from '../../lib/uploads';
 
 export const prerender = false;
 Astro.response.headers.set('Cache-Control', 'private, no-store');
-Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+// same-origin: no-referrer makes browsers send "Origin: null" on the login and action posts, which Astro refuses.
+Astro.response.headers.set('Referrer-Policy', 'same-origin');
 Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
 const COOKIE = 'cm_admin';
@@ -38,6 +55,10 @@ if (Astro.request.method === 'POST') {
       else if (action === 'reject' && id) {
         await reject(id);
         message = `Rejected #${id}: removed from the site if it was published. Cached copies of its pages expire within 5 minutes (existing players it was linked to: within a week).`;
+      } else if (action === 'delete' && id) {
+        message = (await deleteUpload(id))
+          ? `Deleted #${id} with its rounds, published games and the uploaded players left without games. Cached copies of its pages expire within 5 minutes (existing players it was linked to: within a week).`
+          : 'Not found.';
       } else if (action === 'republish') {
         const r = await republishAll();
         message = `Republished ${r.republished} approved tournaments (${r.unchanged} were up to date)${r.removed ? `; took ${r.removed} no longer approved off the site` : ''}.`;
@@ -91,6 +112,9 @@ const viewRounds = view ? await getRounds(view.id) : [];
                 {u.status !== 'rejected' && (
                   <form method="post" data-confirm={`Reject "${u.name}"${u.status === 'approved' ? ' and remove it from the site' : ''}?`}><input type="hidden" name="id" value={u.id} /><button name="action" value="reject">Reject</button></form>
                 )}
+                <form method="post" data-confirm={`Delete "${u.name}" for good: its rounds, files, contact${u.status === 'approved' ? ', its games on the site' : ''} and the uploaded players left without games? This cannot be undone, and the organiser's link stops working.`}>
+                  <input type="hidden" name="id" value={u.id} /><button name="action" value="delete">Delete</button>
+                </form>
               </td>
             </tr>
           ))}

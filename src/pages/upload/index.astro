@@ -19,7 +19,8 @@ else if (Astro.request.method === 'POST') {
   if (!form.get('rights')) error = 'Please confirm that you may publish these games.';
   else if (limiter && !(await limiter.limit({ key: `up:${limiterKey(Astro.clientAddress)}` })).success) error = 'Too many requests, please try again in a minute.';
   else {
-    const r = await createUpload(values);
+    const client = limiterKey(Astro.clientAddress);
+    const r = await createUpload({ ...values, client: client === 'anon' ? undefined : client });
     if ('token' in r && r.token) return Astro.redirect(`/upload/${r.token}/?new=1`, 303);
     error = r.error ?? 'Something went wrong.';
   }

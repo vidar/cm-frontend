@@ -12,8 +12,11 @@ CREATE TABLE IF NOT EXISTS uploads (
   status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
   event_id INTEGER,                     -- events.id once published
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  client TEXT                           -- SHA-256 of the creator's address (IPv6: its /64), for per-address limits
 );
+-- Added after the table was first created (LIMITS.clientPending / clientPerDay in src/lib/uploads.ts).
+ALTER TABLE uploads ADD COLUMN IF NOT EXISTS client TEXT;
 CREATE TABLE IF NOT EXISTS upload_rounds (
   upload_id INTEGER NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
   round INTEGER NOT NULL,

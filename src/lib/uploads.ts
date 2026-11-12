@@ -1,13 +1,15 @@
 // Tournaments uploaded by organisers (/upload/): PGN round by round, managed through a secret link.
 // Uploads live in tables uploads/upload_rounds (scripts/uploads.pg.sql) until the site owner approves
 // them (/upload/admin/, Worker secret ADMIN_KEY); then they are published into events/players/games
-// with ids from UPLOAD_ID_BASE, and later rounds publish straight away. Players are matched to existing
-// ones by FIDE ID (FideId tags) when the names agree, otherwise by exact name among uploaded players,
-// otherwise created. Only import from on-demand routes.
+// with ids from UPLOAD_ID_BASE, and later rounds publish straight away (rounds whose games didn't change are
+// left alone). Players are matched to existing ones by FIDE ID (FideId tags) when the names agree (in later
+// rounds, a TWIC player only if the approved tournament already had them), otherwise by exact name among
+// uploaded players, otherwise created. The owner can also delete an upload for good. Only import from
+// on-demand routes.
 import { env } from 'cloudflare:workers';
 import { analyseEvent, type EventGame } from './event';
 import { query, slugify, transaction, type Q } from './games';
-import { parseGame, roundOf, splitPgn, type ParsedGame, type PgnProblem } from './pgn';
+import { cut, parseGame, roundOf, splitPgn, translit, type ParsedGame, type PgnProblem } from './pgn';
 
 /** Shown when a rejected tournament is changed (also thrown inside a transaction when it was rejected meanwhile). */
 export const REJECTED = 'This tournament was not accepted, so it can no longer be changed.';
@@ -30,9 +32,23 @@ export type UploadFormat = keyof typeof FORMATS;
 /** events.type for each format (analyseEvent reads "k.o" as a knockout hint). */
 const EVENT_TYPE: Record<UploadFormat, string> = { swiss: 'swiss', 'round-robin': 'round robin', knockout: 'k.o.', team: 'team' };
 
-// games: per tournament; plies: per file (replaying moves is what costs CPU); pending: tournaments with
-// games waiting for approval; perDay: new tournaments a day.
-export const LIMITS = { bytes: 2_000_000, gamesPerRound: 600, rounds: 40, games: 2_000, plies: 150_000, pending: 50, perDay: 200 };
+// bytes: per file; stored: the files of a tournament together; games: per tournament; plies: moves replayed per
+// file, also those of games that fail (chess.js takes about 120 µs a move, so this is some 7 s of CPU); pending:
+// tournaments with games waiting for approval; perDay: new tournaments a day. The client* limits are per address
+// (IPv6 by /64), so one person can't use up the site-wide ones: tournaments waiting for approval (empty ones
+// too) and new ones a day.
+export const LIMITS = {
+  bytes: 2_000_000,
+  stored: 10_000_000,
+  gamesPerRound: 600,
+  rounds: 40,
+  games: 2_000,
+  plies: 60_000,
+  pending: 50,
+  perDay: 200,
+  clientPending: 5,
+  clientPerDay: 10,
+};
 
 export interface Upload {
   id: number;
@@ -48,6 +64,8 @@ export interface UploadRound {
   round: number;
   games: ParsedGame[];
   uploaded_at: string;
+  /** Size of the round's stored file. */
+  bytes: number;
 }
 
 // ---- secret links ----------------------------------------------------------------------------
@@ -88,28 +106,40 @@ const COLS = 'id, name, site, format, contact, status, event_id, created_at::tex
 
 // ---- organiser actions -----------------------------------------------------------------------
 
-const text = (s: string, max: number) => s.replace(/[<>\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+// As pgn.ts cleans names: no markup, control or invisible format characters, never half an emoji.
+const text = (s: string, max: number) => cut(s.replace(/\p{Cf}/gu, '').replace(/[<>\p{Cc}]/gu, ' ').replace(/\s+/g, ' ').trim(), max);
 
-export async function createUpload(input: { name: string; site: string; format: string; contact: string }) {
+/**
+ * `client` is the creator's address as limiterKey() gives it; only a digest of it is stored, to count the
+ * tournaments each address has waiting (LIMITS.client*).
+ */
+export async function createUpload(input: { name: string; site: string; format: string; contact: string; client?: string }) {
   const name = text(input.name, 120);
   if (name.length < 3) return { error: 'Give the tournament a name.' };
   if (!Object.hasOwn(FORMATS, input.format)) return { error: 'Choose the tournament format.' }; // not 'in': that sees Object.prototype
   // Tournaments that got no games within a week are dropped; empty ones don't hold a pending slot,
   // so nobody can lock organisers out by creating empty tournaments.
   await query(`DELETE FROM uploads u WHERE status = 'pending' AND created_at < now() - interval '7 days' AND NOT EXISTS (SELECT 1 FROM upload_rounds r WHERE r.upload_id = u.id)`);
-  const [c] = await query<{ pending: string; today: string }>(
+  const client = input.client ? await hash(`cm-upload-client:${input.client}`) : null;
+  const [c] = await query<{ pending: string; today: string; mine: string; mine_today: string }>(
     `SELECT count(*) FILTER (WHERE status = 'pending' AND EXISTS (SELECT 1 FROM upload_rounds r WHERE r.upload_id = u.id)) AS pending,
-       count(*) FILTER (WHERE created_at > now() - interval '1 day') AS today FROM uploads u`,
+       count(*) FILTER (WHERE created_at > now() - interval '1 day') AS today,
+       count(*) FILTER (WHERE client = $1 AND status = 'pending') AS mine,
+       count(*) FILTER (WHERE client = $1 AND created_at > now() - interval '1 day') AS mine_today FROM uploads u`,
+    [client],
   );
+  if (Number(c.mine) >= LIMITS.clientPending || Number(c.mine_today) >= LIMITS.clientPerDay)
+    return { error: 'You have created several tournaments that are still waiting for approval. Please add your rounds to one of them, or try again once we have looked at them.' };
   if (Number(c.pending) >= LIMITS.pending || Number(c.today) >= LIMITS.perDay)
     return { error: 'Too many tournaments are waiting for approval right now. Please try again in a few days.' };
   const token = newToken();
-  await query('INSERT INTO uploads (token_hash, name, site, format, contact) VALUES ($1, $2, $3, $4, $5)', [
+  await query('INSERT INTO uploads (token_hash, name, site, format, contact, client) VALUES ($1, $2, $3, $4, $5, $6)', [
     await hash(token),
     name,
     text(input.site, 120) || null,
     input.format,
     text(input.contact, 200) || null,
+    client,
   ]);
   return { token };
 }
@@ -125,35 +155,54 @@ export async function getUpload(id: number) {
 }
 
 export async function getRounds(uploadId: number): Promise<UploadRound[]> {
-  const rows = await query<{ round: number; games: string; uploaded_at: string }>(
-    'SELECT round, games, uploaded_at::text AS uploaded_at, now() AS t FROM upload_rounds WHERE upload_id = $1 ORDER BY round',
+  const rows = await query<{ round: number; games: string; uploaded_at: string; bytes: number }>(
+    'SELECT round, games, uploaded_at::text AS uploaded_at, octet_length(pgn) AS bytes, now() AS t FROM upload_rounds WHERE upload_id = $1 ORDER BY round',
     [uploadId],
   );
-  return rows.map((r) => ({ round: r.round, games: JSON.parse(r.games), uploaded_at: r.uploaded_at }));
+  return rows.map((r) => ({ round: r.round, games: JSON.parse(r.games), uploaded_at: r.uploaded_at, bytes: Number(r.bytes) }));
+}
+
+/** Shown when a file is too heavy to replay at once (LIMITS.plies). */
+export const TOO_MANY_MOVES = 'The file has too many moves to read at once: please upload it a few rounds at a time.';
+
+/** The round numbers a file's Round tags name, in order (read from the tags only, before anything is replayed). */
+export function taggedRounds(raws: string[]) {
+  const ns = raws.map((r) => roundOf(/^\s*\[Round\s+"([^"]*)"/m.exec(r)?.[1] ?? null)).filter((n): n is number => n !== null);
+  return [...new Set(ns)].sort((a, b) => a - b);
 }
 
 /**
  * Store a PGN file as round `forced`, or split by the games' Round tags when `forced` is null.
- * Replaces those rounds. Published tournaments are updated on the site right away.
+ * Replaces those rounds. Published tournaments are updated on the site right away. A round whose games are
+ * the same as stored (a whole-tournament file uploaded again after a new round) is left alone, so its games
+ * keep their ids, pages, analyses and notes: it is listed in `unchanged`.
  */
 export async function saveRounds(upload: Upload, forced: number | null, text: string) {
+  // Postgres text can't hold NUL, nor JSON a lone surrogate (a UTF-16 file cut in half).
+  text = text.replace(/[\u0000\p{Cs}]/gu, '');
   if (new TextEncoder().encode(text).length > LIMITS.bytes) return { error: 'The file is too large (2 MB at most).' };
   const raws = splitPgn(text);
   // Counted before anything is parsed: replaying the moves is the expensive part.
   if (raws.length > (forced ? LIMITS.gamesPerRound : LIMITS.games))
     return { error: forced ? `Round ${forced} has more than ${LIMITS.gamesPerRound} games.` : `At most ${LIMITS.games} games per tournament.` };
+  // A whole-tournament file uploaded with the Round field filled in would become one round.
+  const tagged = forced ? taggedRounds(raws) : [];
+  if (tagged.length > 1)
+    return {
+      error: `The file holds ${tagged.length} rounds by its Round tags (${tagged.join(', ')}). Clear the Round field to save each as its own round, or upload one round at a time.`,
+    };
   const problems: PgnProblem[] = [];
   const byRound = new Map<number, { game: ParsedGame; raw: string }[]>();
   const today = new Date().toISOString().slice(0, 10);
-  let plies = 0;
+  const cost = { plies: 0 };
   for (const [i, raw] of raws.entries()) {
-    const g = parseGame(raw);
+    const g = parseGame(raw, cost);
+    // Every move replayed counts, also in games that then fail on an illegal move.
+    if (cost.plies > LIMITS.plies) return { error: TOO_MANY_MOVES, problems };
     if (typeof g === 'string') {
       problems.push({ game: i + 1, message: g });
       continue;
     }
-    plies += g.plies;
-    if (plies > LIMITS.plies) return { error: 'The file has too many moves to read at once: please upload it a few rounds at a time.', problems };
     // A date in the future (they parse up to 2100) would become a player's "last game".
     if (g.date && g.date > today) g.date = null;
     const n = forced ?? roundOf(g.round);
@@ -179,21 +228,34 @@ export async function saveRounds(upload: Upload, forced: number | null, text: st
       const ok = roundOf(game.round) === n && rest.length >= 1 && rest.length <= 2 && rest.every((x) => /^\d{1,4}$/.test(x) && +x > 0);
       game.round = ok ? [n, ...rest.map(Number)].join('.') : upload.format === 'team' ? String(n) : `${n}.${i + 1}`;
     });
+  const rows = [...byRound].map(([n, list]) => ({ n, pgn: list.map((x) => x.raw.trim()).join('\n\n'), games: JSON.stringify(list.map((x) => x.game)) }));
+  const stored = existing.reduce((t, r) => t + (byRound.has(r.round) ? 0 : r.bytes), 0) + rows.reduce((t, r) => t + new TextEncoder().encode(r.pgn).length, 0);
+  if (stored > LIMITS.stored) return { error: `The tournament's files come to more than ${LIMITS.stored / 1_000_000} MB together.`, problems };
 
-  const status = await transaction(async (q) => {
+  const done = await transaction(async (q) => {
     const u = await lockUpload(q, upload.id);
-    for (const [n, list] of byRound)
+    // Rounds stored with exactly these games stay as they are (read under the lock).
+    const same = new Set(
+      (await q<{ round: number; games: string }>('SELECT round, games FROM upload_rounds WHERE upload_id = $1 AND round = ANY($2::int[])', [u.id, arr([...byRound.keys()])]))
+        .filter((r) => rows.some((x) => x.n === r.round && x.games === r.games))
+        .map((r) => r.round),
+    );
+    const changed = rows.filter((r) => !same.has(r.n));
+    for (const r of changed)
       await q(
         `INSERT INTO upload_rounds (upload_id, round, pgn, games) VALUES ($1, $2, $3, $4)
          ON CONFLICT (upload_id, round) DO UPDATE SET pgn = EXCLUDED.pgn, games = EXCLUDED.games, uploaded_at = now()`,
-        [u.id, n, list.map((x) => x.raw.trim()).join('\n\n'), JSON.stringify(list.map((x) => x.game))],
+        [u.id, r.n, r.pgn, r.games],
       );
-    await q('UPDATE uploads SET updated_at = now() WHERE id = $1', [u.id]);
-    if (u.status === 'approved') await publish(q, u, [...byRound.keys()]);
-    return u.status;
+    if (changed.length) {
+      await q('UPDATE uploads SET updated_at = now() WHERE id = $1', [u.id]);
+      if (u.status === 'approved') await publish(q, u, changed.map((r) => r.n));
+    }
+    return { status: u.status, same };
   }).catch(rejected);
-  if (!status) return { error: REJECTED, problems };
-  return { saved: [...byRound].map(([round, list]) => ({ round, games: list.length })).sort((a, b) => a.round - b.round), published: status === 'approved', problems };
+  if (!done) return { error: REJECTED, problems };
+  const saved = [...byRound].filter(([round]) => !done.same.has(round)).map(([round, list]) => ({ round, games: list.length })).sort((a, b) => a.round - b.round);
+  return { saved, unchanged: [...done.same].sort((a, b) => a - b), published: done.status === 'approved' && saved.length > 0, problems };
 }
 
 /** Remove a round; false when the tournament was rejected meanwhile. */
@@ -251,6 +313,27 @@ export async function reject(id: number) {
       await unpublish(q, u.event_id);
     }
     await q(`UPDATE uploads SET status = 'rejected', event_id = NULL, updated_at = now() WHERE id = $1`, [id]);
+  });
+}
+
+/**
+ * Delete a tournament for good (a takedown or privacy request): takes it off the site like reject(), with the
+ * uploaded players left without games, then removes the upload with its rounds, files and contact. Its secret
+ * link stops working. False for an unknown upload.
+ */
+export async function deleteUpload(id: number) {
+  return transaction(async (q) => {
+    const [u] = await q<Upload>(`SELECT ${COLS} FROM uploads WHERE id = $1 FOR UPDATE`, [id]);
+    if (!u) return false;
+    if (u.event_id) {
+      await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE'); // one writer at a time, as in publish()
+      // Not an event another upload holds as well (an id given out twice before nextId counted uploads' ids).
+      const [r] = await q<{ other: boolean }>('SELECT EXISTS (SELECT 1 FROM uploads WHERE event_id = $1 AND id <> $2) AS other', [u.event_id, id]);
+      if (!r.other) await unpublish(q, u.event_id);
+    }
+    await q('DELETE FROM upload_published WHERE upload_id = $1', [id]);
+    await q('DELETE FROM uploads WHERE id = $1', [id]); // upload_rounds cascade
+    return true;
   });
 }
 
@@ -368,20 +451,29 @@ async function freeSlugs(q: Q, table: 'events' | 'players', bases: string[]) {
   return out;
 }
 
+/** Slug of a name, Cyrillic and Greek in Latin letters ("Иванов, Иван" -> "ivanov-ivan"). */
+export const slugName = (s: string) => slugify(translit(s));
+
 /**
  * Whether two spellings name the same person: "Nakamura, Hikaru", "Hikaru Nakamura" and "Nakamura, H."
- * do, "John Doe" doesn't. Every part of the shorter name must match its own part of the longer one, in
- * full or as its start (an initial), and at least one in full.
+ * do ("Carlsen, Magnus" and "Carlsen, M." both ways round), "John Doe" doesn't. Every part of the shorter name
+ * must match its own part of the longer one, in full or as an initial of it (or it of the other), and at least
+ * one in full. Cyrillic and Greek are compared in Latin letters; names in other scripts (nothing left in Latin
+ * letters) only when they are written the same.
  */
 export function sameName(a: string, b: string) {
-  const parts = (s: string) => slugify(s).split('-').filter(Boolean);
+  const parts = (s: string) => slugName(s).split('-').filter(Boolean);
   const [short, long] = [parts(a), parts(b)].sort((x, y) => x.length - y.length);
+  if (!long.length) {
+    const norm = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[\s,.]+/g, ' ').trim();
+    return !!norm(a) && norm(a) === norm(b);
+  }
   if (!short.length) return false;
   let full = 0;
   for (const p of short) {
     let i = long.indexOf(p);
     if (i >= 0) full++;
-    else i = long.findIndex((l) => l.startsWith(p));
+    else i = long.findIndex((l) => l.startsWith(p) || p.startsWith(l)); // an initial on either side
     if (i < 0) return false;
     long.splice(i, 1);
   }
@@ -432,8 +524,27 @@ interface Side {
   fed: string | null;
 }
 
-/** Publish (or re-publish) rounds of an approved tournament into events/players/games. */
+/**
+ * FIDE IDs the games give to players whose names disagree ("Rvup, Anna" and "Rvup, Bob"): a typo, so the ID is
+ * ignored for all of them instead of merging them into one player.
+ */
+export function conflictingFides(games: ParsedGame[]) {
+  const names = new Map<number, Set<string>>();
+  for (const g of games)
+    for (const [name, fide] of [[g.white, g.whiteFide], [g.black, g.blackFide]] as const)
+      if (fide) (names.get(fide) ?? names.set(fide, new Set()).get(fide)!).add(name.toLowerCase());
+  const clash = (ns: string[]) => ns.some((a, i) => ns.slice(i + 1).some((b) => !sameName(a, b)));
+  return new Set([...names].filter(([, ns]) => clash([...ns])).map(([f]) => f));
+}
+
+/**
+ * Publish (or re-publish) rounds of an approved tournament into events/players/games. `all` is the site owner's
+ * approval (or "Republish all approved"): the whole tournament, FIDE links as the preview showed them. Otherwise
+ * these rounds go live unreviewed, so they link a FIDE ID to an existing TWIC player (id below UPLOAD_ID_BASE)
+ * only when the tournament's published games already did; any other side is published as an uploaded player.
+ */
 async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
+  const reviewed = all;
   // One publish at a time: ids and slugs are allocated from what is in the tables. A table lock that
   // conflicts with itself and with writes to games, not with reads (Hyperdrive doesn't support advisory locks).
   await q('LOCK TABLE games IN SHARE ROW EXCLUSIVE MODE');
@@ -451,30 +562,49 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
     else exists = r.ev;
   }
   if (!exists) all = true;
+  // TWIC players this tournament's published games link to (none when the event has to be created anew).
+  const linked =
+    reviewed || !exists
+      ? new Set<number>()
+      : new Set(
+          (await q<{ id: number }>('SELECT DISTINCT p AS id FROM games g, unnest(ARRAY[g.white_id, g.black_id]) AS p WHERE g.event_id = $1 AND p < $2', [eventId, UPLOAD_ID_BASE])).map(
+            (r) => r.id,
+          ),
+        );
   const touched = eventId && exists ? await dropRounds(q, eventId, all ? 'all' : rounds) : [];
-  const data = await q<{ round: number; games: string }>(
-    `SELECT round, games FROM upload_rounds WHERE upload_id = $1 ${all ? '' : 'AND round = ANY($2::int[])'} ORDER BY round`,
-    all ? [upload.id] : [upload.id, arr(rounds)],
-  );
-  const games = data.flatMap((r) => JSON.parse(r.games) as ParsedGame[]);
+  // All rounds are read: FIDE IDs that clash anywhere in the tournament are ignored everywhere.
+  const data = (await q<{ round: number; games: string }>('SELECT round, games FROM upload_rounds WHERE upload_id = $1 ORDER BY round', [upload.id])).map((r) => ({
+    round: r.round,
+    games: JSON.parse(r.games) as ParsedGame[],
+  }));
+  const games = data.filter((r) => all || rounds.includes(r.round)).flatMap((r) => r.games);
+  const clashing = conflictingFides(data.flatMap((r) => r.games));
   if (!exists) {
     eventId ??= await nextId(q, 'events');
     // The year in the slug comes from the games (stable when the event is published again), else from the upload.
     const year = games.map((g) => g.date?.slice(0, 4)).filter(Boolean).sort()[0] ?? upload.created_at.slice(0, 4);
-    const [slug] = await freeSlugs(q, 'events', [slugify(/\b(19|20)\d\d\b/.test(upload.name) ? upload.name : `${upload.name} ${year}`)]);
+    const base = slugName(/\b(19|20)\d\d\b/.test(upload.name) ? upload.name : `${upload.name} ${year}`);
+    // A name with no letters left in Latin script would be just the year: "event-<id>" instead.
+    const [slug] = await freeSlugs(q, 'events', [/[a-z]/.test(base) ? base : `event-${eventId}`]);
     await q(`INSERT INTO events (id, name, site, slug, games, twic, type) VALUES ($1, $2, $3, $4, 0, NULL, $5)`, [eventId, upload.name, upload.site, slug, EVENT_TYPE[upload.format]]);
     await q('UPDATE uploads SET event_id = $2 WHERE id = $1', [upload.id, eventId]);
   }
 
   // Players: an existing player when the FIDE ID and the name agree (an upload never puts games on a
   // real player's page under another name), else by exact name among uploaded players, else new. A FIDE
-  // ID whose player has a different name is dropped (a typo, or someone else's ID).
+  // ID whose player has a different name is dropped (a typo, or someone else's ID), and so is a new ID the
+  // file gives to different names, and, in rounds published unreviewed, a link to a TWIC player that the
+  // tournament didn't have yet.
   const fides = [...new Set(games.flatMap((g) => [g.whiteFide, g.blackFide]).filter((f): f is number => !!f))];
   const byFide = new Map<number, { id: number; name: string }>();
   if (fides.length)
     for (const r of await q<{ id: number; fide_id: number; name: string }>('SELECT DISTINCT ON (fide_id) id, fide_id, name FROM players WHERE fide_id = ANY($1::int[]) ORDER BY fide_id, games DESC', [arr(fides)]))
       byFide.set(r.fide_id, r);
-  const fideOf = (name: string, fide: number | null) => (fide && (!byFide.has(fide) || sameName(byFide.get(fide)!.name, name)) ? fide : null);
+  const fideOf = (name: string, fide: number | null) => {
+    const p = fide ? byFide.get(fide) : undefined;
+    if (!fide || (!p && clashing.has(fide))) return null;
+    return !p || (sameName(p.name, name) && (reviewed || isUploaded(p.id) || linked.has(p.id))) ? fide : null;
+  };
   const keyOf = (name: string, fide: number | null) => (fideOf(name, fide) ? `f${fide}` : `n${name.toLowerCase()}`);
   const ids = new Map<string, number>();
   for (const [f, p] of byFide) ids.set(`f${f}`, p.id);
@@ -492,11 +622,12 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
     if (!ids.has(k) && !fresh.has(k)) fresh.set(k, s);
   }
   if (fresh.size) {
-    const slugs = await freeSlugs(q, 'players', [...fresh.values()].map((s) => slugify(s.name)));
     const first = await nextId(q, 'players', fresh.size);
+    // A name with no Latin letters even after transliteration (Chinese, Arabic...) gets "player-<id>", not "unnamed-7".
+    const slugs = await freeSlugs(q, 'players', [...fresh.values()].map((s, i) => (/[a-z]/.test(slugName(s.name)) ? slugName(s.name) : `player-${first + i}`)));
     const rows = [...fresh].map(([k, s], i) => {
       ids.set(k, first + i);
-      return { id: first + i, fide_id: s.fide, name: s.name, slug: slugs[i], search: slugify(s.name).replace(/-/g, ' '), title: s.title, fed: s.fed };
+      return { id: first + i, fide_id: s.fide, name: s.name, slug: slugs[i], search: slugName(s.name).replace(/-/g, ' '), title: s.title, fed: s.fed };
     });
     await q(
       `INSERT INTO players (id, fide_id, name, slug, search, title, fed, games)
@@ -547,24 +678,36 @@ async function publish(q: Q, upload: Upload, rounds: number[], all = false) {
 
 // ---- preview (before publishing) -------------------------------------------------------------
 
+/** Why a FIDE ID in an upload is not linked: another name on the site, given to different names in the file, or added after approval. */
+export type FideIssue = 'other-name' | 'clash' | 'unreviewed';
+
 /**
- * How the uploaded players' FIDE IDs will resolve, for the review: linked to an existing player's page
- * (the names agree), or not linked because the ID belongs to someone with another name.
+ * How the uploaded players' FIDE IDs will resolve, for the review: linked to an existing player's page (the names
+ * agree), or not linked because the ID belongs to someone with another name, because the file gives it to players
+ * with different names (`player` is then null when nobody on the site has it), or, for a published tournament
+ * (`eventId`), because the round came after approval and the tournament didn't link that player yet (publish()).
  */
-export async function fideLinks(rounds: UploadRound[]) {
+export async function fideLinks(rounds: UploadRound[], eventId: number | null = null) {
+  const games = rounds.flatMap((r) => r.games);
   const sides = new Map<string, { name: string; fide: number }>();
-  for (const g of rounds.flatMap((r) => r.games))
+  for (const g of games)
     for (const [name, fide] of [[g.white, g.whiteFide], [g.black, g.blackFide]] as const) if (fide) sides.set(`${fide}/${name}`, { name, fide });
   if (!sides.size) return [];
-  const found = await query<{ fide_id: number; name: string; slug: string }>(
-    'SELECT DISTINCT ON (fide_id) fide_id, name, slug FROM players WHERE fide_id = ANY($1::int[]) ORDER BY fide_id, games DESC',
-    [arr([...new Set([...sides.values()].map((s) => s.fide))])],
+  const clashing = conflictingFides(games);
+  const found = await query<{ id: number; fide_id: number; name: string; slug: string; in_event: boolean }>(
+    `SELECT DISTINCT ON (fide_id) id, fide_id, name, slug, EXISTS (SELECT 1 FROM games g WHERE g.event_id = $2 AND (g.white_id = p.id OR g.black_id = p.id)) AS in_event, now() AS t
+     FROM players p WHERE fide_id = ANY($1::int[]) ORDER BY fide_id, games DESC`,
+    [arr([...new Set([...sides.values()].map((s) => s.fide))]), eventId],
   );
   const byFide = new Map(found.map((p) => [p.fide_id, p]));
   return [...sides.values()]
-    .filter((s) => byFide.has(s.fide))
-    .map((s) => ({ ...s, player: byFide.get(s.fide)!, linked: sameName(byFide.get(s.fide)!.name, s.name) }))
-    .sort((a, b) => Number(a.linked) - Number(b.linked) || a.name.localeCompare(b.name));
+    .filter((s) => byFide.has(s.fide) || clashing.has(s.fide))
+    .map((s) => {
+      const p = byFide.get(s.fide);
+      const issue: FideIssue | null = !p ? 'clash' : !sameName(p.name, s.name) ? 'other-name' : eventId && !isUploaded(p.id) && !p.in_event ? 'unreviewed' : null;
+      return { ...s, player: p ? { fide_id: p.fide_id, name: p.name, slug: p.slug } : null, linked: !issue, issue };
+    })
+    .sort((a, b) => Number(a.linked) - Number(b.linked) || a.fide - b.fide || a.name.localeCompare(b.name));
 }
 
 /** Event analysis of the uploaded rounds, as the event page will show it (standings, format). */

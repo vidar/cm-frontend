@@ -14,7 +14,13 @@ const individual = a && (a.format === 'swiss' || a.format === 'round-robin');
 const standings = individual ? a.standingsAfter(Infinity).slice(0, 40) : [];
 const teams = a?.teams?.standingsAfter(Infinity).slice(0, 40) ?? [];
 const RES: Record<string, string> = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½', '*': '*' };
-const links = rounds.length ? await fideLinks(rounds) : [];
+// For a published tournament, links that rounds added after approval did not get are shown as such.
+const links = rounds.length ? await fideLinks(rounds, upload.status === 'approved' ? upload.event_id : null) : [];
+const WHY = {
+  'other-name': 'another name, so the ID is ignored and they get a page of their own',
+  clash: 'the file gives this ID to players with different names, so it is ignored for all of them',
+  unreviewed: 'added after approval: new links to existing players are made only when we approve a tournament, so they get a page of their own',
+} as const;
 ---
 
 {a && (
@@ -38,12 +44,12 @@ const links = rounds.length ? await fideLinks(rounds) : [];
     )}
     {links.length > 0 && (
       <details open={links.some((l) => !l.linked)}>
-        <summary>FIDE IDs of players already on the site: {links.filter((l) => l.linked).length} linked{links.some((l) => !l.linked) && `, ${links.filter((l) => !l.linked).length} not linked`}</summary>
+        <summary>FIDE IDs: {links.filter((l) => l.linked).length} linked to players already on the site{links.some((l) => !l.linked) && `, ${links.filter((l) => !l.linked).length} not linked`}</summary>
         <ul class="links">
           {links.map((l) => (
             <li>
-              {l.name} (FIDE {l.fide}) {l.linked ? '→' : '≠'} <a href={`/players/${l.player.slug}/`}>{l.player.name}</a>
-              {!l.linked && <span class="muted"> (another name, so the ID is ignored and {l.name} gets a page of their own)</span>}
+              {l.name} (FIDE {l.fide}){l.player && <> {l.linked ? '→' : '≠'} <a href={`/players/${l.player.slug}/`}>{l.player.name}</a></>}
+              {l.issue && <span class="muted"> ({WHY[l.issue]})</span>}
             </li>
           ))}
         </ul>

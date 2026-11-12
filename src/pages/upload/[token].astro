@@ -7,11 +7,13 @@ import { limiterKey } from '../../lib/client';
 import UploadPreview from '../../components/upload/UploadPreview.astro';
 import { query } from '../../lib/games';
 import { BUSY, deleteRound, findUpload, FORMATS, getRounds, isBusy, LIMITS, REJECTED, saveRounds } from '../../lib/uploads';
-import type { PgnProblem } from '../../lib/pgn';
+import { decodePgn, type PgnEncoding, type PgnProblem } from '../../lib/pgn';
 
 export const prerender = false;
 Astro.response.headers.set('Cache-Control', 'private, no-store');
-Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+// same-origin, not no-referrer: with no-referrer browsers send "Origin: null" on this page's own form posts, which
+// Astro's origin check refuses (403). Links to other sites still get no referrer, so the secret link stays here.
+Astro.response.headers.set('Referrer-Policy', 'same-origin');
 Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
 const token = Astro.params.token ?? '';
@@ -45,16 +47,22 @@ if (Astro.request.method === 'POST') {
         const forced = roundField ? Number(roundField) : null;
         if ((file instanceof File && file.size > LIMITS.bytes) || pasted.length > LIMITS.bytes) error = 'The file is too large (2 MB at most).';
         else {
-          const text = file instanceof File && file.size ? await file.text() : pasted;
+          // Files in Windows-1252 or UTF-16 (ChessBase, Swiss-Manager) are read as such, not as broken UTF-8.
+          let encoding: PgnEncoding = 'UTF-8';
+          let text = pasted;
+          if (file instanceof File && file.size) ({ text, encoding } = decodePgn(new Uint8Array(await file.arrayBuffer())));
           if (!text.trim()) error = 'Choose a PGN file or paste the games.';
           else if (forced !== null && !(Number.isInteger(forced) && forced >= 1 && forced <= LIMITS.rounds)) error = `The round must be a number from 1 to ${LIMITS.rounds}.`;
           else {
             const r = await saveRounds(upload, forced, text);
             problems = r.problems ?? [];
             if ('error' in r && r.error) error = r.error;
-            else if ('saved' in r && r.saved)
-              message =
-                r.saved.map((s) => `Round ${s.round}: ${s.games} game${s.games === 1 ? '' : 's'}`).join(', ') + ` saved${r.published ? ' and published' : ''}.`;
+            else if ('saved' in r && r.saved) {
+              const saved = r.saved.map((s) => `Round ${s.round}: ${s.games} game${s.games === 1 ? '' : 's'}`).join(', ');
+              const same = r.unchanged.length ? `${r.unchanged.length === 1 ? 'Round' : 'Rounds'} ${r.unchanged.join(', ')} unchanged.` : '';
+              message = [saved && `${saved} saved${r.published ? ' and published' : ''}.`, same].filter(Boolean).join(' ');
+              if (encoding !== 'UTF-8') message += ` The file was read as ${encoding} text: check that names with accents look right.`;
+            }
           }
         }
       }
@@ -102,7 +110,7 @@ const next = rounds.length ? Math.max(...rounds.map((r) => r.round)) + 1 : 1;
     <form method="post" enctype="multipart/form-data" class="card">
       <h2>Upload a round</h2>
       <label>Round <input name="round" type="number" min="1" max={LIMITS.rounds} value={next} />
-        <span class="hint">Leave empty to use the games' Round tags (for a file with several rounds). Uploading a round that exists replaces it.</span>
+        <span class="hint">Leave empty to use the games' Round tags (for a file with several rounds). Uploading a round that exists replaces it; rounds whose games are unchanged are left as they are.</span>
       </label>
       <label>PGN file <input name="file" type="file" accept=".pgn,application/x-chess-pgn,text/plain" /></label>
       <label>…or paste the games <textarea name="pgn" rows="5" placeholder='[Event "..."]&#10;[White "..."]&#10;...'></textarea></label>
