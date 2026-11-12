@@ -50,6 +50,10 @@
 .cm-board .sq.right { box-shadow: inset 0 0 0 100vmax rgba(47, 125, 70, 0.55); }
 .cm-board .sq.wrong { box-shadow: inset 0 0 0 100vmax rgba(180, 56, 47, 0.55); }
 .cm-board .sq:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; border-radius: 0; z-index: 1; }
+.cm-board.readonly .sq { cursor: default; }
+
+/* Screen-reader-only text, e.g. the live region announcing moves */
+.cm-sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Static SVG diagrams (src/components/BoardDiagram.astro) */
 .board-diagram { display: block; width: min(100%, 24rem); height: auto; border-radius: 6px; box-shadow: 0 1px 2px rgba(60, 40, 10, 0.12), 0 6px 18px rgba(60, 40, 10, 0.08); }

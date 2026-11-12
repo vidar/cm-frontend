@@ -12,13 +12,16 @@ export interface EngineLine {
 
 export class Engine {
   private worker: Worker;
-  private ready: Promise<void>;
+  /** Resolves once Stockfish has loaded (the wasm file is 1.8 MB). */
+  readonly ready: Promise<void>;
   private searching = false;
   private stopping = false;
   private pending: { fen: string; depth: number } | null = null;
   private current: { fen: string; whiteToMove: boolean } | null = null;
   private lines = new Map<number, EngineLine>();
   onUpdate: (lines: EngineLine[]) => void = () => {};
+  /** The worker failed (the engine files didn't load, or Stockfish crashed); this Engine is unusable. */
+  onError: () => void = () => {};
 
   constructor(url = '/engine/stockfish.js', private multiPv = 3) {
     this.worker = new Worker(url);
@@ -29,6 +32,11 @@ export class Engine {
       if (line === 'readyok') resolveReady();
       else if (line.startsWith('bestmove')) this.onBestMove();
       else if (line.startsWith('info ') && line.includes(' pv ')) this.onInfo(line);
+    };
+    this.worker.onerror = this.worker.onmessageerror = (e: Event) => {
+      e.preventDefault();
+      this.pending = null;
+      this.onError();
     };
     this.send('uci');
     this.send(`setoption name MultiPV value ${multiPv}`);
@@ -41,8 +49,10 @@ export class Engine {
 
   /** Analyses a position, replacing any running search. */
   async analyse(fen: string, depth = 22) {
-    await this.ready;
+    // Set before waiting for the engine to load, so a stop() or a newer position in the meantime wins.
     this.pending = { fen, depth };
+    await this.ready;
+    if (!this.pending) return; // stopped, or an earlier call already started this job
     if (this.searching) {
       // Wait for the old search's "bestmove" so its output can't be mistaken for the new one's.
       if (!this.stopping) {

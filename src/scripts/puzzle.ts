@@ -48,6 +48,7 @@ export function mountPuzzle(root: HTMLElement) {
   const streakEl = root.querySelector<HTMLElement>('#puzzle-streak')!;
   const shareBtn = root.querySelector<HTMLButtonElement>('#share')!;
   const side = orientation === 'w' ? 'White' : 'Black';
+  const opponent = orientation === 'w' ? 'Black' : 'White';
 
   const chess = new Chess(rawFen);
   let step = 1; // index into uci of the next solver move
@@ -104,9 +105,10 @@ export function mountPuzzle(root: HTMLElement) {
   async function opponentReply() {
     busy = true;
     await wait(450);
-    play(uci[step]);
+    const m = play(uci[step]);
     step++;
     busy = false;
+    return m;
   }
 
   async function attempt(from: Square, to: Square) {
@@ -132,8 +134,9 @@ export function mountPuzzle(root: HTMLElement) {
     step++;
     if (step >= uci.length || probe.isCheckmate()) return finish(true);
     setStatus('<strong>Correct!</strong> Keep going…');
-    await opponentReply();
-    setStatus(`<strong>${side} to move.</strong> Find the next move.`);
+    const reply = await opponentReply();
+    // Name the reply: the status is a live region, so screen-reader users hear what happened on the board.
+    setStatus(`${opponent} played ${reply.san}. <strong>${side} to move.</strong> Find the next move.`);
   }
 
   async function onClick(sq: Square) {
@@ -197,8 +200,9 @@ export function mountPuzzle(root: HTMLElement) {
   // Play the opponent's setup move so the solver sees what just happened.
   void (async () => {
     await wait(600);
-    play(uci[0]);
+    const setup = play(uci[0]);
     busy = false;
+    if (!done) setStatus(`${opponent} played ${setup.san}. <strong>${side} to move.</strong> Find the best move.`);
     if (done) {
       setStatus(
         done.solved

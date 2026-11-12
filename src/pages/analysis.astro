@@ -1,5 +1,7 @@
 ---
+import BoardDiagram from '../components/BoardDiagram.astro';
 import BoardStyle from '../components/BoardStyle.astro';
+import { START_FEN } from '../scripts/tree';
 import Layout from '../layouts/Layout.astro';
 import '../styles/board.css';
 ---
@@ -15,13 +17,16 @@ import '../styles/board.css';
     <div class="board-col">
       <div class="board-row">
         <div class="evalbar" id="evalbar" aria-hidden="true"><div class="evalbar-fill" id="evalbar-fill"></div></div>
-        <div id="board" class="board-wrap"></div>
+        <!-- The static diagram holds the board's place until the script replaces it (no layout shift). -->
+        <div id="board" class="board-wrap"><BoardDiagram fen={START_FEN} title="Starting position" /></div>
       </div>
+      <noscript><p class="error">The analysis board needs JavaScript, which is turned off in this browser.</p></noscript>
+      <p class="cm-sr-only" id="move-announce" aria-live="polite"></p>
       <div class="nav" role="toolbar" aria-label="Move navigation">
-        <button type="button" data-nav="start" title="Start (↑)" aria-label="Go to start">⏮</button>
+        <button type="button" data-nav="start" title="Start (↑ or Home)" aria-label="Go to start">⏮</button>
         <button type="button" data-nav="prev" title="Previous (←)" aria-label="Previous move">◀</button>
         <button type="button" data-nav="next" title="Next (→)" aria-label="Next move">▶</button>
-        <button type="button" data-nav="end" title="End (↓)" aria-label="Go to end">⏭</button>
+        <button type="button" data-nav="end" title="End (↓ or End)" aria-label="Go to end">⏭</button>
         <button type="button" id="flip" title="Flip board (f)">Flip</button>
       </div>
       <div class="board-style-row"><BoardStyle /></div>
@@ -49,6 +54,7 @@ import '../styles/board.css';
         <textarea id="import-text" rows="5" spellcheck="false" placeholder="Paste a FEN or a PGN"></textarea>
         <button type="button" id="import">Load</button>
         <p class="error" id="import-error" role="alert" hidden></p>
+        <p class="muted small" id="import-note" role="status" hidden></p>
       </details>
       <details class="io" id="export">
         <summary>Export and share</summary>
@@ -66,8 +72,9 @@ import '../styles/board.css';
   <h2>How to use it</h2>
   <ul>
     <li>Drag or click pieces to play moves. Playing a different move from an earlier position creates a variation.</li>
-    <li>Use <kbd>←</kbd> <kbd>→</kbd> to step through moves, <kbd>↑</kbd> <kbd>↓</kbd> to jump to the start or end, and <kbd>f</kbd> to flip the board.</li>
+    <li>Use <kbd>←</kbd> <kbd>→</kbd> to step through moves. While the board, the move list or the buttons have the focus, <kbd>↑</kbd> <kbd>↓</kbd> jump to the start or end and <kbd>f</kbd> flips the board. On the board, the arrow keys move between squares and <kbd>Enter</kbd> picks a piece up or puts it down.</li>
     <li>Stockfish runs entirely in your browser and shows the three best lines. Click a line to play its first move.</li>
+    <li>Imported PGN keeps its variations; comments are left out.</li>
     <li>Link to any position with <code>/analysis/?fen=&lt;FEN&gt;</code> or a game with <code>/analysis/?pgn=&lt;moves&gt;</code> (add <code>&amp;flip=1</code> for Black's view).</li>
   </ul>
   <p class="muted small">
@@ -86,7 +93,7 @@ import '../styles/board.css';
     background: var(--bg); border-radius: 8px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
   }
   .board-wrap :global(.promo button) { font: inherit; padding: 0.4rem; cursor: pointer; }
-  .board-wrap :global(.cm-board) { width: 100%; }
+  .board-wrap :global(.cm-board), .board-wrap :global(.board-diagram) { width: 100%; }
   .evalbar { width: 0.9rem; border-radius: 3px; background: #2a241d; position: relative; overflow: hidden; }
   .evalbar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f4efe6; transition: height 0.3s; }
   .evalbar.flipped .evalbar-fill { top: 0; bottom: auto; }
@@ -95,12 +102,18 @@ import '../styles/board.css';
   .nav button { flex: 1; }
   .engine-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
   .lines { list-style: none; padding: 0; margin: 0.4rem 0 0; min-height: 4.6em; }
-  .lines :global(li) { padding: 0.2rem 0.3rem; border-radius: 4px; cursor: pointer; font-size: 0.92rem; }
-  .lines :global(li:hover) { background: color-mix(in srgb, currentColor 8%, transparent); }
+  .lines :global(.line) {
+    display: block; width: 100%; text-align: left; border: 0; background: none; line-height: inherit;
+    padding: 0.2rem 0.3rem; border-radius: 4px; cursor: pointer; font-size: 0.92rem;
+  }
+  .lines :global(.line:hover) { background: color-mix(in srgb, currentColor 8%, transparent); }
   .lines :global(.score) { display: inline-block; min-width: 3.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
   .opening { min-height: 1.5em; margin: 0.6rem 0; }
   .moves { max-height: 22rem; overflow-y: auto; line-height: 1.9; border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 6px; padding: 0.5rem 0.7rem; min-height: 4rem; }
-  .moves :global(.mv) { cursor: pointer; padding: 0.05rem 0.25rem; border-radius: 3px; white-space: nowrap; }
+  .moves :global(.mv) {
+    display: inline; border: 0; background: none; color: inherit; line-height: inherit;
+    cursor: pointer; padding: 0.05rem 0.25rem; border-radius: 3px; white-space: nowrap;
+  }
   .moves :global(.mv:hover) { background: color-mix(in srgb, currentColor 10%, transparent); }
   .moves :global(.mv.current) { background: var(--accent-fill); color: #fff; }
   .moves :global(.num) { color: var(--muted); margin-left: 0.3rem; }

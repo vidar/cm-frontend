@@ -1,4 +1,5 @@
-import { Chess } from 'chess.js';
+import { Chess, validateFen } from 'chess.js';
+import { splitPgn } from '../lib/pgn';
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
@@ -117,4 +118,82 @@ function renderLine(from: TreeNode, forceNumber: boolean): string[] {
     p = main;
   }
   return out;
+}
+
+/**
+ * Why a position can't be analysed, or null. chess.js accepts a FEN whose side not to move is in check (its king
+ * could be captured): Stockfish crashes on those, and the board would let a move take the king.
+ */
+export function positionError(fen: string): string | null {
+  const v = validateFen(fen);
+  if (!v.ok) return (v.error ?? 'invalid FEN').replace(/^Invalid FEN: /, '');
+  const parts = fen.split(' ');
+  parts[1] = parts[1] === 'w' ? 'b' : 'w';
+  parts[3] = '-';
+  if (new Chess(parts.join(' ')).isCheck()) {
+    const [other, mover] = parts[1] === 'w' ? ['White', 'Black'] : ['Black', 'White'];
+    return `${other} is in check with ${mover} to move, which can't happen in a game`;
+  }
+  return null;
+}
+
+/** Most moves (main line and variations together) an import replays; each costs CPU in the browser. */
+export const MAX_IMPORT_MOVES = 5000;
+
+/**
+ * Reads PGN with its variations (chess.js keeps only the main line). Only the first game of the text is read.
+ * Throws an Error with a short plain message; `notes` says what was left out.
+ */
+export function importPgn(text: string): { tree: GameTree; notes: string[] } {
+  const games = splitPgn(text);
+  const notes: string[] = [];
+  if (games.length > 1) notes.push(`The text holds ${games.length} games; only the first was loaded.`);
+  const tags: Record<string, string> = {};
+  const body: string[] = [];
+  for (const line of (games[0] ?? '').split('\n')) {
+    const m = /^\s*\[(\w+)\s+"((?:[^"\\]|\\.)*)"\s*\]\s*$/.exec(line);
+    if (m) tags[m[1]] = m[2].replace(/\\(.)/g, '$1');
+    else if (!line.startsWith('%')) body.push(line);
+  }
+  if (tags.Variant && !/^(standard|from position)$/i.test(tags.Variant)) throw new Error(`only standard chess is supported, not "${tags.Variant}"`);
+  let start = START_FEN;
+  if (tags.FEN) {
+    const err = positionError(tags.FEN.trim());
+    if (err) throw new Error(`the FEN tag is not a valid position: ${err}`);
+    start = tags.FEN.trim();
+  }
+  const tree = new GameTree(start);
+  let dropped = false;
+  const movetext = body.join('\n').replace(/\{[^}]*\}?|;[^\n]*/g, () => ((dropped = true), ' '));
+  let cur = tree.root; // position after the last move
+  let prev: TreeNode | null = null; // position before it: where a variation branches off
+  const stack: { cur: TreeNode; prev: TreeNode | null }[] = [];
+  let count = 0;
+  for (const tok of movetext.match(/[()]|[^\s()]+/g) ?? []) {
+    if (tok === '(') {
+      if (!prev) throw new Error('a variation starts before any move it could replace');
+      stack.push({ cur, prev });
+      cur = prev;
+      prev = null;
+    } else if (tok === ')') {
+      const s = stack.pop();
+      if (!s) throw new Error('a variation is closed with ")" that was never opened');
+      ({ cur, prev } = s);
+    } else if (/^\$\d+$/.test(tok) || /^[!?]+$/.test(tok)) {
+      dropped = true;
+    } else if (!/^(1-0|0-1|1\/2-1\/2|\*)$/.test(tok)) {
+      // Move numbers may be glued to the move ("12.Nf3", "12...Nf6", "12…Nf6").
+      const raw = tok.replace(/^\d+(\.+|…)/, '');
+      if (!raw || /^[.…]+$/.test(raw)) continue;
+      const san = raw.replace(/[!?]+$/, '').replace(/^0-0-0/, 'O-O-O').replace(/^0-0/, 'O-O');
+      if (/[!?]$/.test(raw)) dropped = true;
+      if (++count > MAX_IMPORT_MOVES) throw new Error(`more than ${MAX_IMPORT_MOVES} moves`);
+      const next = tree.play(cur, san);
+      if (!next) throw new Error(`"${raw}" is not a legal move ${cur.san ? `after ${moveLabel(cur, true)}` : 'in the starting position'}`);
+      prev = cur;
+      cur = next;
+    }
+  }
+  if (dropped) notes.push('Comments and move marks (!, ?, $1) were left out: the board keeps the moves and variations.');
+  return { tree, notes };
 }

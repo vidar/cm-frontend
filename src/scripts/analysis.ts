@@ -1,10 +1,12 @@
 import { Chess, type Square } from 'chess.js';
-import { Board } from './board';
+import { Board, scrollWithin } from './board';
 import { Engine, evalBarPercent, type EngineLine } from './engine';
-import { GameTree, START_FEN, moveLabel, type TreeNode } from './tree';
+import { GameTree, START_FEN, importPgn, moveLabel, positionError, type TreeNode } from './tree';
 import { formatEval, formatMovesFrom } from '../lib/chess/notation';
 
 const FEN_RE = /^[prnbqkPRNBQK1-8]+(\/[prnbqkPRNBQK1-8]+){7}(\s|$)/;
+/** Looks like a FEN's piece placement, but with the wrong number of ranks. */
+const FENISH_RE = /^[prnbqkPRNBQK1-8]*\/[prnbqkPRNBQK1-8/]*(\s|$)/;
 
 /** Fills in missing FEN fields so "placement w" style input works too. */
 function normalizeFen(fen: string): string {
@@ -21,14 +23,17 @@ export function mountAnalysis(root: HTMLElement) {
   const engineToggle = $<HTMLInputElement>('engine-on');
   const evalbar = $('evalbar');
   const evalFill = $('evalbar-fill');
+  const announce = $('move-announce');
 
   let tree = new GameTree();
   let current: TreeNode = tree.root;
   let orientation: 'w' | 'b' = 'w';
   let selected: Square | null = null;
   let engine: Engine | null = null;
+  let engineLoaded = false;
   let openingIndex: Record<string, [string, string, string]> | null = null;
   let openingRequested = false;
+  let mounted = false; // the first render doesn't announce a move
 
   const board = new Board($('board'), {
     onSquareClick: (sq) => onSquareClick(sq as Square),
@@ -39,28 +44,37 @@ export function mountAnalysis(root: HTMLElement) {
   const turn = () => (current.fen.split(' ')[1] as 'w' | 'b');
 
   // ---------- loading ----------
-  function load(text: string): string | null {
+  /** Loads a FEN or PGN; returns an error message, or the notes on what was left out. */
+  function load(text: string): { error: string } | { notes: string[] } {
     const t = text.trim();
+    let notes: string[] = [];
     try {
       if (!t) {
         tree = new GameTree();
       } else if (FEN_RE.test(t)) {
         const fen = normalizeFen(t);
-        new Chess(fen); // validates
+        const err = positionError(fen);
+        if (err) return { error: err };
         tree = new GameTree(fen);
+      } else if (FENISH_RE.test(t)) {
+        return { error: 'a FEN needs 8 ranks separated by "/"' };
       } else {
-        const chess = new Chess();
-        chess.loadPgn(t);
-        const startFen = chess.getHeaders().FEN ?? START_FEN;
-        tree = new GameTree(startFen);
-        let n = tree.root;
-        for (const san of chess.history()) n = tree.play(n, san) ?? n;
+        ({ tree, notes } = importPgn(t));
       }
     } catch (e) {
-      return (e as Error).message;
+      return { error: (e as Error).message };
     }
     current = tree.end(tree.root);
-    return null;
+    return { notes };
+  }
+
+  function showImportResult(r: ReturnType<typeof load>, prefix: string) {
+    const err = 'error' in r ? r.error : '';
+    $('import-error').hidden = !err;
+    $('import-error').textContent = err ? `${prefix}: ${err}` : '';
+    const notes = 'notes' in r ? r.notes : [];
+    $('import-note').hidden = !notes.length;
+    $('import-note').textContent = notes.join(' ');
   }
 
   // ---------- moves ----------
@@ -127,7 +141,7 @@ export function mountAnalysis(root: HTMLElement) {
       const label = moveLabel(n, force);
       const sp = label.lastIndexOf(' ');
       const num = sp > 0 ? `<span class="num">${label.slice(0, sp)}</span> ` : '';
-      return `${num}<span class="mv${n === current ? ' current' : ''}" data-id="${n.id}">${n.san}</span>`;
+      return `${num}<button type="button" class="mv${n === current ? ' current" aria-current="true' : ''}" data-id="${n.id}">${n.san}</button>`;
     };
     const line = (from: TreeNode, force: boolean): string => {
       const out: string[] = [];
@@ -146,8 +160,12 @@ export function mountAnalysis(root: HTMLElement) {
       return out.join(' ');
     };
     html.push(line(tree.root, true));
+    // Re-rendering replaces the buttons: keep the keyboard focus in the move list, on the current move.
+    const hadFocus = movesEl.contains(document.activeElement);
     movesEl.innerHTML = html.join('') || '<span class="muted">Play a move on the board, or import a game below.</span>';
-    movesEl.querySelector('.current')?.scrollIntoView({ block: 'nearest' });
+    const cur = movesEl.querySelector<HTMLElement>('.current');
+    if (cur) scrollWithin(movesEl, cur);
+    if (hadFocus) (cur ?? movesEl.querySelector<HTMLElement>('.mv'))?.focus({ preventScroll: true });
   }
 
   function renderOpening() {
@@ -194,6 +212,7 @@ export function mountAnalysis(root: HTMLElement) {
   }
 
   function render() {
+    if (mounted) announce.textContent = current.san ? moveLabel(current, true) : 'Starting position';
     board.setPosition(current.fen);
     board.mark('last', current.uci ? [current.uci.slice(0, 2), current.uci.slice(2, 4)] : []);
     select(null);
@@ -216,6 +235,7 @@ export function mountAnalysis(root: HTMLElement) {
     const chess = new Chess(current.fen);
     if (chess.isGameOver()) {
       engine?.stop();
+      board.setArrows([]);
       const result = chess.isCheckmate() ? `Checkmate — ${turn() === 'w' ? 'Black' : 'White'} wins` : 'Draw';
       statusEl.textContent = result;
       setBar(chess.isCheckmate() ? { cp: null, mate: turn() === 'w' ? -1 : 1 } : { cp: 0, mate: null });
@@ -223,15 +243,31 @@ export function mountAnalysis(root: HTMLElement) {
     }
     if (!engineToggle.checked) {
       engine?.stop();
+      board.setArrows([]);
       statusEl.textContent = 'off';
       setBar(null);
       return;
     }
     if (!engine) {
-      engine = new Engine();
-      engine.onUpdate = showLines;
+      const e = (engine = new Engine());
+      e.onUpdate = showLines;
+      // The engine files didn't load or Stockfish crashed: say so; the next position tries a new worker.
+      e.onError = () => {
+        e.destroy();
+        if (engine !== e) return;
+        engine = null;
+        engineLoaded = false;
+        statusEl.textContent = 'engine unavailable';
+        linesEl.innerHTML = '';
+        board.setArrows([]);
+      };
+      void e.ready.then(() => (engineLoaded = engine === e));
+      // A failed download of the engine files doesn't always raise an error in the worker: don't say "loading" forever.
+      setTimeout(() => {
+        if (engine === e && !engineLoaded && statusEl.textContent === 'loading engine…') statusEl.textContent = "engine unavailable: it didn't load";
+      }, 30_000);
     }
-    statusEl.textContent = 'thinking…';
+    statusEl.textContent = engineLoaded ? 'thinking…' : 'loading engine…';
     void engine.analyse(current.fen);
   }
 
@@ -242,6 +278,8 @@ export function mountAnalysis(root: HTMLElement) {
     setBar(lines[0]);
     const best = lines[0].pv[0];
     board.setArrows(best ? [{ from: best.slice(0, 2), to: best.slice(2, 4) }] : []);
+    // The lines are redrawn on every engine update: keep the keyboard focus on the same line.
+    const focused = [...linesEl.querySelectorAll('button')].indexOf(document.activeElement as HTMLButtonElement);
     linesEl.innerHTML = lines
       .map((l) => {
         const chess = new Chess(fen);
@@ -253,16 +291,21 @@ export function mountAnalysis(root: HTMLElement) {
             break;
           }
         }
-        return `<li data-uci="${l.pv[0] ?? ''}"><span class="score">${formatEval(l)}</span> ${formatMovesFrom(san, current.ply)}</li>`;
+        return `<li><button type="button" class="line" data-uci="${l.pv[0] ?? ''}"><span class="score">${formatEval(l)}</span> ${formatMovesFrom(san, current.ply)}</button></li>`;
       })
       .join('');
+    if (focused >= 0) linesEl.querySelectorAll('button')[focused]?.focus({ preventScroll: true });
   }
 
   linesEl.addEventListener('click', (e) => {
-    const uci = (e.target as HTMLElement).closest<HTMLLIElement>('li')?.dataset.uci;
+    const uci = (e.target as HTMLElement).closest<HTMLElement>('[data-uci]')?.dataset.uci;
     if (!uci) return;
     const next = tree.play(current, { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] });
-    if (next) goTo(next);
+    if (!next) return;
+    // The lines are cleared for the new position: a keyboard user continues from the move just played.
+    const hadFocus = linesEl.contains(document.activeElement);
+    goTo(next);
+    if (hadFocus) movesEl.querySelector<HTMLElement>('.current')?.focus({ preventScroll: true });
   });
   engineToggle.addEventListener('change', analyse);
 
@@ -295,10 +338,9 @@ export function mountAnalysis(root: HTMLElement) {
     if (current !== tree.root) goTo(tree.remove(current));
   });
   $('import').addEventListener('click', () => {
-    const err = load($<HTMLTextAreaElement>('import-text').value);
-    $('import-error').hidden = !err;
-    if (err) $('import-error').textContent = `Couldn't read that as FEN or PGN: ${err}`;
-    else render();
+    const r = load($<HTMLTextAreaElement>('import-text').value);
+    showImportResult(r, "Couldn't read that as FEN or PGN");
+    if (!('error' in r)) render();
   });
   root.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) =>
     btn.addEventListener('click', async () => {
@@ -309,9 +351,15 @@ export function mountAnalysis(root: HTMLElement) {
       setTimeout(() => (btn.textContent = text), 1200);
     }),
   );
+  // ← → step through the moves anywhere on the page. ↑ ↓ Home End and f only while the focus is in the board,
+  // the moves or the controls, so they still scroll the page elsewhere and "f" isn't a page-wide shortcut.
   document.addEventListener('keydown', (e) => {
-    if ((e.target as HTMLElement).closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
-    const map: Record<string, () => void> = { ArrowLeft: nav.prev, ArrowRight: nav.next, ArrowUp: nav.start, ArrowDown: nav.end, Home: nav.start, End: nav.end, f: flip };
+    const t = e.target as HTMLElement;
+    if (t.closest('input, textarea, select, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const inside = root.contains(t);
+    const map: Record<string, () => void> = inside
+      ? { ArrowLeft: nav.prev, ArrowRight: nav.next, ArrowUp: nav.start, ArrowDown: nav.end, Home: nav.start, End: nav.end, f: flip }
+      : { ArrowLeft: nav.prev, ArrowRight: nav.next };
     const fn = map[e.key];
     if (fn) {
       e.preventDefault();
@@ -324,16 +372,14 @@ export function mountAnalysis(root: HTMLElement) {
   const fenParam = q.get('fen')?.replace(/_/g, ' ');
   const pgnParam = q.get('pgn');
   const initial = pgnParam ? (fenParam ? `[SetUp "1"]\n[FEN "${normalizeFen(fenParam)}"]\n\n${pgnParam}` : pgnParam) : (fenParam ?? '');
-  const err = load(initial);
-  if (err) {
-    load('');
-    $('import-error').hidden = false;
-    $('import-error').textContent = `Couldn't load the position from the link: ${err}`;
-  }
+  const r = load(initial);
+  showImportResult(r, "Couldn't load the position from the link");
+  if ('error' in r) load('');
   if (q.get('flip') === '1' || q.get('orientation') === 'black') {
     orientation = 'b';
     board.setOrientation('b');
     evalbar.classList.add('flipped');
   }
   render();
+  mounted = true;
 }
