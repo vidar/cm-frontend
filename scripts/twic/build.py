@@ -652,7 +652,8 @@ def main():
               f'{len(old["events"]) - len(event_match):,} previous events folded into others (remap_events.py redirects them)', file=sys.stderr)
         if gone:
             print(f'WARNING: {gone:,} games of the previous build are not in this one (changed input or dedup): '
-                  'remap_events.py will refuse it, so load it with import_pg.py --reset', file=sys.stderr)
+                  'remap_events.py refuses it unless given --drop-missing (then import_pg.py --patch deletes them; '
+                  'expected once after the dedup fix of November 2026, a few thousand at most). Do not --reset.', file=sys.stderr)
 
 
 if __name__ == '__main__':

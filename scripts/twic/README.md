@@ -17,6 +17,9 @@ DATABASE_URL=... python3 scripts/twic/import_pg.py --db /tmp/twic.sqlite --reset
 
 **Updating the live database** (a new issue each week, or build changes) without breaking URLs or downtime:
 keep the SQLite file that is currently loaded (`twic-live.sqlite`), build into a new file with `--previous`, then
+(if `twic-live.sqlite` is lost, recreate it from Postgres first, on the server as root:
+`DATABASE_URL='postgresql://cm_owner@/cm_games?host=/var/run/postgresql' python3 scripts/twic/export_live.py --out /tmp/twic-live.sqlite`;
+it holds the same games, players, events and ids, so `--previous` and `remap_events.py` work as with the original)
 
 ```sh
 python3 scripts/twic/download.py --from <next> --to <latest> --dir /tmp/twic
